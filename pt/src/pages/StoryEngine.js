@@ -21,9 +21,6 @@ export default function StoryEngine({ story }) {
   const scene = SCENES[node.scene] || SCENES.forest_day;
   const { accent, bg } = scene;
 
-  // Reset story when language switches mid-story so text rerenders cleanly
-  const { lang: currentLang } = useLang();
-
   const go = (nextId) => {
     setPicked(nextId);
     setFading(true);
