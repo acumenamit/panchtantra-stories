@@ -69,9 +69,9 @@ export default function StoryEngine({ story }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <div>
             <button onClick={() => navigate('/')}
-              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.55)', fontFamily: 'var(--mono)', fontSize: '0.75rem', letterSpacing: '0.05em', marginBottom: 10, padding: 0, transition: 'color 0.2s' }}
+              style={{ background: 'none', border: 'none', color: '#ffffff', fontFamily: 'var(--mono)', fontSize: '0.78rem', letterSpacing: '0.05em', marginBottom: 10, padding: '4px 0', transition: 'color 0.2s', textShadow: '0 1px 8px rgba(0,0,0,0.9)', fontWeight: 700 }}
               onMouseEnter={e => e.currentTarget.style.color = accent}
-              onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.55)'}>
+              onMouseLeave={e => e.currentTarget.style.color = '#ffffff'}>
               ← All Stories
             </button>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', color: accent, letterSpacing: '0.18em', marginBottom: 5 }}>
@@ -80,7 +80,7 @@ export default function StoryEngine({ story }) {
             <h1 style={{ color: '#ffffff', fontSize: '1.6rem', fontFamily: 'var(--serif)', fontWeight: 700, textShadow: `0 2px 24px ${accent}66` }}>
               {story.title}
             </h1>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', color: 'rgba(255,255,255,0.5)', marginTop: 5 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.75)', marginTop: 5, textShadow: '0 1px 6px rgba(0,0,0,0.8)' }}>
               {scene.label}
             </div>
           </div>
@@ -164,26 +164,26 @@ export default function StoryEngine({ story }) {
           )}
         </div>
 
-        <div style={{ padding: '12px 34px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '14px 34px', borderTop: '1px solid rgba(255,255,255,0.15)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.3)' }}>
           <button onClick={back} disabled={!history.length}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: '0.75rem', transition: 'color 0.2s', color: history.length ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)', cursor: history.length ? 'pointer' : 'default' }}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: '0.78rem', fontFamily: 'var(--mono)', transition: 'color 0.2s', color: history.length ? '#ffffff' : 'rgba(255,255,255,0.25)', cursor: history.length ? 'pointer' : 'default', fontWeight: history.length ? 600 : 400 }}
             onMouseEnter={e => history.length && (e.currentTarget.style.color = accent)}
-            onMouseLeave={e => (e.currentTarget.style.color = history.length ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)')}>
+            onMouseLeave={e => (e.currentTarget.style.color = history.length ? '#ffffff' : 'rgba(255,255,255,0.25)')}>
             ← back
           </button>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', color: 'rgba(255,255,255,0.3)', letterSpacing: '0.1em' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', color: 'rgba(255,255,255,0.55)', letterSpacing: '0.1em' }}>
             {story.theme}
           </span>
           <button onClick={restart}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)', transition: 'color 0.2s' }}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: '0.78rem', fontFamily: 'var(--mono)', color: '#ffffff', transition: 'color 0.2s', fontWeight: 600 }}
             onMouseEnter={e => e.currentTarget.style.color = accent}
-            onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.5)'}>
+            onMouseLeave={e => e.currentTarget.style.color = '#ffffff'}>
             restart ↺
           </button>
         </div>
       </div>
 
-      <div style={{ marginTop: 28, fontFamily: 'var(--mono)', fontSize: '0.6rem', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.2em' }}>
+      <div style={{ marginTop: 28, fontFamily: 'var(--mono)', fontSize: '0.65rem', color: 'rgba(255,255,255,0.5)', letterSpacing: '0.2em', textShadow: '0 1px 6px rgba(0,0,0,0.8)' }}>
         ✦ &nbsp; PANCHATANTRA &nbsp; ✦ &nbsp; NITISHASTRA &nbsp; ✦
       </div>
     </div>
