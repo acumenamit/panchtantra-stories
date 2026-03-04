@@ -10,7 +10,7 @@ export const POSTHOG_HOST = 'https://eu.posthog.com';
 
 // Call once in index.js to initialise
 export function initAnalytics() {
-  if (!window.posthog || POSTHOG_KEY === 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') return;
+  if (!window.posthog || POSTHOG_KEY === 'YOUR_POSTHOG_KEY_HERE') return;
   window.posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
     autocapture: false,       // we track manually — cleaner data
@@ -62,7 +62,7 @@ export function trackShared(storyId, method, lang) {
 // ── Internal helper ───────────────────────────────────────────
 function ph(event, props = {}) {
   try {
-    if (window.posthog && POSTHOG_KEY !== 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') {
+    if (window.posthog && POSTHOG_KEY !== 'YOUR_POSTHOG_KEY_HERE') {
       window.posthog.capture(event, props);
     } else {
       // Log locally during development so you can see events firing
