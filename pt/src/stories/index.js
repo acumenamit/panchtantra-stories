@@ -1,6 +1,8 @@
 import lionAndHare from './lionAndHare';
 import monkeyAndCrocodile from './monkeyAndCrocodile';
 import crowAndSerpent from './crowAndSerpent';
+import brahminAndCobra from './brahminAndCobra';
+import fourFriendsAndHunter from './fourFriendsAndHunter';
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
@@ -14,6 +16,8 @@ const STORIES = [
   lionAndHare,
   monkeyAndCrocodile,
   crowAndSerpent,
+  brahminAndCobra,
+  fourFriendsAndHunter
   // brahminsGoat,
 ];
 
