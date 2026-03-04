@@ -1,4 +1,5 @@
 import { Routes, Route, useParams, Navigate } from 'react-router-dom';
+import { LangProvider } from './LangContext';
 import Home from './pages/Home';
 import StoryEngine from './pages/StoryEngine';
 import STORIES from './stories';
@@ -12,10 +13,12 @@ function StoryRoute() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/"           element={<Home />} />
-      <Route path="/story/:id"  element={<StoryRoute />} />
-      <Route path="*"           element={<Navigate to="/" replace />} />
-    </Routes>
+    <LangProvider>
+      <Routes>
+        <Route path="/"          element={<Home />} />
+        <Route path="/story/:id" element={<StoryRoute />} />
+        <Route path="*"          element={<Navigate to="/" replace />} />
+      </Routes>
+    </LangProvider>
   );
 }
