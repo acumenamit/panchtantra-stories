@@ -1,0 +1,24 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Lora', Georgia, serif;
+  background: #0d0a05;
+  color: #f0e6d0;
+  min-height: 100vh;
+}
+
+:root {
+  --mono: 'Space Mono', 'Courier New', monospace;
+  --serif: 'Lora', Georgia, serif;
+}
+
+button { cursor: pointer; font-family: var(--mono); }
+
+@keyframes blink   { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes fadeUp  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeIn  { from{opacity:0} to{opacity:1} }
+@keyframes scaleIn { from{opacity:0;transform:scale(0.96)} to{opacity:1;transform:scale(1)} }
+
+.fade-up  { animation: fadeUp  0.45s ease both; }
+.fade-in  { animation: fadeIn  0.4s  ease both; }
+.scale-in { animation: scaleIn 0.4s  ease both; }
