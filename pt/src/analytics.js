@@ -5,12 +5,12 @@
 //  from https://app.posthog.com → Project Settings → API Keys
 // ─────────────────────────────────────────────────────────────
 
-export const POSTHOG_KEY = 'YOUR_POSTHOG_KEY_HERE'; // ← replace this
-export const POSTHOG_HOST = 'https://app.posthog.com';
+export const POSTHOG_KEY = 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb'; // ← replace this
+export const POSTHOG_HOST = 'https://eu.posthog.com';
 
 // Call once in index.js to initialise
 export function initAnalytics() {
-  if (!window.posthog || POSTHOG_KEY === 'YOUR_POSTHOG_KEY_HERE') return;
+  if (!window.posthog || POSTHOG_KEY === 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') return;
   window.posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
     autocapture: false,       // we track manually — cleaner data
@@ -62,7 +62,7 @@ export function trackShared(storyId, method, lang) {
 // ── Internal helper ───────────────────────────────────────────
 function ph(event, props = {}) {
   try {
-    if (window.posthog && POSTHOG_KEY !== 'YOUR_POSTHOG_KEY_HERE') {
+    if (window.posthog && POSTHOG_KEY !== 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') {
       window.posthog.capture(event, props);
     } else {
       // Log locally during development so you can see events firing
