@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
-import { initAnalytics, POSTHOG_KEY, POSTHOG_HOST } from './analytics';
+import { initAnalytics, POSTHOG_KEY } from './analytics';
 
 // Inject PostHog script then initialise
 // (this avoids adding an npm package — works perfectly via CDN)
