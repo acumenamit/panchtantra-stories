@@ -56,7 +56,7 @@ function ComingSoonCard({ lang }) {
 
 export default function Home() {
   const navigate  = useNavigate();
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
   const ui        = UI[lang];
   const remainder = STORIES.length % 3;
   const placeholders = remainder === 0 ? 0 : 3 - remainder;
