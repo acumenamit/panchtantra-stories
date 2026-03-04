@@ -1,4 +1,6 @@
 import lionAndHare from './lionAndHare';
+import monkeyAndCrocodile from './monkeyAndCrocodile';
+import crowAndSerpent from './crowAndSerpent';
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
