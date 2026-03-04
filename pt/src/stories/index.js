@@ -10,8 +10,8 @@ import lionAndHare from './lionAndHare';
 
 const STORIES = [
   lionAndHare,
-  // monkeyAndCrocodile,
-  // crowAndSerpent,
+  monkeyAndCrocodile,
+  crowAndSerpent,
   // brahminsGoat,
 ];
 
