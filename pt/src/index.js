@@ -5,16 +5,14 @@ import App from './App';
 import './index.css';
 import { initAnalytics, POSTHOG_KEY } from './analytics';
 
-// Inject PostHog script then initialise
-// (this avoids adding an npm package — works perfectly via CDN)
 (function () {
-  if (POSTHOG_KEY === 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') {
+  if (POSTHOG_KEY === 'YOUR_POSTHOG_KEY_HERE') {
     console.log('[Analytics] PostHog not configured — events will log to console only.');
     initAnalytics();
     return;
   }
   const script = document.createElement('script');
-  script.src = 'https://cdn.posthog.com/array/1.30.0/array.full.js';
+  script.src = 'https://eu-assets.i.posthog.com/static/array.js';
   script.async = true;
   script.onload = () => initAnalytics();
   document.head.appendChild(script);
