@@ -33,12 +33,35 @@ export default function Typewriter({ text, onDone, speed = 16 }) {
 
   return (
     <div>
-      <p style={{ whiteSpace:'pre-line', lineHeight:1.9, fontFamily:'var(--serif)', fontSize:'1.05rem', color:'#f0e6d0', margin:0 }}>
+      <p style={{
+        whiteSpace: 'pre-line',
+        lineHeight: 2,
+        fontFamily: 'var(--serif)',
+        fontSize: '1.08rem',
+        color: '#f5ede0',       /* bright warm white — was dim grey */
+        margin: 0,
+        letterSpacing: '0.01em',
+      }}>
         {displayed}
-        {!done && <span style={{ color:'#fbbf24', animation:'blink 1s step-end infinite' }}>▌</span>}
+        {!done && (
+          <span style={{ color: '#fbbf24', animation: 'blink 1s step-end infinite' }}>▌</span>
+        )}
       </p>
       {!done && (
-        <button onClick={skip} style={{ marginTop:8, background:'none', border:'none', color:'#a8895a', fontFamily:'var(--mono)', fontSize:'0.72rem', textDecoration:'underline', padding:0 }}>
+        <button onClick={skip} style={{
+          marginTop: 10,
+          background: 'none',
+          border: 'none',
+          color: 'rgba(255,255,255,0.45)',  /* brighter skip button */
+          fontFamily: 'var(--mono)',
+          fontSize: '0.75rem',
+          textDecoration: 'underline',
+          padding: 0,
+          transition: 'color 0.2s',
+        }}
+          onMouseEnter={e => e.currentTarget.style.color = '#fbbf24'}
+          onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.45)'}
+        >
           skip →
         </button>
       )}
