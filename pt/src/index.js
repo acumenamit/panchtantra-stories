@@ -8,7 +8,7 @@ import { initAnalytics, POSTHOG_KEY, POSTHOG_HOST } from './analytics';
 // Inject PostHog script then initialise
 // (this avoids adding an npm package — works perfectly via CDN)
 (function () {
-  if (POSTHOG_KEY === 'YOUR_POSTHOG_KEY_HERE') {
+  if (POSTHOG_KEY === 'phc_dFZKOQtPKbnfeGqRB6uAIYgxOYpv687X3b2vCxTJcFb') {
     console.log('[Analytics] PostHog not configured — events will log to console only.');
     initAnalytics();
     return;
