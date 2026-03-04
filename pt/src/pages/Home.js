@@ -1,11 +1,22 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLang, t } from '../LangContext';
 import LangToggle from '../components/LangToggle';
+import ShareButton from '../components/ShareButton';
 import STORIES from '../stories';
+import { trackPageView, trackLanguageSwitched } from '../analytics';
 
 const UI = {
-  en: { heading: 'Ancient Wisdom,', heading2: 'Interactive Stories', sub: 'Stories from the Panchatantra — written 2,000 years ago to teach children the art of wise living through adventure and choice.', coming: 'MORE STORIES COMING SOON', footer: 'WISDOM FOR ALL AGES' },
-  hi: { heading: 'प्राचीन ज्ञान,', heading2: 'संवादात्मक कहानियाँ', sub: 'पञ्चतन्त्र की कहानियाँ — २,००० साल पहले लिखी गईं, बच्चों को साहसिक चुनावों के ज़रिए बुद्धिमान जीवन की कला सिखाने के लिए।', coming: 'और कहानियाँ जल्द आ रही हैं', footer: 'सभी उम्र के लिए ज्ञान' },
+  en: {
+    heading: 'Ancient Wisdom,', heading2: 'Interactive Stories',
+    sub: 'Stories from the Panchatantra — written 2,000 years ago to teach children the art of wise living through adventure and choice.',
+    coming: 'MORE STORIES COMING SOON',
+  },
+  hi: {
+    heading: 'प्राचीन ज्ञान,', heading2: 'संवादात्मक कहानियाँ',
+    sub: 'पञ्चतन्त्र की कहानियाँ — २,००० साल पहले लिखी गईं, बच्चों को साहसिक चुनावों के ज़रिए बुद्धिमान जीवन की कला सिखाने के लिए।',
+    coming: 'और कहानियाँ जल्द आ रही हैं',
+  },
 };
 
 function StoryCard({ story, lang, onClick }) {
@@ -33,21 +44,35 @@ function StoryCard({ story, lang, onClick }) {
 }
 
 function ComingSoonCard({ lang }) {
-  const ui = UI[lang];
   return (
     <div style={{ padding:'24px', borderRadius:20, background:'rgba(255,255,255,0.01)', border:'1px dashed rgba(255,255,255,0.1)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:220, gap:12 }}>
       <div style={{ fontSize:'1.5rem', opacity:0.3 }}>📖</div>
-      <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.2)', letterSpacing:'0.1em', textAlign:'center' }}>{ui.coming}</div>
+      <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.2)', letterSpacing:'0.1em', textAlign:'center' }}>
+        {UI[lang].coming}
+      </div>
     </div>
   );
 }
 
 export default function Home() {
-  const navigate = useNavigate();
-  const { lang } = useLang();
-  const ui = UI[lang];
+  const navigate  = useNavigate();
+  const { lang, setLang } = useLang();
+  const ui        = UI[lang];
   const remainder = STORIES.length % 3;
   const placeholders = remainder === 0 ? 0 : 3 - remainder;
+
+  // Track page view on mount
+  useEffect(() => {
+    trackPageView('home', { lang });
+  }, []); // eslint-disable-line
+
+  // Track language switches
+  const prevLang = lang;
+  const handleLangChange = (newLang) => {
+    if (newLang !== prevLang) {
+      trackLanguageSwitched(prevLang, newLang, 'home');
+    }
+  };
 
   return (
     <div style={{ minHeight:'100vh', background:'linear-gradient(160deg,#0d0a05,#080608)', display:'flex', flexDirection:'column', alignItems:'center', padding:'48px 16px 64px' }}>
@@ -56,9 +81,9 @@ export default function Home() {
       <div style={{ textAlign:'center', marginBottom:52, maxWidth:580 }}>
         <div style={{ fontSize:'3rem', marginBottom:16 }}>📚</div>
 
-        {/* Language toggle — centred, prominent */}
+        {/* Lang toggle */}
         <div style={{ display:'flex', justifyContent:'center', marginBottom:24 }}>
-          <LangToggle accent="#d97706" />
+          <LangToggle accent="#d97706" onChange={handleLangChange} />
         </div>
 
         <div style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', color:'#d97706', letterSpacing:'0.22em', marginBottom:12 }}>
@@ -67,15 +92,25 @@ export default function Home() {
         <h1 style={{ fontFamily:'var(--serif)', fontSize:'clamp(1.8rem,5vw,2.8rem)', color:'#fef3c7', fontWeight:700, lineHeight:1.25, marginBottom:16, textShadow:'0 2px 30px rgba(251,191,36,0.2)' }}>
           {ui.heading}<br />{ui.heading2}
         </h1>
-        <p style={{ fontFamily:'var(--serif)', fontSize:'1rem', color:'#8a7a5a', lineHeight:1.75 }}>
+        <p style={{ fontFamily:'var(--serif)', fontSize:'1rem', color:'#8a7a5a', lineHeight:1.75, marginBottom:28 }}>
           {ui.sub}
         </p>
+
+        {/* Share button on home screen */}
+        <ShareButton lang={lang} accent="#d97706" variant="default" />
       </div>
 
       {/* Story grid */}
       <div style={{ width:'100%', maxWidth:960, display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:20 }}>
         {STORIES.map(story => (
-          <StoryCard key={story.id} story={story} lang={lang} onClick={() => navigate(`/story/${story.id}`)} />
+          <StoryCard
+            key={story.id}
+            story={story}
+            lang={lang}
+            onClick={() => {
+              navigate(`/story/${story.id}`);
+            }}
+          />
         ))}
         {Array.from({ length: placeholders }).map((_, i) => <ComingSoonCard key={i} lang={lang} />)}
       </div>
