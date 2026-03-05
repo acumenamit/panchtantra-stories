@@ -6,6 +6,8 @@ const brahminAndCobra = {
   theme:       { en: 'Greed destroys what gratitude builds', hi: 'लालच वह नष्ट करता है जो कृतज्ञता बनाती है' },
   age: '7+',
   duration:    { en: '10–14 min', hi: '१०–१४ मिनट' },
+  addedOn: '2026-01-15',
+  featured: false,
   emoji: '🐍',
   color: '#fbbf24',
   book:        { en: 'Panchatantra — Book II', hi: 'पञ्चतन्त्र — द्वितीय भाग' },

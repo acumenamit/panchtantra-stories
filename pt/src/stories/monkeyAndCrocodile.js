@@ -6,6 +6,8 @@ const monkeyAndCrocodile = {
   theme:       { en: 'Presence of mind defeats treachery', hi: 'सूझबूझ विश्वासघात को हराती है' },
   age: '7+',
   duration:    { en: '10–14 min', hi: '१०–१४ मिनट' },
+  addedOn: '2025-11-01',
+  featured: false,
   emoji: '🐒',
   color: '#34d399',
   book:        { en: 'Panchatantra — Book II', hi: 'पञ्चतन्त्र — द्वितीय भाग' },

@@ -6,6 +6,8 @@ const crowAndSerpent = {
   theme:       { en: 'Strategy defeats strength', hi: 'नीति बल को परास्त करती है' },
   age: '8+',
   duration:    { en: '10–15 min', hi: '१०–१५ मिनट' },
+  addedOn: '2025-12-01',
+  featured: false,
   emoji: '🐦‍⬛',
   color: '#c084fc',
   book:        { en: 'Panchatantra — Book I', hi: 'पञ्चतन्त्र — प्रथम भाग' },
