@@ -15,6 +15,7 @@ const fourFriendsAndHunter = {
 
   nodes: {
     start: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-start.jpg',
       scene: 'forest_day',
       text: {
         en: `By a clear forest lake lived four unlikely friends: Chitragreeva the crow, who saw everything from the treetops; Hiranyaka the mouse, who lived in a hole by the roots; Mantharaka the tortoise, who basked on the rocks at the water's edge; and Shvetanka the deer, who came to drink each evening.\n\nThey were very different creatures. They had nothing in common except one thing: when any one of them was in trouble, the others came.\n\nOne golden afternoon, Shvetanka the deer did not arrive at the lake.\n\nChitragreeva the crow, always watching, flew wide circles over the forest. From the air, he spotted the deer — struggling in a hunter's net, far from the lake.`,
@@ -31,6 +32,7 @@ const fourFriendsAndHunter = {
     },
 
     crow_alone: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-crow-alone.jpg',
       scene: 'forest_path',
       isAlternate: true,
       text: {
@@ -48,6 +50,7 @@ const fourFriendsAndHunter = {
     },
 
     deer_caught: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-deer-caught.jpg',
       scene: 'forest_path',
       text: {
         en: `Chitragreeva flew back to the lake, crying out the alarm.\n\nHiranyaka the mouse leaped up immediately. "Where? Show me!"\n\nMantharaka the tortoise began to move — slowly, steadily.\n\n"You stay here," said the crow gently. "You are too slow. The hunter may return before we finish. Stay safe."\n\n"My friends are in danger," said the tortoise simply. "I am coming."\n\nChitragreeva carried the mouse in his beak — flying fast, flying low — while the tortoise trundled behind.\n\nThey reached the deer. Hiranyaka set to work on the ropes with his sharp teeth — gnaw, gnaw, gnaw.`,
@@ -64,6 +67,7 @@ const fourFriendsAndHunter = {
     },
 
     friends_rescue: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-friends-rescue.jpg',
       scene: 'forest_path',
       text: {
         en: `Hiranyaka chewed through the last rope just as the sound of the hunter's footsteps grew louder through the trees.\n\n"RUN!" cried the crow.\n\nThe deer leaped away into the forest. The crow took flight. The mouse scurried into a hollow log.\n\nThe hunter arrived — and found only a pile of chewed ropes and an empty clearing.\n\nHe looked around, bewildered. Then his eyes fell on something else entirely:\n\nA tortoise. Slow, plodding, still far from the safety of the trees.\n\nThe hunter smiled and reached for his bag.`,
@@ -80,6 +84,7 @@ const fourFriendsAndHunter = {
     },
 
     tortoise_danger: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-tortoise-danger.jpg',
       scene: 'forest_dark',
       text: {
         en: `The hunter scooped up Mantharaka and tied him in his bag.\n\nFrom the trees, the three friends watched in horror.\n\n"This is my fault," said Mantharaka from inside the bag. "I should have listened."\n\n"No," said Chitragreeva firmly. "We do not abandon friends. We find a way."\n\nThe mouse thought quickly. "Chitragreeva — fly ahead of the hunter on the path. Land on the ground as if you are injured. Drag your wing. Make him think you are easy prey."\n\n"And then?"\n\n"He will put down the bag to catch you. The moment he does — Hiranyaka, you chew through the bag. I will keep the hunter distracted. Shvetanka — run parallel in the trees, make noise, confuse him."`,
@@ -96,6 +101,7 @@ const fourFriendsAndHunter = {
     },
 
     plan_executes: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-plan-executes.jpg',
       scene: 'forest_path',
       text: {
         en: `The plan unfolded perfectly.\n\nChitragreeva landed on the path ahead, dragging his wing, crying piteously. The hunter's eyes lit up — two catches in one day!\n\nHe set down the bag and crept forward.\n\nHiranyaka darted out, chewed through the bag's knot in seconds, and Mantharaka was free.\n\nThe deer crashed loudly through the bushes to the left. The hunter spun around.\n\nThe crow flew up, perfectly uninjured, and called from high above.\n\nThe hunter looked left. He looked right. He looked at his empty bag on the ground.\n\nHe went home with nothing.`,
@@ -112,6 +118,7 @@ const fourFriendsAndHunter = {
     },
 
     ending_wisdom: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-ending-wisdom.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `That evening, the four friends gathered at the lake as the sun set.\n\nMantharaka was quiet for a long time. Then he said: "I was slow. I nearly cost us everything. And yet you came back for me."\n\n"Of course," said Hiranyaka simply.\n\n"That is friendship," said Chitragreeva. "Not that we are the same. Not that we are equally fast or strong. But that we show up for each other in the moments that matter."\n\nShvetanka dipped his head to drink, and the water was sweet.\n\nThe Panchatantra teaches:\n"Four together are stronger than forty alone.\nIn unity, the small become mighty.\nIn loyalty, the weak become invincible."`,
@@ -122,6 +129,7 @@ const fourFriendsAndHunter = {
     },
 
     ending_friendship: {
+      image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-ending-friendship.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `The tortoise reached the lake long after the others.\n\nNo one had left. All three sat waiting.\n\n"You waited," said Mantharaka, surprised.\n\n"You came for us when you were slow," said Shvetanka. "We can wait for you when you are slower."\n\nMantharaka looked at each of his friends for a long moment.\n\nThen he said something the Panchatantra has remembered for two thousand years:\n\n"A friend who stays only when it is easy is a fair-weather friend. But a friend who stays when it is hard — that friend is family."\n\nNitishastra teaches: "Do not measure friends by what they have. Measure them by what they do when you need them most."`,
