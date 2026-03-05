@@ -6,6 +6,7 @@ import ChoiceButton from '../components/ChoiceButton';
 import EndingCard from '../components/EndingCard';
 import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
+import AudioButton from '../components/AudioButton';
 import {
   trackPageView,
   trackStoryStarted,
@@ -140,6 +141,32 @@ export default function StoryEngine({ story }) {
       <div style={{ width:'100%', maxWidth:660, background:'rgba(8,6,10,0.96)', border:`1px solid ${accent}55`, borderRadius:24, overflow:'hidden', boxShadow:`0 0 80px rgba(0,0,0,0.9), 0 0 40px ${accent}18`, opacity:fading?0:1, transform:fading?'translateY(10px)':'translateY(0)', transition:'opacity 0.35s ease, transform 0.35s ease' }}>
         <div style={{ height:3, background:`linear-gradient(90deg,transparent,${accent},transparent)` }} />
 
+        {/* ── Story image — shown when node has an image field ── */}
+        {node.image && (
+          <div style={{ position:'relative', overflow:'hidden' }}>
+            <img
+              src={node.image}
+              alt=""
+              style={{
+                width: '100%',
+                maxHeight: 320,
+                objectFit: 'cover',
+                display: 'block',
+                opacity: fading ? 0 : 1,
+                transition: 'opacity 0.6s ease',
+              }}
+              onError={e => { e.currentTarget.style.display = 'none'; }}
+            />
+            {/* Gradient fade into card background */}
+            <div style={{
+              position: 'absolute',
+              bottom: 0, left: 0, right: 0,
+              height: 80,
+              background: 'linear-gradient(to bottom, transparent, rgba(8,6,10,0.96))',
+            }} />
+          </div>
+        )}
+
         <div style={{ padding:'32px 34px' }}>
           {node.isEnding ? (
             <EndingCard
@@ -153,6 +180,12 @@ export default function StoryEngine({ story }) {
           ) : (
             <>
               <Typewriter key={`${nodeId}-${lang}`} text={t(node.text, lang)} onDone={() => setTextDone(true)} />
+
+              {textDone && (
+                <div style={{ marginTop:12, marginBottom:4 }}>
+                  <AudioButton text={t(node.text, lang)} lang={lang} accent={accent} />
+                </div>
+              )}
 
               {textDone && (
                 <div className="fade-up">
