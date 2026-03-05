@@ -6,6 +6,8 @@ const fourFriendsAndHunter = {
   theme:       { en: 'United friends are stronger than any enemy', hi: 'एकजुट मित्र किसी भी दुश्मन से मज़बूत होते हैं' },
   age: '6+',
   duration:    { en: '10–14 min', hi: '१०–१४ मिनट' },
+  addedOn: '2026-03-05',
+  featured: true,
   emoji: '🦌',
   color: '#60a5fa',
   book:        { en: 'Panchatantra — Book III', hi: 'पञ्चतन्त्र — तृतीय भाग' },

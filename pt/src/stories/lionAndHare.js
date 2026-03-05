@@ -6,6 +6,8 @@ const lionAndHare = {
   theme:       { en: 'Wisdom conquers Strength', hi: 'बुद्धि बल से श्रेष्ठ है' },
   age: '6+',
   duration:    { en: '8–12 min', hi: '८–१२ मिनट' },
+  addedOn: '2025-10-01',
+  featured: false,
   emoji: '🦁',
   color: '#f87171',
   book:        { en: 'Panchatantra — Book I', hi: 'पञ्चतन्त्र — प्रथम भाग' },
