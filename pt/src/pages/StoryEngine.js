@@ -6,7 +6,6 @@ import ChoiceButton from '../components/ChoiceButton';
 import EndingCard from '../components/EndingCard';
 import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
-import AudioButton from '../components/AudioButton';
 import {
   trackPageView,
   trackStoryStarted,
@@ -180,12 +179,6 @@ export default function StoryEngine({ story }) {
           ) : (
             <>
               <Typewriter key={`${nodeId}-${lang}`} text={t(node.text, lang)} onDone={() => setTextDone(true)} />
-
-              {textDone && (
-                <div style={{ marginTop:12, marginBottom:4 }}>
-                  <AudioButton text={t(node.text, lang)} lang={lang} accent={accent} />
-                </div>
-              )}
 
               {textDone && (
                 <div className="fade-up">
