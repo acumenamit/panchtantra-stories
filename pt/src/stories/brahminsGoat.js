@@ -44,8 +44,8 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
 "हे विद्वान ब्राह्मण! आप कंधे पर मरे हुए कुत्ते को क्यों उठाए चल रहे हैं?"`,
       },
       question: {
-        en: 'The Brahmin has a goat on his shoulders — everyone can see that! What does he do when the thief calls it a dead dog?',
-        hi: 'ब्राह्मण के कंधे पर बकरी है — यह सब देख सकते हैं! जब ठग उसे मरा कुत्ता कहता है, तो वे क्या करते हैं?',
+        en: 'You are walking home with your brand new goat — and a stranger just called it a dead dog. You know exactly what you are carrying. What do you do?',
+        hi: 'तुम अपनी नई बकरी लेकर घर जा रहे हो — और एक अजनबी ने उसे मरा कुत्ता कह दिया। तुम जानते हो तुम क्या उठाए हो। तुम क्या करोगे?',
       },
       choices: [
         { text: { en: '😠 Scold the thief — "Are you blind? This is a goat!"',             hi: '😠 ठग को डाँटो — "क्या तुम अंधे हो? यह बकरी है!"' },    next: 'second_thief' },
@@ -56,7 +56,7 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
     // ── NODE 2 ─────────────────────────────────────────────────
     // Second thief steps out from behind a boulder. Brahmin's
     // voice wobbles — the first seed of doubt takes root.
-    // IMAGE: second-thief-doubt.jpg — Brahmin uncertain, second
+    // IMAGE: second-thief-doubt.jpeg — Brahmin uncertain, second
     //        stranger emerging from boulder, doubt on his face
     // ──────────────────────────────────────────────────────────
     second_thief: {
@@ -87,19 +87,19 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
 "यह बकरी है!" उन्होंने कहा — लेकिन आवाज़ थोड़ी काँपी।`,
       },
       question: {
-        en: 'Two strangers have now said the same strange thing. What should the Brahmin do?',
-        hi: 'दो अजनबी अब एक ही अजीब बात कह चुके हैं। ब्राह्मण को क्या करना चाहिए?',
+        en: 'Now a second stranger says the same thing. A tiny voice inside whispers — what if they are right? What do you do?',
+        hi: 'अब दूसरा अजनबी भी वही बात कहता है। मन में एक छोटी सी आवाज़ फुसफुसाती है — क्या होगा अगर ये सच कह रहे हों? तुम क्या करोगे?',
       },
       choices: [
-        { text: { en: '💪 Trust his own eyes — two wrong people are still wrong', hi: '💪 अपनी आँखों पर भरोसा रखो — दो गलत लोग भी गलत ही हैं' }, next: 'third_thief' },
-        { text: { en: '😰 Maybe put the goat down and inspect it more carefully?',  hi: '😰 शायद बकरी को नीचे रखकर ध्यान से जाँचें?' },                next: 'third_thief' },
+        { text: { en: '💪 Trust your own eyes — two wrong people are still wrong', hi: '💪 अपनी आँखों पर भरोसा करो — दो गलत लोग भी गलत ही हैं' }, next: 'third_thief' },
+        { text: { en: '😰 Maybe put the goat down and inspect it more carefully?',  hi: '😰 शायद बकरी को नीचे रखकर ध्यान से जाँचें?' },               next: 'third_thief' },
       ],
     },
 
     // ── NODE 3 ─────────────────────────────────────────────────
     // Third thief appears at a bend in the road. Brahmin's hands
     // tremble. The big decision moment — hold firm or flee?
-    // IMAGE: third-thief-decision.jpg — Brahmin frozen at bend,
+    // IMAGE: third-thief-decision.jpeg — Brahmin frozen at bend,
     //        one thief before him arms raised, face anguished
     // ──────────────────────────────────────────────────────────
     third_thief: {
@@ -134,8 +134,8 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
 "क्या तीन लोग सब गलत हो सकते हैं?" उन्होंने सोचा।`,
       },
       question: {
-        en: 'Three people. Same lie. The goat is RIGHT THERE. What does the Brahmin do?',
-        hi: 'तीन लोग। एक ही झूठ। बकरी सामने ही है। ब्राह्मण क्या करते हैं?',
+        en: 'Three strangers. Three times. The same lie. Your hands are trembling. Do you trust yourself — or them?',
+        hi: 'तीन अजनबी। तीन बार। एक ही झूठ। तुम्हारे हाथ काँप रहे हैं। क्या तुम खुद पर भरोसा करोगे — या उन पर?',
       },
       choices: [
         { text: { en: '🐐 Hold firm — "I carried this goat from the merchant\'s house. It IS a goat!"', hi: '🐐 अडिग रहो — "मैं यह बकरी व्यापारी के घर से लाया हूँ। यह बकरी ही है!"' }, next: 'brahmin_holds' },
@@ -186,12 +186,12 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
 दूसरे ठग ने अनिच्छापूर्ण सम्मान से सिर हिलाया। "उसने खुद पर भरोसा किया।"`,
       },
       question: {
-        en: 'The Brahmin walked away with his goat — and his dignity. What gave him the strength to resist?',
-        hi: 'ब्राह्मण बकरी के साथ — और अपनी गरिमा के साथ — चले गए। उन्हें विरोध करने की शक्ति कहाँ से मिली?',
+        en: 'You just stood your ground against three people who tried to make you doubt your own eyes. What do you think gave you the strength to hold firm?',
+        hi: 'तुमने तीन लोगों के सामने अपनी बात पर कायम रहे जो तुम्हें तुम्हारी अपनी आँखों पर शक दिलाना चाहते थे। तुम्हें यह ताकत कहाँ से मिली?',
       },
       choices: [
-        { text: { en: '🧠 He separated what he KNEW from what he was being told to fear',   hi: '🧠 उन्होंने जो वे जानते थे और जो डराया जा रहा था उसे अलग किया' },  next: 'ending_strength' },
-        { text: { en: '🦁 Courage — it takes bravery to trust yourself against a crowd',    hi: '🦁 साहस — भीड़ के सामने खुद पर भरोसा करने के लिए हिम्मत चाहिए' }, next: 'ending_strength' },
+        { text: { en: '🧠 Knowing the difference between what I KNOW and what I was told to fear', hi: '🧠 यह जानना कि मैं क्या जानता हूँ और क्या डराया जा रहा था' }, next: 'ending_strength' },
+        { text: { en: '🦁 Courage — it takes bravery to trust yourself against a crowd',           hi: '🦁 साहस — भीड़ के सामने खुद पर भरोसा करने के लिए हिम्मत चाहिए' }, next: 'ending_strength' },
       ],
     },
 
@@ -237,12 +237,12 @@ The Brahmin had no answer.`,
 ब्राह्मण के पास कोई जवाब नहीं था।`,
       },
       question: {
-        en: 'The Brahmin lost his goat to a lie he chose to believe. What was the real mistake?',
-        hi: 'ब्राह्मण ने अपनी बकरी एक झूठ को खोई जिसे उन्होंने मानना चुना। असली गलती क्या थी?',
+        en: 'You ran. The goat is gone. A wise elder asks you gently — somewhere on that road, what did you stop trusting?',
+        hi: 'तुम भाग गए। बकरी चली गई। एक बुज़ुर्ग धीरे से पूछते हैं — उस राह पर कहीं, तुमने किस पर भरोसा करना बंद कर दिया?',
       },
       choices: [
-        { text: { en: '👁️ He stopped trusting what he could see and feel for himself',  hi: '👁️ उन्होंने जो खुद देख और महसूस कर सकते थे उस पर भरोसा करना बंद कर दिया' }, next: 'ending_wisdom' },
-        { text: { en: '🗣️ He gave three strangers the power to define his own reality', hi: '🗣️ उन्होंने तीन अजनबियों को अपनी हकीकत तय करने की ताकत दे दी' },           next: 'ending_wisdom' },
+        { text: { en: '👁️ I stopped trusting what I could see and feel for myself',  hi: '👁️ मैंने खुद जो देख और महसूस कर सकता था उस पर भरोसा करना बंद कर दिया' }, next: 'ending_wisdom' },
+        { text: { en: '🗣️ I gave three strangers the power to define my own reality', hi: '🗣️ मैंने तीन अजनबियों को अपनी हकीकत तय करने की ताकत दे दी' },           next: 'ending_wisdom' },
       ],
     },
 
@@ -294,7 +294,7 @@ The Panchatantra teaches:
     // ── NODE 5b — PATH B ENDING ─────────────────────────────────
     // Thieves are caught by the village headman, goat returned.
     // Brahmin confronts the three thieves with a quiet speech.
-    // IMAGE: ending-caught.jpg — thieves heads bowed before
+    // IMAGE: ending-caught.jpeg — thieves heads bowed before
     //        Brahmin and headman, goat beside Brahmin, village
     // ──────────────────────────────────────────────────────────
     ending_wisdom: {
