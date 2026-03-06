@@ -22,7 +22,7 @@ const brahminsGoat = {
     // ──────────────────────────────────────────────────────────
     start: {
       scene: 'village',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-start.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-start.jpeg',
       text: {
         en: `In a small village, a kind Brahmin named Mitra Sharma had just performed a great ceremony. As his reward, a wealthy merchant gifted him a fine, healthy goat.
 
@@ -61,7 +61,7 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
     // ──────────────────────────────────────────────────────────
     second_thief: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-second-thief-doubt.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-second-thief-doubt.jpeg',
       text: {
         en: `The Brahmin shook his head and walked on. "Foolish man," he muttered. "This is clearly a goat."
 
@@ -104,7 +104,7 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
     // ──────────────────────────────────────────────────────────
     third_thief: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-third-thief-decision.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-third-thief-decision.jpeg',
       text: {
         en: `Mitra Sharma walked on, faster now, more anxious.
 
@@ -299,7 +299,7 @@ The Panchatantra teaches:
     // ──────────────────────────────────────────────────────────
     ending_wisdom: {
       scene: 'village',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-caught.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-caught.jpeg',
       isEnding: true,
       text: {
         en: `The thieves led the goat away, laughing.
