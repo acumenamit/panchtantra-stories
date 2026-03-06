@@ -14,6 +14,12 @@ const brahminsGoat = {
   progressSteps: ['start', 'second_thief', 'third_thief', 'brahmin_decides', 'ending_wisdom'],
 
   nodes: {
+
+    // ── NODE 1 ─────────────────────────────────────────────────
+    // Brahmin walks happily with goat. First thief hides behind
+    // a tree and calls it a dead dog.
+    // IMAGE: start.jpg — cheerful Brahmin, goat on shoulders
+    // ──────────────────────────────────────────────────────────
     start: {
       scene: 'village',
       image: '/images/the-brahmins-goat/the-brahmins-goat-start.jpg',
@@ -47,9 +53,15 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
       ],
     },
 
+    // ── NODE 2 ─────────────────────────────────────────────────
+    // Second thief steps out from behind a boulder. Brahmin's
+    // voice wobbles — the first seed of doubt takes root.
+    // IMAGE: second-thief-doubt.jpg — Brahmin uncertain, second
+    //        stranger emerging from boulder, doubt on his face
+    // ──────────────────────────────────────────────────────────
     second_thief: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-first-thief.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-second-thief-doubt.jpg',
       text: {
         en: `The Brahmin shook his head and walked on. "Foolish man," he muttered. "This is clearly a goat."
 
@@ -84,9 +96,15 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
       ],
     },
 
+    // ── NODE 3 ─────────────────────────────────────────────────
+    // Third thief appears at a bend in the road. Brahmin's hands
+    // tremble. The big decision moment — hold firm or flee?
+    // IMAGE: third-thief-decision.jpg — Brahmin frozen at bend,
+    //        one thief before him arms raised, face anguished
+    // ──────────────────────────────────────────────────────────
     third_thief: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-three-thieves.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-third-thief-decision.jpg',
       text: {
         en: `Mitra Sharma walked on, faster now, more anxious.
 
@@ -125,51 +143,12 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
       ],
     },
 
-    brahmin_decides: {
-      scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-goat-abandoned.jpg',
-      text: {
-        en: `Mitra Sharma's nerve broke.
-
-He flung the goat off his shoulders, leaped away with a cry of disgust, and ran down the road without looking back — convinced beyond all reason that he had been carrying something unclean.
-
-The three thieves watched him go, then looked at each other and burst out laughing.
-
-The goat stood on the road, blinking calmly.
-
-The thieves led it away, delighted with their work.
-
-Later, Mitra Sharma met a wise elder in the village who listened to his tale. The elder was quiet for a moment.
-
-Then he said: "You saw it with your own eyes. You felt it with your own hands. But you trusted three strangers more than your own senses. Tell me — what did you actually know, and what did you only fear?"
-
-The Brahmin had no answer.`,
-        hi: `मित्र शर्मा की हिम्मत टूट गई।
-
-उन्होंने बकरी को कंधे से फेंका, घृणा की चीख के साथ उछले, और पीछे मुड़े बिना राह पर दौड़ पड़े — पूरी तरह आश्वस्त कि वे कुछ अपवित्र उठाए हुए थे।
-
-तीनों ठगों ने उन्हें जाते देखा, फिर एक-दूसरे को देखा और हँसी में फूट पड़े।
-
-बकरी सड़क पर खड़ी, शांति से पलकें झपकाती रही।
-
-ठग उसे ले गए, अपने काम से प्रसन्न।
-
-बाद में, मित्र शर्मा की मुलाकात गाँव के एक बुद्धिमान बुज़ुर्ग से हुई जिन्होंने उनकी कहानी सुनी। बुज़ुर्ग एक पल चुप रहे।
-
-फिर बोले: "आपने अपनी आँखों से देखा। अपने हाथों से महसूस किया। लेकिन तीन अजनबियों पर अपनी खुद की इंद्रियों से ज़्यादा भरोसा किया। बताइए — आप वास्तव में क्या जानते थे, और क्या केवल डर रहे थे?"
-
-ब्राह्मण के पास कोई जवाब नहीं था।`,
-      },
-      question: {
-        en: 'The Brahmin lost his goat to a lie he chose to believe. What was the real mistake?',
-        hi: 'ब्राह्मण ने अपनी बकरी एक झूठ को खोई जिसे उन्होंने मानना चुना। असली गलती क्या थी?',
-      },
-      choices: [
-        { text: { en: '👁️ He stopped trusting what he could see and feel for himself',         hi: '👁️ उन्होंने जो खुद देख और महसूस कर सकते थे उस पर भरोसा करना बंद कर दिया' }, next: 'ending_wisdom' },
-        { text: { en: '🗣️ He gave three strangers the power to define his own reality',        hi: '🗣️ उन्होंने तीन अजनबियों को अपनी हकीकत तय करने की ताकत दे दी' },           next: 'ending_wisdom' },
-      ],
-    },
-
+    // ── NODE 4a — PATH A (Brave) ────────────────────────────────
+    // Brahmin stands still, confronts the third thief with calm
+    // confidence, adjusts goat and walks away. Thieves stunned.
+    // IMAGE: brahmin-holds-firm.jpg — Brahmin tall and steady,
+    //        goat on shoulders, thief before him looking startled
+    // ──────────────────────────────────────────────────────────
     brahmin_holds: {
       scene: 'forest_path',
       image: '/images/the-brahmins-goat/the-brahmins-goat-brahmin-holds-firm.jpg',
@@ -216,6 +195,63 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
       ],
     },
 
+    // ── NODE 4b — PATH B (Tricked) ──────────────────────────────
+    // Brahmin's nerve breaks — flings goat off, runs in disgust.
+    // Thieves laugh. Goat stands alone. Later: wise elder speaks.
+    // IMAGE: goat-abandoned.jpg — Brahmin fleeing, goat alone,
+    //        three figures laughing in the shadows
+    // ──────────────────────────────────────────────────────────
+    brahmin_decides: {
+      scene: 'forest_path',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-goat-abandoned.jpg',
+      text: {
+        en: `Mitra Sharma's nerve broke.
+
+He flung the goat off his shoulders, leaped away with a cry of disgust, and ran down the road without looking back — convinced beyond all reason that he had been carrying something unclean.
+
+The three thieves watched him go, then looked at each other and burst out laughing.
+
+The goat stood on the road, blinking calmly.
+
+The thieves led it away, delighted with their work.
+
+Later, Mitra Sharma met a wise elder in the village who listened to his tale. The elder was quiet for a moment.
+
+Then he said: "You saw it with your own eyes. You felt it with your own hands. But you trusted three strangers more than your own senses. Tell me — what did you actually know, and what did you only fear?"
+
+The Brahmin had no answer.`,
+        hi: `मित्र शर्मा की हिम्मत टूट गई।
+
+उन्होंने बकरी को कंधे से फेंका, घृणा की चीख के साथ उछले, और पीछे मुड़े बिना राह पर दौड़ पड़े — पूरी तरह आश्वस्त कि वे कुछ अपवित्र उठाए हुए थे।
+
+तीनों ठगों ने उन्हें जाते देखा, फिर एक-दूसरे को देखा और हँसी में फूट पड़े।
+
+बकरी सड़क पर खड़ी, शांति से पलकें झपकाती रही।
+
+ठग उसे ले गए, अपने काम से प्रसन्न।
+
+बाद में, मित्र शर्मा की मुलाकात गाँव के एक बुद्धिमान बुज़ुर्ग से हुई जिन्होंने उनकी कहानी सुनी। बुज़ुर्ग एक पल चुप रहे।
+
+फिर बोले: "आपने अपनी आँखों से देखा। अपने हाथों से महसूस किया। लेकिन तीन अजनबियों पर अपनी खुद की इंद्रियों से ज़्यादा भरोसा किया। बताइए — आप वास्तव में क्या जानते थे, और क्या केवल डर रहे थे?"
+
+ब्राह्मण के पास कोई जवाब नहीं था।`,
+      },
+      question: {
+        en: 'The Brahmin lost his goat to a lie he chose to believe. What was the real mistake?',
+        hi: 'ब्राह्मण ने अपनी बकरी एक झूठ को खोई जिसे उन्होंने मानना चुना। असली गलती क्या थी?',
+      },
+      choices: [
+        { text: { en: '👁️ He stopped trusting what he could see and feel for himself',  hi: '👁️ उन्होंने जो खुद देख और महसूस कर सकते थे उस पर भरोसा करना बंद कर दिया' }, next: 'ending_wisdom' },
+        { text: { en: '🗣️ He gave three strangers the power to define his own reality', hi: '🗣️ उन्होंने तीन अजनबियों को अपनी हकीकत तय करने की ताकत दे दी' },           next: 'ending_wisdom' },
+      ],
+    },
+
+    // ── NODE 5a — PATH A ENDING ─────────────────────────────────
+    // Brahmin arrives home safely with goat. Next day tells his
+    // children the story — a warm, triumphant family moment.
+    // IMAGE: ending-wisdom.jpg — Brahmin under banyan tree at
+    //        dawn, goat beside him, children gathered at his feet
+    // ──────────────────────────────────────────────────────────
     ending_strength: {
       scene: 'forest_dawn',
       image: '/images/the-brahmins-goat/the-brahmins-goat-ending-wisdom.jpg',
@@ -255,9 +291,15 @@ The Panchatantra teaches:
       lessonIcon: '🦁',
     },
 
+    // ── NODE 5b — PATH B ENDING ─────────────────────────────────
+    // Thieves are caught by the village headman, goat returned.
+    // Brahmin confronts the three thieves with a quiet speech.
+    // IMAGE: ending-caught.jpg — thieves heads bowed before
+    //        Brahmin and headman, goat beside Brahmin, village
+    // ──────────────────────────────────────────────────────────
     ending_wisdom: {
-      scene: 'forest_dawn',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-wisdom.jpg',
+      scene: 'village',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-caught.jpg',
       isEnding: true,
       text: {
         en: `The thieves led the goat away, laughing.
@@ -298,6 +340,7 @@ Guard your mind as you would guard your home — for both can be entered without
       lesson: { en: "A lie gains power only when we choose to believe it. Trust what you know — not just what you are told.", hi: 'झूठ में ताकत तभी आती है जब हम उसे मानना चुनते हैं। जो आप जानते हैं उस पर भरोसा करो — सिर्फ जो बताया जाए उस पर नहीं।' },
       lessonIcon: '🐐',
     },
+
   },
 };
 
