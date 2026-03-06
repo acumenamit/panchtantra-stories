@@ -86,7 +86,7 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
 
     third_thief: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-doubt-grows.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-three-thieves.jpg',
       text: {
         en: `Mitra Sharma walked on, faster now, more anxious.
 
@@ -127,7 +127,7 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
 
     brahmin_decides: {
       scene: 'forest_path',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-three-thieves.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-goat-abandoned.jpg',
       text: {
         en: `Mitra Sharma's nerve broke.
 
@@ -257,7 +257,7 @@ The Panchatantra teaches:
 
     ending_wisdom: {
       scene: 'forest_dawn',
-      image: '/images/the-brahmins-goat/the-brahmins-goat-goat-abandoned.jpg',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-wisdom.jpg',
       isEnding: true,
       text: {
         en: `The thieves led the goat away, laughing.
