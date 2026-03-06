@@ -18,7 +18,7 @@ const brahminsGoat = {
     // ── NODE 1 ─────────────────────────────────────────────────
     // Brahmin walks happily with goat. First thief hides behind
     // a tree and calls it a dead dog.
-    // IMAGE: start.jpg — cheerful Brahmin, goat on shoulders
+    // IMAGE: start.jpeg — cheerful Brahmin, goat on shoulders
     // ──────────────────────────────────────────────────────────
     start: {
       scene: 'village',
@@ -48,8 +48,8 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
         hi: 'तुम अपनी नई बकरी लेकर घर जा रहे हो — और एक अजनबी ने उसे मरा कुत्ता कह दिया। तुम जानते हो तुम क्या उठाए हो। तुम क्या करोगे?',
       },
       choices: [
-        { text: { en: '😠 Scold the thief — "Are you blind? This is a goat!"',             hi: '😠 ठग को डाँटो — "क्या तुम अंधे हो? यह बकरी है!"' },    next: 'second_thief' },
-        { text: { en: '🤔 Feel confused... could there be something wrong with the goat?', hi: '🤔 उलझन में पड़ जाओ... क्या बकरी में कुछ गड़बड़ है?' },       next: 'second_thief' },
+        { text: { en: '😤 "No way! I picked this goat up myself — I KNOW what I\'m holding!"', hi: '😤 "बिल्कुल नहीं! मैंने खुद इसे उठाया है — मुझे पता है मैं क्या पकड़े हूँ!"' }, next: 'second_thief' },
+        { text: { en: '😟 "Wait... what if something is wrong and I just can\'t tell...?"',     hi: '😟 "रुको... क्या होगा अगर सच में कुछ गड़बड़ हो और मुझे पता ही न हो...?"' },  next: 'second_thief' },
       ],
     },
 
@@ -91,8 +91,8 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
         hi: 'अब दूसरा अजनबी भी वही बात कहता है। मन में एक छोटी सी आवाज़ फुसफुसाती है — क्या होगा अगर ये सच कह रहे हों? तुम क्या करोगे?',
       },
       choices: [
-        { text: { en: '💪 Trust your own eyes — two wrong people are still wrong', hi: '💪 अपनी आँखों पर भरोसा करो — दो गलत लोग भी गलत ही हैं' }, next: 'third_thief' },
-        { text: { en: '😰 Maybe put the goat down and inspect it more carefully?',  hi: '😰 शायद बकरी को नीचे रखकर ध्यान से जाँचें?' },               next: 'third_thief' },
+        { text: { en: '💪 "Two people saying it doesn\'t make it true. I\'m not putting her down."', hi: '💪 "दो लोगों के कहने से सच नहीं बन जाता। मैं इसे नहीं रखूँगा।"' },       next: 'third_thief' },
+        { text: { en: '😰 "Two people now... what if I really am carrying something wrong?"',        hi: '😰 "अब दो लोग... क्या सच में मैं कुछ गलत उठाए हूँ?"' },                    next: 'third_thief' },
       ],
     },
 
@@ -138,8 +138,8 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
         hi: 'तीन अजनबी। तीन बार। एक ही झूठ। तुम्हारे हाथ काँप रहे हैं। क्या तुम खुद पर भरोसा करोगे — या उन पर?',
       },
       choices: [
-        { text: { en: '🐐 Hold firm — "I carried this goat from the merchant\'s house. It IS a goat!"', hi: '🐐 अडिग रहो — "मैं यह बकरी व्यापारी के घर से लाया हूँ। यह बकरी ही है!"' }, next: 'brahmin_holds' },
-        { text: { en: '😱 Set the goat down and flee — three people must know something!',               hi: '😱 बकरी नीचे रखो और भागो — तीन लोग कुछ तो जानते होंगे!' },                          next: 'brahmin_decides' },
+        { text: { en: '🐐 "THREE people and I still know the truth. This. Is. A. Goat."', hi: '🐐 "तीन लोग कह रहे हैं और मैं फिर भी सच जानता हूँ। यह। बकरी। है।"' }, next: 'brahmin_holds' },
+        { text: { en: '😱 "Three people can\'t all be wrong... can they? I have to drop it..."', hi: '😱 "तीन लोग एक साथ गलत नहीं हो सकते... क्या हो सकते हैं? मुझे इसे रखना होगा..."' }, next: 'brahmin_decides' },
       ],
     },
 
@@ -190,8 +190,8 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
         hi: 'तुमने तीन लोगों के सामने अपनी बात पर कायम रहे जो तुम्हें तुम्हारी अपनी आँखों पर शक दिलाना चाहते थे। तुम्हें यह ताकत कहाँ से मिली?',
       },
       choices: [
-        { text: { en: '🧠 Knowing the difference between what I KNOW and what I was told to fear', hi: '🧠 यह जानना कि मैं क्या जानता हूँ और क्या डराया जा रहा था' }, next: 'ending_strength' },
-        { text: { en: '🦁 Courage — it takes bravery to trust yourself against a crowd',           hi: '🦁 साहस — भीड़ के सामने खुद पर भरोसा करने के लिए हिम्मत चाहिए' }, next: 'ending_strength' },
+        { text: { en: '🧠 "I asked myself what I actually KNEW — not what I feared."', hi: '🧠 "मैंने खुद से पूछा कि मैं क्या जानता हूँ — न कि क्या डर रहा हूँ।"' }, next: 'ending_strength' },
+        { text: { en: '🦁 "It was scary. But I trusted myself even when it was hard."', hi: '🦁 "डर तो लगा। लेकिन मुश्किल होने पर भी मैंने खुद पर भरोसा किया।"' },  next: 'ending_strength' },
       ],
     },
 
@@ -241,8 +241,8 @@ The Brahmin had no answer.`,
         hi: 'तुम भाग गए। बकरी चली गई। एक बुज़ुर्ग धीरे से पूछते हैं — उस राह पर कहीं, तुमने किस पर भरोसा करना बंद कर दिया?',
       },
       choices: [
-        { text: { en: '👁️ I stopped trusting what I could see and feel for myself',  hi: '👁️ मैंने खुद जो देख और महसूस कर सकता था उस पर भरोसा करना बंद कर दिया' }, next: 'ending_wisdom' },
-        { text: { en: '🗣️ I gave three strangers the power to define my own reality', hi: '🗣️ मैंने तीन अजनबियों को अपनी हकीकत तय करने की ताकत दे दी' },           next: 'ending_wisdom' },
+        { text: { en: '👁️ "I stopped trusting my own eyes and hands."',                   hi: '👁️ "मैंने अपनी आँखों और हाथों पर भरोसा करना बंद कर दिया।"' },           next: 'ending_wisdom' },
+        { text: { en: '🗣️ "I let strangers decide what was real for me."',                hi: '🗣️ "मैंने अजनबियों को तय करने दिया कि मेरे लिए क्या सच है।"' },          next: 'ending_wisdom' },
       ],
     },
 
