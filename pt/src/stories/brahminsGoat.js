@@ -16,6 +16,7 @@ const brahminsGoat = {
   nodes: {
     start: {
       scene: 'village',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-start.jpg',
       text: {
         en: `In a small village, a kind Brahmin named Mitra Sharma had just performed a great ceremony. As his reward, a wealthy merchant gifted him a fine, healthy goat.
 
@@ -41,13 +42,14 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
         hi: 'ब्राह्मण के कंधे पर बकरी है — यह सब देख सकते हैं! जब ठग उसे मरा कुत्ता कहता है, तो वे क्या करते हैं?',
       },
       choices: [
-        { text: { en: "😠 Scold the thief — \"Are you blind? This is a goat!\"",           hi: '😠 ठग को डाँटो — "क्या तुम अंधे हो? यह बकरी है!"' },    next: 'second_thief' },
+        { text: { en: '😠 Scold the thief — "Are you blind? This is a goat!"',             hi: '😠 ठग को डाँटो — "क्या तुम अंधे हो? यह बकरी है!"' },    next: 'second_thief' },
         { text: { en: '🤔 Feel confused... could there be something wrong with the goat?', hi: '🤔 उलझन में पड़ जाओ... क्या बकरी में कुछ गड़बड़ है?' },       next: 'second_thief' },
       ],
     },
 
     second_thief: {
       scene: 'forest_path',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-first-thief.jpg',
       text: {
         en: `The Brahmin shook his head and walked on. "Foolish man," he muttered. "This is clearly a goat."
 
@@ -84,6 +86,7 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
 
     third_thief: {
       scene: 'forest_path',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-doubt-grows.jpg',
       text: {
         en: `Mitra Sharma walked on, faster now, more anxious.
 
@@ -117,13 +120,14 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
         hi: 'तीन लोग। एक ही झूठ। बकरी सामने ही है। ब्राह्मण क्या करते हैं?',
       },
       choices: [
-        { text: { en: '🐐 Hold firm — \"I carried this goat from the merchant\'s house. It IS a goat!\"', hi: '🐐 अडिग रहो — "मैं यह बकरी व्यापारी के घर से लाया हूँ। यह बकरी ही है!"' }, next: 'brahmin_holds' },
+        { text: { en: '🐐 Hold firm — "I carried this goat from the merchant\'s house. It IS a goat!"', hi: '🐐 अडिग रहो — "मैं यह बकरी व्यापारी के घर से लाया हूँ। यह बकरी ही है!"' }, next: 'brahmin_holds' },
         { text: { en: '😱 Set the goat down and flee — three people must know something!',               hi: '😱 बकरी नीचे रखो और भागो — तीन लोग कुछ तो जानते होंगे!' },                          next: 'brahmin_decides' },
       ],
     },
 
     brahmin_decides: {
       scene: 'forest_path',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-three-thieves.jpg',
       text: {
         en: `Mitra Sharma's nerve broke.
 
@@ -168,6 +172,7 @@ The Brahmin had no answer.`,
 
     brahmin_holds: {
       scene: 'forest_path',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-brahmin-holds-firm.jpg',
       isAlternate: true,
       text: {
         en: `Mitra Sharma stood very still.
@@ -213,6 +218,7 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
 
     ending_strength: {
       scene: 'forest_dawn',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-ending-wisdom.jpg',
       isAlternate: true,
       isEnding: true,
       text: {
@@ -251,6 +257,7 @@ The Panchatantra teaches:
 
     ending_wisdom: {
       scene: 'forest_dawn',
+      image: '/images/the-brahmins-goat/the-brahmins-goat-goat-abandoned.jpg',
       isEnding: true,
       text: {
         en: `The thieves led the goat away, laughing.
