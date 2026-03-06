@@ -3,6 +3,7 @@ import monkeyAndCrocodile from './monkeyAndCrocodile';
 import crowAndSerpent from './crowAndSerpent';
 import brahminAndCobra from './brahminAndCobra';
 import fourFriendsAndHunter from './fourFriendsAndHunter';
+import brahminsGoat from './brahminsGoat':
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
@@ -17,8 +18,8 @@ const STORIES = [
   monkeyAndCrocodile,
   crowAndSerpent,
   brahminAndCobra,
-  fourFriendsAndHunter
-  // brahminsGoat,
+  fourFriendsAndHunter,
+  brahminsGoat
 ];
 
 export default STORIES;
