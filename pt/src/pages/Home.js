@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useLang, t } from '../LangContext';
 import LangToggle from '../components/LangToggle';
 import ShareButton from '../components/ShareButton';
-import STORIES from '../stories';
+import STORIES, { FEATURED_STORY_ID } from '../stories';
 import { trackPageView, trackLanguageSwitched } from '../analytics';
 
 const UI = {
@@ -166,7 +166,7 @@ export default function Home() {
 
   // Sort newest first, separate featured from grid
   const sorted        = sortedStories(STORIES);
-  const featured      = sorted.find(s => s.featured) || sorted[0];
+  const featured      = sorted.find(s => s.id === FEATURED_STORY_ID) || sorted[0];
   const gridStories   = sorted.filter(s => s.id !== featured.id);
   const remainder     = gridStories.length % 3;
   const placeholders  = remainder === 0 ? 0 : 3 - remainder;
