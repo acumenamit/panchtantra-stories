@@ -6,6 +6,8 @@ import ChoiceButton from '../components/ChoiceButton';
 import EndingCard from '../components/EndingCard';
 import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
+import AudioButton from '../components/AudioButton';
+import usePreloader from '../components/usePreloader';
 import {
   trackPageView,
   trackStoryStarted,
@@ -25,10 +27,38 @@ export default function StoryEngine({ story }) {
   const [fading,    setFading]   = useState(false);
   const [pickedNext, setPicked]  = useState(null);
   const [imgLoaded,  setImgLoaded] = useState(false);
+  const [imageReady, setImageReady] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
 
   const node  = story.nodes[nodeId];
   const scene = SCENES[node.scene] || SCENES.forest_day;
   const { accent, bg } = scene;
+
+  // ── Preloader ─────────────────────────────────────────────────
+  const { getAssetState, preloadNode } = usePreloader(story, nodeId, lang);
+
+  // On every node transition, seed readiness from cache and poll until done
+  useEffect(() => {
+    const state = getAssetState(nodeId);
+    setImageReady(state.imageReady);
+    setAudioReady(state.audioReady);
+    preloadNode(nodeId);
+
+    const interval = setInterval(() => {
+      const latest = getAssetState(nodeId);
+      setImageReady(latest.imageReady);
+      setAudioReady(latest.audioReady);
+      if (latest.imageReady && latest.audioReady) clearInterval(interval);
+    }, 300);
+
+    return () => clearInterval(interval);
+  }, [nodeId]); // eslint-disable-line
+
+  // Re-check audio when language switches
+  useEffect(() => {
+    const state = getAssetState(nodeId);
+    setAudioReady(state.audioReady);
+  }, [lang]); // eslint-disable-line
 
   // Track story start + page view on mount
   useEffect(() => {
@@ -89,6 +119,19 @@ export default function StoryEngine({ story }) {
       trackLanguageSwitched(lang, newLang, `story:${story.id}`);
     }
   };
+
+  // ── Status line ───────────────────────────────────────────────
+  // Shows at top of card only when an asset is still loading.
+  // Image takes priority in the message; disappears when both ready.
+  const hasImage = !!node.image;
+  const hasAudio = !!node.audio;
+  const showImageLoading = hasImage && !imageReady;
+  const showAudioLoading = hasAudio && !audioReady && !showImageLoading;
+  const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
+
+  const statusText = showImageLoading
+    ? (lang === 'hi' ? 'कहानी का चित्र लोड हो रहा है...' : 'Loading story visual...')
+    : (lang === 'hi' ? 'ऑडियो लोड हो रहा है...'          : 'Loading audio...');
 
   const steps   = story.progressSteps || [];
   const navBack = lang === 'hi' ? '← वापस'         : '← back';
@@ -178,6 +221,42 @@ export default function StoryEngine({ story }) {
         )}
 
         <div style={{ padding:'32px 34px' }}>
+
+          {/* ── Status line ── */}
+          {/* Single combined line at top of card. Appears only while  */}
+          {/* image or audio is still loading. Disappears once ready.  */}
+          {showStatusLine && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 20,
+              padding: '8px 14px',
+              borderRadius: 10,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.1)',
+            }}>
+              <span style={{
+                display: 'inline-block',
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                border: `2px solid ${accent}44`,
+                borderTopColor: accent,
+                animation: 'spin 0.8s linear infinite',
+                flexShrink: 0,
+              }} />
+              <span style={{
+                fontFamily: 'var(--mono)',
+                fontSize: '0.68rem',
+                color: 'rgba(255,255,255,0.4)',
+                letterSpacing: '0.06em',
+              }}>
+                {statusText}
+              </span>
+            </div>
+          )}
+
           {node.isEnding ? (
             <EndingCard
               node={node}
@@ -190,6 +269,20 @@ export default function StoryEngine({ story }) {
           ) : (
             <>
               <Typewriter key={`${nodeId}-${lang}`} text={t(node.text, lang)} onDone={() => setTextDone(true)} />
+
+              {/* Audio button — appears after typewriter finishes.        */}
+              {/* AudioButton renders nothing if file doesn't exist yet.   */}
+              {textDone && audioReady && (
+                <div style={{ marginTop: 12, marginBottom: 4 }}>
+                  <AudioButton
+                    storyId={story.id}
+                    nodeId={nodeId}
+                    lang={lang}
+                    accent={accent}
+                    audioReady={audioReady}
+                  />
+                </div>
+              )}
 
               {textDone && (
                 <div className="fade-up">
