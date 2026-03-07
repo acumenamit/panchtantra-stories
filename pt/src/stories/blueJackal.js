@@ -360,7 +360,7 @@ The Panchatantra teaches:
     // ──────────────────────────────────────────────────────────
     tells_the_truth: {
       scene: 'forest_day',
-      image: '/images/the-blue-jackal/the-blue-jackal-tells-the-truth.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-tells-the-truth.jpeg',
       text: {
         en: `Chandarava walked back into the forest and immediately raised his voice.
 
@@ -420,7 +420,7 @@ Chandarava stood in the middle of the clearing, paws open, completely honest —
     // ──────────────────────────────────────────────────────────
     crowded_out: {
       scene: 'forest_day',
-      image: '/images/the-blue-jackal/the-blue-jackal-crowded-out.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-crowded-out.jpeg',
       text: {
         en: `The animals held a council. Without him.
 
@@ -492,7 +492,7 @@ One animal had heard him.`,
     // ──────────────────────────────────────────────────────────
     speaks_up: {
       scene: 'forest_day',
-      image: '/images/the-blue-jackal/the-blue-jackal-speaks-up.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-speaks-up.jpeg',
       isAlternate: true,
       text: {
         en: `Chandarava stood up and walked straight into the circle.
@@ -553,7 +553,7 @@ Chandarava was escorted to a throne he had never asked for, with a deer walking 
     // ──────────────────────────────────────────────────────────
     gave_up: {
       scene: 'forest_day',
-      image: '/images/the-blue-jackal/the-blue-jackal-gave-up.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-gave-up.jpeg',
       isAlternate: true,
       text: {
         en: `Chandarava stayed where he was.
@@ -626,7 +626,7 @@ Chandarava looked at the ground.
     // ──────────────────────────────────────────────────────────
     ruling_unwillingly: {
       scene: 'forest_evening',
-      image: '/images/the-blue-jackal/the-blue-jackal-ruling-unwillingly.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-ruling-unwillingly.jpeg',
       text: {
         en: `The throne felt nothing like Chandarava had imagined a throne would feel.
 
@@ -686,7 +686,7 @@ The lion noticed. "Shall I drive them off, my king?"
     // ──────────────────────────────────────────────────────────
     moonlit_night_b: {
       scene: 'forest_dark',
-      image: '/images/the-blue-jackal/the-blue-jackal-moonlit-night-b.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-moonlit-night-b.jpeg',
       isAlternate: true,
       text: {
         en: `The full moon rose.
@@ -743,7 +743,7 @@ She had known all along.`,
     // ──────────────────────────────────────────────────────────
     animals_realise: {
       scene: 'forest_dark',
-      image: '/images/the-blue-jackal/the-blue-jackal-animals-realise.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-animals-realise.jpeg',
       isAlternate: true,
       text: {
         en: `The forest went silent.
@@ -808,7 +808,7 @@ The small deer walked quietly to Chandarava's side and stood there.
     // ──────────────────────────────────────────────────────────
     ending_believed: {
       scene: 'forest_dawn',
-      image: '/images/the-blue-jackal/the-blue-jackal-ending-believed.jpg',
+      image: '/images/the-blue-jackal/the-blue-jackal-ending-believed.jpeg',
       isAlternate: true,
       isEnding: true,
       text: {
