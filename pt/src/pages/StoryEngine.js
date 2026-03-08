@@ -57,10 +57,15 @@ export default function StoryEngine({ story }) {
     return () => clearInterval(interval);
   }, [nodeId]); // eslint-disable-line
 
-  // Re-check audio when language switches
+  // Re-check audio when language switches â restart polling until ready
   useEffect(() => {
-    const state = getAssetState(nodeId);
-    setAudioReady(state.audioReady);
+    setAudioReady(false);
+    const interval = setInterval(() => {
+      const latest = getAssetState(nodeId);
+      setAudioReady(latest.audioReady);
+      if (latest.audioReady) clearInterval(interval);
+    }, 300);
+    return () => clearInterval(interval);
   }, [lang]); // eslint-disable-line
 
   // Track story start + page view on mount

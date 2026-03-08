@@ -63,12 +63,16 @@ export default function usePreloader(story, currentNodeId, lang) {
   useEffect(() => { preloadNode(currentNodeId); }, []); // eslint-disable-line
 
   // Reset audio cache on language switch (different .mp3 files needed)
+  // Then re-preload BOTH current node and next nodes for the new language
   useEffect(() => {
     Object.keys(cache.current).forEach(nodeId => {
       if (story.nodes[nodeId]) {
         cache.current[nodeId].audioReady = false;
       }
     });
+    // Current node first — this is what the user is looking at right now
+    preloadNode(currentNodeId);
+    // Then next nodes
     const currentNode = story.nodes[currentNodeId];
     if (currentNode?.choices) {
       currentNode.choices.forEach(c => { if (c.next) preloadNode(c.next); });
