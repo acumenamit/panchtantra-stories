@@ -21,14 +21,17 @@ export default function StoryEngine({ story }) {
   const navigate = useNavigate();
   const { lang }  = useLang();
 
-  const [nodeId,    setNodeId]   = useState('start');
-  const [textDone,  setTextDone] = useState(false);
-  const [history,   setHistory]  = useState([]);
-  const [fading,    setFading]   = useState(false);
-  const [pickedNext, setPicked]  = useState(null);
-  const [imgLoaded,  setImgLoaded] = useState(false);
-  const [imageReady, setImageReady] = useState(false);
-  const [audioReady, setAudioReady] = useState(false);
+  const [nodeId,      setNodeId]     = useState('start');
+  const [textDone,    setTextDone]   = useState(false);
+  const [history,     setHistory]    = useState([]);
+  const [fading,      setFading]     = useState(false);
+  const [pickedNext,  setPicked]     = useState(null);
+  const [imgLoaded,   setImgLoaded]  = useState(false);
+  const [imageReady,  setImageReady] = useState(false);
+  const [audioReady,  setAudioReady] = useState(false);
+  // audioActive: user's intent â stays true across nodes so audio
+  // auto-plays on each new node once the file is ready
+  const [audioActive, setAudioActive] = useState(false);
 
   const node  = story.nodes[nodeId];
   const scene = SCENES[node.scene] || SCENES.forest_day;
@@ -174,6 +177,8 @@ export default function StoryEngine({ story }) {
               lang={lang}
               accent={accent}
               audioReady={audioReady}
+              audioActive={audioActive}
+              setAudioActive={setAudioActive}
             />
             {node.isAlternate && (
               <div style={{ padding:'4px 10px', borderRadius:20, background:'rgba(239,68,68,0.2)', border:'1px solid rgba(239,68,68,0.5)', color:'#ffb3b3', fontFamily:'var(--mono)', fontSize:'0.62rem', whiteSpace:'nowrap' }}>
@@ -284,9 +289,28 @@ export default function StoryEngine({ story }) {
                     <div style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:accent, letterSpacing:'0.14em', marginBottom:8, fontWeight:700 }}>
                       {yourChoice}
                     </div>
-                    <p style={{ margin:0, fontFamily:'var(--serif)', fontSize:'1.05rem', color:'#fff7d6', lineHeight:1.7, fontWeight:600 }}>
-                      {t(node.question, lang)}
-                    </p>
+                    {/* Render question with Direction D fork styling.
+                        Lines starting with '...' are rendered dimmed as pause markers.
+                        Lines starting with '... Or' get accent colour as the pivot.  */}
+                    <div style={{ fontFamily:'var(--serif)', fontSize:'1.05rem', color:'#fff7d6', lineHeight:1.9, fontWeight:600 }}>
+                      {t(node.question, lang).split('\n').filter(l => l.trim()).map((line, i) => {
+                        const isOr  = line.trim().startsWith('... Or') || line.trim().startsWith('... à¤¯à¤¾');
+                        const isPause = line.trim().startsWith('...') && !isOr;
+                        return (
+                          <div key={i} style={{
+                            color:    isOr    ? accent
+                                    : isPause ? 'rgba(255,255,255,0.3)'
+                                    :           '#fff7d6',
+                            fontSize: isPause ? '0.85rem' : '1.05rem',
+                            marginTop: isPause ? 6 : isOr ? 4 : 0,
+                            fontStyle: isPause ? 'italic' : 'normal',
+                            letterSpacing: isPause ? '0.12em' : 'normal',
+                          }}>
+                            {line}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {node.choices.map((c, i) => (

@@ -17,20 +17,20 @@
 
 import { useState, useRef, useEffect } from 'react';
 
-export default function AudioButton({ storyId, nodeId, lang, accent, audioReady }) {
+export default function AudioButton({ storyId, nodeId, lang, accent, audioReady, audioActive, setAudioActive }) {
   const [isPlaying,   setIsPlaying]   = useState(false);
-  const [hasFile,     setHasFile]     = useState(null);  // null=checking, true, false
-  const [everHadFile, setEverHadFile] = useState(false); // true once any lang loaded OK
-  const [isChecking,  setIsChecking]  = useState(false); // loading new lang after switch
+  const [hasFile,     setHasFile]     = useState(null);
+  const [everHadFile, setEverHadFile] = useState(false);
+  const [isChecking,  setIsChecking]  = useState(false);
   const audioRef   = useRef(null);
-  const staleToken = useRef(null); // cancels in-flight checks on lang/node switch
+  const staleToken = useRef(null);
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
+  // Load audio file whenever audioReady or path changes
   useEffect(() => {
     if (!audioReady) return;
 
-    // Invalidate any in-flight check from previous lang/node
     const token = {};
     staleToken.current = token;
 
@@ -54,10 +54,6 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady 
 
     audio.addEventListener('error', () => {
       if (staleToken.current !== token) return;
-      // File missing for this language.
-      // If we've successfully loaded audio for ANY language on this node before,
-      // show a disabled button rather than hiding — disappearing mid-session
-      // is confusing. If nothing ever worked, hide silently.
       setHasFile(false);
       setIsChecking(false);
     }, { once: true });
@@ -66,11 +62,22 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady 
     audio.load();
 
     return () => {
-      staleToken.current = {}; // invalidate
+      staleToken.current = {};
       audio.pause();
     };
   }, [audioReady, audioPath]); // eslint-disable-line
 
+  // Auto-play when file is ready if user had audio active on previous node
+  useEffect(() => {
+    if (!audioActive || !audioRef.current || hasFile !== true) return;
+    const audio = audioRef.current;
+    audio.onended = () => { setIsPlaying(false); };
+    audio.play()
+      .then(() => setIsPlaying(true))
+      .catch(() => setIsPlaying(false));
+  }, [hasFile, audioActive]); // eslint-disable-line
+
+  // Clean up on unmount
   useEffect(() => {
     return () => { audioRef.current?.pause(); };
   }, []);
@@ -82,9 +89,12 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady 
       audio.pause();
       audio.currentTime = 0;
       setIsPlaying(false);
+      setAudioActive(false); // user explicitly stopped — clear intent
     } else {
-      audio.onended = () => setIsPlaying(false);
-      audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+      audio.onended = () => { setIsPlaying(false); };
+      audio.play()
+        .then(() => { setIsPlaying(true); setAudioActive(true); }) // record intent
+        .catch(() => setIsPlaying(false));
     }
   };
 

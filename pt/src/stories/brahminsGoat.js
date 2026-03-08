@@ -44,8 +44,12 @@ The first thief slipped ahead down the road. He waited behind a tree, and as the
 "हे विद्वान ब्राह्मण! आप कंधे पर मरे हुए कुत्ते को क्यों उठाए चल रहे हैं?"`,
       },
       question: {
-        en: 'You are walking home with your brand new goat — and a stranger just called it a dead dog. You know exactly what you are carrying. What do you do?',
-        hi: 'तुम अपनी नई बकरी लेकर घर जा रहे हो — और एक अजनबी ने उसे मरा कुत्ता कह दिया। तुम जानते हो तुम क्या उठाए हो। तुम क्या करोगे?',
+        en: `Should Mitra Sharma ignore the man?
+
+... Or... should he think about what the man just said?`,
+        hi: `क्या मित्र शर्मा को उस आदमी की बात अनसुनी कर देनी चाहिए?
+
+... या... क्या उन्हें रुककर सोचना चाहिए कि उस आदमी ने क्या कहा?`,
       },
       choices: [
         { text: { en: '😤 "No way! I picked this goat up myself — I KNOW what I\'m holding!"', hi: '😤 "बिल्कुल नहीं! मैंने खुद इसे उठाया है — मुझे पता है मैं क्या पकड़े हूँ!"' }, next: 'second_thief' },
@@ -87,8 +91,12 @@ Mitra Sharma stopped. He craned his neck to look at the animal on his back. It w
 "यह बकरी है!" उन्होंने कहा — लेकिन आवाज़ थोड़ी काँपी।`,
       },
       question: {
-        en: 'Now a second stranger says the same thing. A tiny voice inside whispers — what if they are right? What do you do?',
-        hi: 'अब दूसरा अजनबी भी वही बात कहता है। मन में एक छोटी सी आवाज़ फुसफुसाती है — क्या होगा अगर ये सच कह रहे हों? तुम क्या करोगे?',
+        en: `Should Mitra Sharma trust his own eyes and keep walking?
+
+... Or... should he stop and take a closer look?`,
+        hi: `क्या मित्र शर्मा को अपनी आँखों पर भरोसा रखते हुए आगे बढ़ना चाहिए?
+
+... या... क्या उन्हें रुककर ध्यान से देखना चाहिए?`,
       },
       choices: [
         { text: { en: '💪 "Two people saying it doesn\'t make it true. I\'m not putting her down."', hi: '💪 "दो लोगों के कहने से सच नहीं बन जाता। मैं इसे नहीं रखूँगा।"' },       next: 'third_thief' },
@@ -134,8 +142,12 @@ Mitra Sharma's legs slowed. His hands trembled. The goat on his shoulders sudden
 "क्या तीन लोग सब गलत हो सकते हैं?" उन्होंने सोचा।`,
       },
       question: {
-        en: 'Three strangers. Three times. The same lie. Your hands are trembling. Do you trust yourself — or them?',
-        hi: 'तीन अजनबी। तीन बार। एक ही झूठ। तुम्हारे हाथ काँप रहे हैं। क्या तुम खुद पर भरोसा करोगे — या उन पर?',
+        en: `Should Mitra Sharma stand firm and tell the thief exactly what he knows?
+
+... Or... has the time finally come to drop the goat and run?`,
+        hi: `क्या मित्र शर्मा को अडिग रहकर ठग को बताना चाहिए कि वे क्या जानते हैं?
+
+... या... क्या अब बकरी छोड़कर भाग जाने का वक्त आ गया है?`,
       },
       choices: [
         { text: { en: '🐐 "THREE people and I still know the truth. This. Is. A. Goat."', hi: '🐐 "तीन लोग कह रहे हैं और मैं फिर भी सच जानता हूँ। यह। बकरी। है।"' }, next: 'brahmin_holds' },
@@ -186,8 +198,13 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
 दूसरे ठग ने अनिच्छापूर्ण सम्मान से सिर हिलाया। "उसने खुद पर भरोसा किया।"`,
       },
       question: {
-        en: 'You just stood your ground against three people who tried to make you doubt your own eyes. What do you think gave you the strength to hold firm?',
-        hi: 'तुमने तीन लोगों के सामने अपनी बात पर कायम रहे जो तुम्हें तुम्हारी अपनी आँखों पर शक दिलाना चाहते थे। तुम्हें यह ताकत कहाँ से मिली?',
+        en: `Was it knowing the difference between what he truly knew and what he was being told to fear?
+
+... Or... was it simply the courage to trust yourself when no one else does?`,
+        hi: `क्या यह इसलिए था कि वे जानते थे कि सच क्या है और डर क्या है?
+
+... या... क्या यह बस वह साहस था जो तब चाहिए जब कोई आप पर भरोसा न करे?`,
+      },
       },
       choices: [
         { text: { en: '🧠 "I asked myself what I actually KNEW — not what I feared."', hi: '🧠 "मैंने खुद से पूछा कि मैं क्या जानता हूँ — न कि क्या डर रहा हूँ।"' }, next: 'ending_strength' },
@@ -237,8 +254,12 @@ The Brahmin had no answer.`,
 ब्राह्मण के पास कोई जवाब नहीं था।`,
       },
       question: {
-        en: 'You ran. The goat is gone. A wise elder asks you gently — somewhere on that road, what did you stop trusting?',
-        hi: 'तुम भाग गए। बकरी चली गई। एक बुज़ुर्ग धीरे से पूछते हैं — उस राह पर कहीं, तुमने किस पर भरोसा करना बंद कर दिया?',
+        en: `Did he stop trusting what his own eyes and hands were telling him?
+
+... Or... did he give three strangers the power to decide what was real?`,
+        hi: `क्या उन्होंने अपनी आँखों और हाथों की बात मानना बंद कर दिया?
+
+... या... क्या उन्होंने तीन अजनबियों को यह तय करने की ताकत दे दी कि सच क्या है?`,
       },
       choices: [
         { text: { en: '👁️ "I stopped trusting my own eyes and hands."',                   hi: '👁️ "मैंने अपनी आँखों और हाथों पर भरोसा करना बंद कर दिया।"' },           next: 'ending_wisdom' },
