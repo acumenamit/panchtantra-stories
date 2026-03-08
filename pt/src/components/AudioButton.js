@@ -18,42 +18,59 @@
 import { useState, useRef, useEffect } from 'react';
 
 export default function AudioButton({ storyId, nodeId, lang, accent, audioReady }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasFile,   setHasFile]   = useState(null); // null=checking, true, false
-  const audioRef = useRef(null);
+  const [isPlaying,   setIsPlaying]   = useState(false);
+  const [hasFile,     setHasFile]     = useState(null);  // null=checking, true, false
+  const [everHadFile, setEverHadFile] = useState(false); // true once any lang loaded OK
+  const [isChecking,  setIsChecking]  = useState(false); // loading new lang after switch
+  const audioRef   = useRef(null);
+  const staleToken = useRef(null); // cancels in-flight checks on lang/node switch
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
-  // When audioReady flips true, verify file exists and cache the Audio object
   useEffect(() => {
     if (!audioReady) return;
 
-    // Stop and discard any previous audio instance
+    // Invalidate any in-flight check from previous lang/node
+    const token = {};
+    staleToken.current = token;
+
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
     setIsPlaying(false);
     setHasFile(null);
+    setIsChecking(true);
 
     const audio = new window.Audio();
 
     audio.addEventListener('canplaythrough', () => {
+      if (staleToken.current !== token) return;
       audioRef.current = audio;
       setHasFile(true);
+      setEverHadFile(true);
+      setIsChecking(false);
     }, { once: true });
 
     audio.addEventListener('error', () => {
-      setHasFile(false); // file not generated yet → render nothing
+      if (staleToken.current !== token) return;
+      // File missing for this language.
+      // If we've successfully loaded audio for ANY language on this node before,
+      // show a disabled button rather than hiding — disappearing mid-session
+      // is confusing. If nothing ever worked, hide silently.
+      setHasFile(false);
+      setIsChecking(false);
     }, { once: true });
 
     audio.src = audioPath;
     audio.load();
 
-    return () => { audio.pause(); };
-  }, [audioReady, audioPath]);
+    return () => {
+      staleToken.current = {}; // invalidate
+      audio.pause();
+    };
+  }, [audioReady, audioPath]); // eslint-disable-line
 
-  // Clean up on unmount
   useEffect(() => {
     return () => { audioRef.current?.pause(); };
   }, []);
@@ -71,14 +88,43 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady 
     }
   };
 
-  // ── Still loading ────────────────────────────────────────────
-  // Note: "Loading audio..." is handled by the status line in
-  // StoryEngine, not here. This component only shows post-textDone.
-  // If audioReady is false, StoryEngine won't render us yet.
-  if (!audioReady || hasFile === null) return null;
+  // ── Checking / switching language ────────────────────────────
+  if (!audioReady || isChecking || hasFile === null) {
+    if (!everHadFile) return null; // first load — stay invisible, no flash
+    return (
+      <button disabled style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 14px', borderRadius: 20,
+        border: '1px solid rgba(255,255,255,0.1)',
+        background: 'rgba(255,255,255,0.02)',
+        color: 'rgba(255,255,255,0.25)',
+        fontFamily: 'var(--mono)', fontSize: '0.72rem',
+        letterSpacing: '0.06em', cursor: 'not-allowed',
+      }}>
+        <span style={{ fontSize: '1rem' }}>🔊</span>
+        {lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}
+      </button>
+    );
+  }
 
-  // ── File doesn't exist — degrade silently ────────────────────
-  if (hasFile === false) return null;
+  // ── File missing for this language ───────────────────────────
+  if (hasFile === false) {
+    if (!everHadFile) return null; // never worked on this node — hide silently
+    return (
+      <button disabled style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 14px', borderRadius: 20,
+        border: '1px solid rgba(255,255,255,0.1)',
+        background: 'rgba(255,255,255,0.02)',
+        color: 'rgba(255,255,255,0.2)',
+        fontFamily: 'var(--mono)', fontSize: '0.72rem',
+        letterSpacing: '0.06em', cursor: 'not-allowed',
+      }}>
+        <span style={{ fontSize: '1rem' }}>🔊</span>
+        {lang === 'hi' ? 'उपलब्ध नहीं' : 'Not available'}
+      </button>
+    );
+  }
 
   // ── Ready ────────────────────────────────────────────────────
   const label = isPlaying
