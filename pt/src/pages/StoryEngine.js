@@ -314,8 +314,10 @@ export default function StoryEngine({ story }) {
                                     :           '#fff7d6',
                             fontSize: isPause ? '0.85rem' : '1.05rem',
                             marginTop: isPause ? 6 : isOr ? 4 : 0,
-                            fontStyle: isPause ? 'italic' : 'normal',
-                            letterSpacing: isPause ? '0.12em' : 'normal',
+                            // Never italicise Devanagari â breaks ligatures
+                            fontStyle: isPause && lang !== 'hi' ? 'italic' : 'normal',
+                            // letterSpacing breaks Devanagari conjuncts â only apply for EN
+                            letterSpacing: isPause && lang !== 'hi' ? '0.12em' : 'normal',
                           }}>
                             {line}
                           </div>
