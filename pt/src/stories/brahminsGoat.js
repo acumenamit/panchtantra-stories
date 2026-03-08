@@ -205,7 +205,6 @@ The second thief shook his head in grudging respect. "He trusted himself."`,
 
 ... या... क्या यह बस वह साहस था जो तब चाहिए जब कोई आप पर भरोसा न करे?`,
       },
-      },
       choices: [
         { text: { en: '🧠 "I asked myself what I actually KNEW — not what I feared."', hi: '🧠 "मैंने खुद से पूछा कि मैं क्या जानता हूँ — न कि क्या डर रहा हूँ।"' }, next: 'ending_strength' },
         { text: { en: '🦁 "It was scary. But I trusted myself even when it was hard."', hi: '🦁 "डर तो लगा। लेकिन मुश्किल होने पर भी मैंने खुद पर भरोसा किया।"' },  next: 'ending_strength' },
