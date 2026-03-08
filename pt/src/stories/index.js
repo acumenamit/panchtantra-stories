@@ -5,6 +5,7 @@ import brahminAndCobra from './brahminAndCobra';
 import fourFriendsAndHunter from './fourFriendsAndHunter';
 import brahminsGoat from './brahminsGoat';
 import blueJackal from './blueJackal';
+import jackalAndWarDrum from './jackalAndWarDrum';
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
@@ -23,6 +24,7 @@ const STORIES = [
   fourFriendsAndHunter,
   brahminsGoat,
   blueJackal,
+  jackalAndWarDrum,
 ];
 
 // ─────────────────────────────────────────────────────────────
