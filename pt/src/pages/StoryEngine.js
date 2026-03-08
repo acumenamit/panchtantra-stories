@@ -152,7 +152,7 @@ export default function StoryEngine({ story }) {
   const navRst  = lang === 'hi' ? 'à¤«à¤¿à¤° à¤¸à¥ âº'       : 'restart âº';
   const navHome = lang === 'hi' ? 'â à¤¸à¤­à¥ à¤à¤¹à¤¾à¤¨à¤¿à¤¯à¤¾à¤' : 'â All Stories';
   const yourChoice = lang === 'hi' ? 'â¦ à¤à¤ªà¤à¤¾ à¤à¥à¤¨à¤¾à¤µ' : 'â¦ YOUR CHOICE';
-  const altLabel   = lang === 'hi' ? 'â  à¤µà¥à¤à¤²à¥à¤ªà¤¿à¤ à¤®à¤¾à¤°à¥à¤' : 'alt path';
+  const altLabel   = lang === 'hi' ? 'âª à¤µà¥à¤à¤²à¥à¤ªà¤¿à¤ à¤ªà¤¥' : 'âª alt path';
 
   return (
     <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 48px', transition:'background 1.2s ease' }}>
