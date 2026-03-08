@@ -58,8 +58,12 @@ export default function StoryEngine({ story }) {
   }, [nodeId]); // eslint-disable-line
 
   // Re-check audio when language switches â restart polling until ready
+  // Also reset textDone so choices stay hidden until typewriter replays
+  // Also reset pickedNext so no choice button stays dimmed across lang switch
   useEffect(() => {
+    setTextDone(false);
     setAudioReady(false);
+    setPicked(null);
     const interval = setInterval(() => {
       const latest = getAssetState(nodeId);
       setAudioReady(latest.audioReady);
@@ -132,7 +136,9 @@ export default function StoryEngine({ story }) {
   // Shows at top of card only when an asset is still loading.
   // Image takes priority in the message; disappears when both ready.
   const hasImage = !!node.image;
-  const hasAudio = !!node.audio;
+  // Audio exists by path convention â no field on node, so check audioReady
+  // from preloader which marks ready=true if file is missing (graceful degrade)
+  const hasAudio = !node.isEnding; // all non-ending nodes may have audio
   const showImageLoading = hasImage && !imageReady;
   const showAudioLoading = hasAudio && !audioReady && !showImageLoading;
   const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
