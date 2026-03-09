@@ -1,19 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── Devanagari font override ──────────────────────────────────────────────
-   Space Mono has no Devanagari glyphs. When the browser hits a Devanagari
-   character inside any element using var(--mono), it must use Noto Sans
-   Devanagari instead. We achieve this by declaring a @font-face that
-   intercepts the Space Mono slot for the Devanagari unicode range and
-   redirects it to the Noto Sans Devanagari font already loaded from Google.
-   This fixes ALL components globally without touching any JS.
-────────────────────────────────────────────────────────────────────────── */
-@font-face {
-  font-family: 'Space Mono';
-  src: local('Noto Sans Devanagari'), local('NotoSansDevanagari');
-  unicode-range: U+0900-097F, U+1CD0-1CFF, U+A8E0-A8FF;
-}
-
 body {
   font-family: 'Lora', 'Noto Sans Devanagari', Georgia, serif;
   background: #0d0a05;
@@ -24,6 +10,18 @@ body {
 :root {
   --mono: 'Space Mono', 'Noto Sans Devanagari', 'Courier New', monospace;
   --serif: 'Lora', 'Noto Sans Devanagari', Georgia, serif;
+}
+
+/* ── Hindi font override ───────────────────────────────────────────────────
+   When <html lang="hi"> is set (via LangContext), override ALL elements
+   to use Noto Sans Devanagari. This fixes every component globally —
+   no need to touch individual JS files. Space Mono has no Devanagari
+   glyphs and causes garbled rendering on all browsers.
+────────────────────────────────────────────────────────────────────────── */
+:lang(hi), :lang(hi) * {
+  font-family: 'Noto Sans Devanagari', sans-serif !important;
+  letter-spacing: normal !important;
+  font-style: normal !important;
 }
 
 button { cursor: pointer; font-family: var(--mono); }
