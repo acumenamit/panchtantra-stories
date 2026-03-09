@@ -29,7 +29,7 @@ export default function StoryEngine({ story }) {
   const [imgLoaded,   setImgLoaded]  = useState(false);
   const [imageReady,  setImageReady] = useState(false);
   const [audioReady,  setAudioReady] = useState(false);
-  // audioActive: user's intent â stays true across nodes so audio
+  // audioActive: user's intent — stays true across nodes so audio
   // auto-plays on each new node once the file is ready
   const [audioActive, setAudioActive] = useState(false);
 
@@ -37,7 +37,7 @@ export default function StoryEngine({ story }) {
   const scene = SCENES[node.scene] || SCENES.forest_day;
   const { accent, bg } = scene;
 
-  // ââ Preloader âââââââââââââââââââââââââââââââââââââââââââââââââ
+  // ── Preloader ─────────────────────────────────────────────────
   const { getAssetState, preloadNode } = usePreloader(story, nodeId, lang);
 
   // On every node transition, seed readiness from cache and poll until done
@@ -57,7 +57,7 @@ export default function StoryEngine({ story }) {
     return () => clearInterval(interval);
   }, [nodeId]); // eslint-disable-line
 
-  // Re-check audio when language switches â restart polling until ready
+  // Re-check audio when language switches — restart polling until ready
   // Also reset textDone so choices stay hidden until typewriter replays
   // Also reset pickedNext so no choice button stays dimmed across lang switch
   useEffect(() => {
@@ -132,11 +132,11 @@ export default function StoryEngine({ story }) {
     }
   };
 
-  // ââ Status line âââââââââââââââââââââââââââââââââââââââââââââââ
+  // ── Status line ───────────────────────────────────────────────
   // Shows at top of card only when an asset is still loading.
   // Image takes priority in the message; disappears when both ready.
   const hasImage = !!node.image;
-  // Audio exists by path convention â no field on node, so check audioReady
+  // Audio exists by path convention — no field on node, so check audioReady
   // from preloader which marks ready=true if file is missing (graceful degrade)
   const hasAudio = !node.isEnding; // all non-ending nodes may have audio
   const showImageLoading = hasImage && !imageReady;
@@ -144,23 +144,23 @@ export default function StoryEngine({ story }) {
   const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
 
   const statusText = showImageLoading
-    ? (lang === 'hi' ? 'à¤à¤¹à¤¾à¤¨à¥ à¤à¤¾ à¤à¤¿à¤¤à¥à¤° à¤²à¥à¤¡ à¤¹à¥ à¤°à¤¹à¤¾ à¤¹à¥...' : 'Loading story visual...')
-    : (lang === 'hi' ? 'à¤à¤¡à¤¿à¤¯à¥ à¤²à¥à¤¡ à¤¹à¥ à¤°à¤¹à¤¾ à¤¹à¥...'          : 'Loading audio...');
+    ? (lang === 'hi' ? 'कहानी का चित्र लोड हो रहा है...' : 'Loading story visual...')
+    : (lang === 'hi' ? 'ऑडियो लोड हो रहा है...'          : 'Loading audio...');
 
   const steps   = story.progressSteps || [];
-  const navBack = lang === 'hi' ? 'â à¤µà¤¾à¤ªà¤¸'         : 'â back';
-  const navRst  = lang === 'hi' ? 'à¤«à¤¿à¤° à¤¸à¥ âº'       : 'restart âº';
-  const navHome = lang === 'hi' ? 'â à¤¸à¤­à¥ à¤à¤¹à¤¾à¤¨à¤¿à¤¯à¤¾à¤' : 'â All Stories';
-  const yourChoice = lang === 'hi' ? 'â¦ à¤à¤ªà¤à¤¾ à¤à¥à¤¨à¤¾à¤µ' : 'â¦ YOUR CHOICE';
-  const altLabel   = lang === 'hi' ? 'âª à¤µà¥à¤à¤²à¥à¤ªà¤¿à¤ à¤ªà¤¥' : 'âª alt path';
+  const navBack = lang === 'hi' ? '← वापस'         : '← back';
+  const navRst  = lang === 'hi' ? 'फिर से ↺'       : 'restart ↺';
+  const navHome = lang === 'hi' ? '← सभी कहानियाँ' : '← All Stories';
+  const yourChoice = lang === 'hi' ? '✦ आपका चुनाव' : '✦ YOUR CHOICE';
+  const altLabel   = lang === 'hi' ? '↪ वैकल्पिक पथ' : '↪ alt path';
 
   // When Hindi is active, override mono font to Noto Sans Devanagari
-  // so UI chrome text renders correctly â Space Mono has no Devanagari glyphs
+  // so UI chrome text renders correctly — Space Mono has no Devanagari glyphs
   const monoFont = lang === 'hi'
     ? "'Noto Sans Devanagari', sans-serif"
     : 'var(--mono)';
 
-  // letterSpacing breaks Devanagari conjuncts â always 'normal' for Hindi
+  // letterSpacing breaks Devanagari conjuncts — always 'normal' for Hindi
   const monoSpacing = lang === 'hi' ? 'normal' : undefined;
 
   // scene.label is now a bilingual object
@@ -169,7 +169,7 @@ export default function StoryEngine({ story }) {
   return (
     <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 48px', transition:'background 1.2s ease' }}>
 
-      {/* ââ Header ââ */}
+      {/* ── Header ── */}
       <div style={{ width:'100%', maxWidth:660, marginBottom:20 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12 }}>
 
@@ -181,7 +181,7 @@ export default function StoryEngine({ story }) {
               {navHome}
             </button>
             <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing:monoSpacing || '0.18em', marginBottom:5 }}>
-              {lang === 'hi' ? 'â¦ à¤ªà¤à¥à¤à¤¤à¤¨à¥à¤¤à¥à¤° â¦' : 'â¦ PANCHATANTRA â¦'}
+              {lang === 'hi' ? '✦ पञ्चतन्त्र ✦' : '✦ PANCHATANTRA ✦'}
             </div>
             <h1 style={{ color:'#ffffff', fontSize:'1.6rem', fontFamily:'var(--serif)', fontWeight:700, textShadow:`0 2px 24px ${accent}66` }}>
               {t(story.title, lang)}
@@ -193,7 +193,7 @@ export default function StoryEngine({ story }) {
 
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, marginTop:4 }}>
             <LangToggle accent={accent} onChange={handleLangSwitch} />
-            {/* Audio button â fixed top right, always visible on all nodes */}
+            {/* Audio button — fixed top right, always visible on all nodes */}
             <AudioButton
               storyId={story.id}
               nodeId={nodeId}
@@ -219,11 +219,11 @@ export default function StoryEngine({ story }) {
         </div>
       </div>
 
-      {/* ââ Card ââ */}
+      {/* ── Card ── */}
       <div style={{ width:'100%', maxWidth:660, background:'rgba(8,6,10,0.96)', border:`1px solid ${accent}55`, borderRadius:24, overflow:'hidden', boxShadow:`0 0 80px rgba(0,0,0,0.9), 0 0 40px ${accent}18`, opacity:fading?0:1, transform:fading?'translateY(10px)':'translateY(0)', transition:'opacity 0.35s ease, transform 0.35s ease' }}>
         <div style={{ height:3, background:`linear-gradient(90deg,transparent,${accent},transparent)` }} />
 
-        {/* ââ Story image ââ */}
+        {/* ── Story image ── */}
         {node.image && (
           <div style={{ position:'relative', overflow:'hidden', background:'rgba(0,0,0,0.4)', minHeight: imgLoaded ? 0 : 0 }}>
             {/* Placeholder shown while image loads */}
@@ -258,7 +258,7 @@ export default function StoryEngine({ story }) {
 
         <div style={{ padding:'32px 34px' }}>
 
-          {/* ââ Status line ââ */}
+          {/* ── Status line ── */}
           {/* Single combined line at top of card. Appears only while  */}
           {/* image or audio is still loading. Disappears once ready.  */}
           {showStatusLine && (
@@ -317,7 +317,7 @@ export default function StoryEngine({ story }) {
                         Lines starting with '... Or' get accent colour as the pivot.  */}
                     <div style={{ fontFamily:'var(--serif)', fontSize:'1.05rem', color:'#fff7d6', lineHeight:1.9, fontWeight:600 }}>
                       {t(node.question, lang).split('\n').filter(l => l.trim()).map((line, i) => {
-                        const isOr  = line.trim().startsWith('... Or') || line.trim().startsWith('... à¤¯à¤¾');
+                        const isOr  = line.trim().startsWith('... Or') || line.trim().startsWith('... या');
                         const isPause = line.trim().startsWith('...') && !isOr;
                         return (
                           <div key={i} style={{
@@ -326,9 +326,9 @@ export default function StoryEngine({ story }) {
                                     :           '#fff7d6',
                             fontSize: isPause ? '0.85rem' : '1.05rem',
                             marginTop: isPause ? 6 : isOr ? 4 : 0,
-                            // Never italicise Devanagari â breaks ligatures
+                            // Never italicise Devanagari — breaks ligatures
                             fontStyle: isPause && lang !== 'hi' ? 'italic' : 'normal',
-                            // letterSpacing breaks Devanagari conjuncts â only apply for EN
+                            // letterSpacing breaks Devanagari conjuncts — only apply for EN
                             letterSpacing: isPause && lang !== 'hi' ? '0.12em' : 'normal',
                           }}>
                             {line}
@@ -355,7 +355,7 @@ export default function StoryEngine({ story }) {
           )}
         </div>
 
-        {/* ââ Footer ââ */}
+        {/* ── Footer ── */}
         <div style={{ padding:'14px 34px', borderTop:'1px solid rgba(255,255,255,0.15)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(0,0,0,0.3)' }}>
           <button onClick={back} disabled={!history.length}
             style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:monoFont, transition:'color 0.2s', color:history.length?'#ffffff':'rgba(255,255,255,0.25)', cursor:history.length?'pointer':'default', fontWeight:history.length?600:400 }}
@@ -376,7 +376,7 @@ export default function StoryEngine({ story }) {
       </div>
 
       <div style={{ marginTop:28, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing || '0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
-        {lang === 'hi' ? 'â¦ à¤ªà¤à¥à¤à¤¤à¤¨à¥à¤¤à¥à¤° â¦ à¤¨à¥à¤¤à¤¿à¤¶à¤¾à¤¸à¥à¤¤à¥à¤° â¦' : 'â¦ PANCHATANTRA â¦ NITISHASTRA â¦'}
+        {lang === 'hi' ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦' : '✦ PANCHATANTRA ✦ NITISHASTRA ✦'}
       </div>
     </div>
   );
