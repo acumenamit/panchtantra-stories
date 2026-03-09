@@ -154,6 +154,18 @@ export default function StoryEngine({ story }) {
   const yourChoice = lang === 'hi' ? 'â¦ à¤à¤ªà¤à¤¾ à¤à¥à¤¨à¤¾à¤µ' : 'â¦ YOUR CHOICE';
   const altLabel   = lang === 'hi' ? 'âª à¤µà¥à¤à¤²à¥à¤ªà¤¿à¤ à¤ªà¤¥' : 'âª alt path';
 
+  // When Hindi is active, override mono font to Noto Sans Devanagari
+  // so UI chrome text renders correctly â Space Mono has no Devanagari glyphs
+  const monoFont = lang === 'hi'
+    ? "'Noto Sans Devanagari', sans-serif"
+    : 'var(--mono)';
+
+  // letterSpacing breaks Devanagari conjuncts â always 'normal' for Hindi
+  const monoSpacing = lang === 'hi' ? 'normal' : undefined;
+
+  // scene.label is now a bilingual object
+  const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
+
   return (
     <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 48px', transition:'background 1.2s ease' }}>
 
@@ -163,19 +175,19 @@ export default function StoryEngine({ story }) {
 
           <div>
             <button onClick={() => navigate('/')}
-              style={{ background:'none', border:'none', color:'#ffffff', fontFamily:'var(--mono)', fontSize:'0.78rem', letterSpacing:'0.05em', marginBottom:10, padding:'4px 0', transition:'color 0.2s', textShadow:'0 1px 8px rgba(0,0,0,0.9)', fontWeight:700 }}
+              style={{ background:'none', border:'none', color:'#ffffff', fontFamily:monoFont, fontSize:'0.78rem', letterSpacing:monoSpacing, marginBottom:10, padding:'4px 0', transition:'color 0.2s', textShadow:'0 1px 8px rgba(0,0,0,0.9)', fontWeight:700 }}
               onMouseEnter={e => e.currentTarget.style.color = accent}
               onMouseLeave={e => e.currentTarget.style.color = '#ffffff'}>
               {navHome}
             </button>
-            <div style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:accent, letterSpacing:'0.18em', marginBottom:5 }}>
+            <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing:monoSpacing || '0.18em', marginBottom:5 }}>
               {lang === 'hi' ? 'â¦ à¤ªà¤à¥à¤à¤¤à¤¨à¥à¤¤à¥à¤° â¦' : 'â¦ PANCHATANTRA â¦'}
             </div>
             <h1 style={{ color:'#ffffff', fontSize:'1.6rem', fontFamily:'var(--serif)', fontWeight:700, textShadow:`0 2px 24px ${accent}66` }}>
               {t(story.title, lang)}
             </h1>
-            <div style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', color:'rgba(255,255,255,0.75)', marginTop:5, textShadow:'0 1px 6px rgba(0,0,0,0.8)' }}>
-              {scene.label}
+            <div style={{ fontFamily:monoFont, fontSize:'0.7rem', color:'rgba(255,255,255,0.75)', marginTop:5, textShadow:'0 1px 6px rgba(0,0,0,0.8)' }}>
+              {sceneLabel}
             </div>
           </div>
 
@@ -192,7 +204,7 @@ export default function StoryEngine({ story }) {
               setAudioActive={setAudioActive}
             />
             {node.isAlternate && (
-              <div style={{ padding:'4px 10px', borderRadius:20, background:'rgba(239,68,68,0.2)', border:'1px solid rgba(239,68,68,0.5)', color:'#ffb3b3', fontFamily:'var(--mono)', fontSize:'0.62rem', whiteSpace:'nowrap' }}>
+              <div style={{ padding:'4px 10px', borderRadius:20, background:'rgba(239,68,68,0.2)', border:'1px solid rgba(239,68,68,0.5)', color:'#ffb3b3', fontFamily:monoFont, fontSize:'0.62rem', whiteSpace:'nowrap' }}>
                 {altLabel}
               </div>
             )}
@@ -271,10 +283,10 @@ export default function StoryEngine({ story }) {
                 flexShrink: 0,
               }} />
               <span style={{
-                fontFamily: 'var(--mono)',
+                fontFamily: monoFont,
                 fontSize: '0.68rem',
                 color: 'rgba(255,255,255,0.4)',
-                letterSpacing: '0.06em',
+                letterSpacing: monoSpacing || '0.06em',
               }}>
                 {statusText}
               </span>
@@ -297,7 +309,7 @@ export default function StoryEngine({ story }) {
               {textDone && (
                 <div className="fade-up">
                   <div style={{ marginTop:28, marginBottom:20, padding:'16px 20px', borderRadius:14, background:`${accent}1e`, border:`1px solid ${accent}55`, borderLeft:`4px solid ${accent}` }}>
-                    <div style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:accent, letterSpacing:'0.14em', marginBottom:8, fontWeight:700 }}>
+                    <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing:monoSpacing || '0.14em', marginBottom:8, fontWeight:700 }}>
                       {yourChoice}
                     </div>
                     {/* Render question with Direction D fork styling.
@@ -346,16 +358,16 @@ export default function StoryEngine({ story }) {
         {/* ââ Footer ââ */}
         <div style={{ padding:'14px 34px', borderTop:'1px solid rgba(255,255,255,0.15)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(0,0,0,0.3)' }}>
           <button onClick={back} disabled={!history.length}
-            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:'var(--mono)', transition:'color 0.2s', color:history.length?'#ffffff':'rgba(255,255,255,0.25)', cursor:history.length?'pointer':'default', fontWeight:history.length?600:400 }}
+            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:monoFont, transition:'color 0.2s', color:history.length?'#ffffff':'rgba(255,255,255,0.25)', cursor:history.length?'pointer':'default', fontWeight:history.length?600:400 }}
             onMouseEnter={e => history.length && (e.currentTarget.style.color = accent)}
             onMouseLeave={e => (e.currentTarget.style.color = history.length?'#ffffff':'rgba(255,255,255,0.25)')}>
             {navBack}
           </button>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.55)', letterSpacing:'0.08em', textAlign:'center' }}>
+          <span style={{ fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.55)', letterSpacing:monoSpacing || '0.08em', textAlign:'center' }}>
             {t(story.theme, lang)}
           </span>
           <button onClick={restart}
-            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:'var(--mono)', color:'#ffffff', transition:'color 0.2s', fontWeight:600 }}
+            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:monoFont, color:'#ffffff', transition:'color 0.2s', fontWeight:600 }}
             onMouseEnter={e => e.currentTarget.style.color = accent}
             onMouseLeave={e => e.currentTarget.style.color = '#ffffff'}>
             {navRst}
@@ -363,7 +375,7 @@ export default function StoryEngine({ story }) {
         </div>
       </div>
 
-      <div style={{ marginTop:28, fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:'0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
+      <div style={{ marginTop:28, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing || '0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
         {lang === 'hi' ? 'â¦ à¤ªà¤à¥à¤à¤¤à¤¨à¥à¤¤à¥à¤° â¦ à¤¨à¥à¤¤à¤¿à¤¶à¤¾à¤¸à¥à¤¤à¥à¤° â¦' : 'â¦ PANCHATANTRA â¦ NITISHASTRA â¦'}
       </div>
     </div>
