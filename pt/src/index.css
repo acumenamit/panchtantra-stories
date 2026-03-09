@@ -1,5 +1,19 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Devanagari font override ──────────────────────────────────────────────
+   Space Mono has no Devanagari glyphs. When the browser hits a Devanagari
+   character inside any element using var(--mono), it must use Noto Sans
+   Devanagari instead. We achieve this by declaring a @font-face that
+   intercepts the Space Mono slot for the Devanagari unicode range and
+   redirects it to the Noto Sans Devanagari font already loaded from Google.
+   This fixes ALL components globally without touching any JS.
+────────────────────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: 'Space Mono';
+  src: local('Noto Sans Devanagari'), local('NotoSansDevanagari');
+  unicode-range: U+0900-097F, U+1CD0-1CFF, U+A8E0-A8FF;
+}
+
 body {
   font-family: 'Lora', 'Noto Sans Devanagari', Georgia, serif;
   background: #0d0a05;
@@ -8,7 +22,6 @@ body {
 }
 
 :root {
-  /* Noto Sans Devanagari added as fallback for Hindi UI text in mono contexts */
   --mono: 'Space Mono', 'Noto Sans Devanagari', 'Courier New', monospace;
   --serif: 'Lora', 'Noto Sans Devanagari', Georgia, serif;
 }
