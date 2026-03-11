@@ -74,7 +74,6 @@ He stood at the edge of the field, one paw raised, the sound still ringing in hi
         en: `Three days of hunger. One enormous sound. Does hunger win — or does fear?\n... Or... do his legs carry him back into the dark before he even decides?`,
         hi: `तीन दिन की भूख। एक विशाल आवाज़। क्या भूख जीतती है — या डर?\n... या... क्या उसके पैर उसे तय करने से पहले ही वापस अँधेरे में ले जाते हैं?`,
       },
-      },
       choices: [
         { text: { en: '😤 "I\'ve been hungry for three days. Whatever that sound is — it\'s not going to stop me from eating tonight."', hi: '😤 "तीन दिन से भूखा हूँ। वह आवाज़ चाहे जो हो — आज रात मुझे खाने से नहीं रोकेगी।"' }, next: 'the_mind_invents' },
       ],
@@ -156,7 +155,6 @@ It didn't seem to be doing anything at all.`,
         en: `The monster in his head keeps growing with every boom. But it hasn't moved. It hasn't come for him.\n... Is he brave enough to notice that — or does fear keep building the creature larger?`,
         hi: `दिमाग का राक्षस हर धूम के साथ बड़ा होता जाता है। लेकिन वह हिला नहीं। उसके पास नहीं आया।\n... क्या वह यह नोटिस करने के लिए काफी साहसी है — या डर उस प्राणी को और बड़ा बनाता रहेगा?`,
       },
-      },
       choices: [
         { text: { en: '😰 "Every time it booms, it gets bigger in my head. I don\'t know what\'s in there. But I\'m still not running."', hi: '😰 "हर बार जब यह बोलती है, मेरे दिमाग में बड़ी होती जाती है। नहीं जानता क्या है वहाँ। लेकिन मैं अभी भी भाग नहीं रहा।"' }, next: 'the_approach' },
       ],
@@ -219,7 +217,6 @@ He put one paw forward.`,
       question: {
         en: `One step. One look around that wall. That is all it takes to know what this really is.\n... Does he look — or does he pull back into the dark where it's familiar and safe?`,
         hi: `एक कदम। उस दीवार के आसपास एक नज़र। बस इतना काफी है जानने के लिए कि यह सच में क्या है।\n... क्या वह देखता है — या वापस उस अँधेरे में लौट जाता है जो जाना-पहचाना और सुरक्षित है?`,
-      },
       },
       choices: [
         { text: { en: '🦊 "I\'m looking. Whatever it is — I need to know."',      hi: '🦊 "मैं देखूँगा। जो भी हो — मुझे जानना है।"' },          next: 'sees_the_drum' },
@@ -302,7 +299,6 @@ BOOM, said the drum.
       question: {
         en: `He found food. He found the truth. And he found it because he looked.\n... Does he go back to share what he knows — or does he keep this battlefield for himself alone?`,
         hi: `उसे खाना मिला। सच मिला। और मिला क्योंकि उसने देखा।\n... क्या वह वापस जाकर जो जानता है वह साझा करता है — या इस युद्धभूमि को अकेले अपने लिए रखता है?`,
-      },
       },
       choices: [
         { text: { en: '😂 "I\'m going back to tell every animal what\'s in here. No one should be afraid of this."', hi: '😂 "मैं वापस जाऊँगा और हर जानवर को बताऊँगा यहाँ क्या है। किसी को इससे नहीं डरना चाहिए।"' }, next: 'ending_proud' },
