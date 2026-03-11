@@ -15,6 +15,7 @@ const crowAndSerpent = {
 
   nodes: {
     start: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-start.jpg',
       scene: 'village',
       text: {
         en: `High in a tall banyan tree at the edge of a village, a crow and his wife had built their nest. Every spring, they raised their chicks there — until the serpent arrived.\n\nA great black serpent had made his home in the hollow of the same tree. Every year, while the crow parents were away searching for food, the serpent would slither up and devour their eggs and newborn chicks.\n\nThe crow couple returned to find empty nests and broken shells, year after year.\n\n"We must leave this tree," the wife wept.\n\n"No," said the husband, his eyes hard with grief. "This is our home. I will find a way."`,
@@ -31,29 +32,42 @@ const crowAndSerpent = {
     },
 
     direct_attack: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-direct-attack.jpg',
       scene: 'village',
       isAlternate: true,
       text: {
         en: `The crow dived at the serpent with all his fury — pecking, clawing, crying out.\n\nBut the serpent was enormous. He simply raised his hood and hissed, and the crow was forced to retreat, breathless and bleeding from a small wound on his wing.\n\n"You are brave," his wife said, tending to him. "But bravery without a plan is just a faster way to lose."\n\nThe crow sat quietly, nursing his wing. She was right.\n\n"Let us go to our friend the jackal," he said at last. "He has faced worse enemies than us. Let us think before we act again."`,
         hi: `कौए ने पूरे गुस्से के साथ साँप पर झपट्टा मारा — चोंच मारते, पंजे चलाते, चिल्लाते हुए।\n\nलेकिन साँप विशाल था। उसने बस अपना फन उठाया और फुफकारा, और कौआ थका हुआ और पंख पर एक छोटे घाव के साथ पीछे हटने पर मजबूर हो गया।\n\n"तुम साहसी हो," उसकी पत्नी ने उसकी देखभाल करते हुए कहा। "लेकिन बिना योजना का साहस बस हारने का एक तेज़ तरीका है।"\n\nकौआ चुपचाप बैठकर अपने पंख की देखभाल करने लगा। वह सही थी।\n\n"चलो अपने मित्र सियार के पास चलते हैं," उसने आखिरकार कहा। "उसने हमसे भी बुरे दुश्मनों का सामना किया है। एक बार और काम करने से पहले सोचते हैं।"`,
       },
+      question: {
+        en: 'The crow learns that courage alone is not enough. What must it be paired with?',
+        hi: 'कौआ सीखता है कि अकेला साहस काफी नहीं है। इसे किसके साथ जोड़ना होगा?',
+      },
       choices: [
-        { text: { en: '🦊 "She is right. Let me find my friend the jackal — and think before I act again."', hi: '🦊 "वह सही है। चलो सियार मित्र के पास जाता हूँ — और दोबारा काम करने से पहले सोचता हूँ।"' }, next: 'seek_advice' },
+        { text: { en: '🧠 Strategy — knowing HOW to fight matters as much as the will to fight', hi: '🧠 नीति — यह जानना कि कैसे लड़ना है उतना ही महत्वपूर्ण है जितना लड़ने की इच्छाशक्ति' }, next: 'seek_advice' },
+        { text: { en: '🤝 Allies — no one wins the hardest battles alone',                      hi: '🤝 साथी — कोई भी सबसे कठिन लड़ाई अकेले नहीं जीतता' },                              next: 'seek_advice' },
       ],
     },
 
     seek_advice: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-seek-advice.jpg',
       scene: 'forest_path',
       text: {
         en: `The crow flew to his old friend, a clever jackal who lived at the edge of the forest.\n\nHe told the jackal everything — the serpent, the stolen eggs, years of grief.\n\nThe jackal listened carefully, his amber eyes sharp with thought.\n\n"You cannot beat him with your beak," the jackal said. "He is bigger and stronger. But every creature, no matter how powerful, has one weakness."\n\n"What is the serpent's weakness?" the crow asked.\n\n"Greed," said the jackal simply. "And the pride that makes him careless. Now listen closely — I have a plan. But it requires you to be more cunning than afraid."`,
-        hi: `कौआ अपने पुराने मित्र, एक चतुर सियार के पास उड़ा जो जंगल के किनारे रहता था।\n\nउसने सियार को सब कुछ बताया — साँप, चुराए गए अंडे, सालों का दुःख।\n\nसियार ने ध्यान से सुना, उसकी सुनहरी आँखें विचार में तेज़ थीं।\n\n"तुम उसे अपनी चोंच से नहीं हरा सकते," सियार ने कहा। "वह बड़ा और मज़बूत है। लेकिन हर प्राणी, चाहे वह कितना भी शक्तिशाली हो, की एक कमज़ोरी होती है।"\n\n"साँप की कमज़ोरी क्या है?" कौए ने पूछा।\n\n"लालच," सियार ने सरलता से कहा। "और वह अहंकार जो उसे लापरवाह बनाता है। अब ध्यान से सुनो — मेरे पास एक योजना है। लेकिन इसके लिए तुम्हें डरे हुए से ज़्यादा चालाक होना होगा।"`,
+        hi: `कौआ अपने पुराने मित्र, एक चतुर सियार के पास उड़ा जो जंगल के किनारे रहता था।\n\nउसने सियार को सब कुछ बताया — साँप, चुराए गए अंडे, सालों का दुःख।\n\nसियार ने ध्यान से सुना, उसकी琥珀रंगी आँखें विचार में तेज़ थीं।\n\n"तुम उसे अपनी चोंच से नहीं हरा सकते," सियार ने कहा। "वह बड़ा और मज़बूत है। लेकिन हर प्राणी, चाहे वह कितना भी शक्तिशाली हो, की एक कमज़ोरी होती है।"\n\n"साँप की कमज़ोरी क्या है?" कौए ने पूछा।\n\n"लालच," सियार ने सरलता से कहा। "और वह अहंकार जो उसे लापरवाह बनाता है। अब ध्यान से सुनो — मेरे पास एक योजना है। लेकिन इसके लिए तुम्हें डरे हुए से ज़्यादा चालाक होना होगा।"`,
+      },
+      question: {
+        en: 'The jackal says every powerful enemy has a weakness. Do you agree?',
+        hi: 'सियार कहता है कि हर शक्तिशाली दुश्मन की एक कमज़ोरी होती है। क्या आप सहमत हैं?',
       },
       choices: [
-        { text: { en: '✅ "Yes. Every powerful enemy has a weakness — even this serpent. Show me the plan."', hi: '✅ "हाँ। हर शक्तिशाली दुश्मन की एक कमज़ोरी होती है — यहाँ तक कि इस साँप की भी। मुझे योजना बताओ।"' }, next: 'the_plan' },
+        { text: { en: '✅ Yes — pride and greed blind even the strongest',          hi: '✅ हाँ — अहंकार और लालच सबसे मज़बूत को भी अंधा कर देते हैं' }, next: 'the_plan' },
+        { text: { en: '🤔 Maybe — but what if the enemy has no weakness at all?', hi: '🤔 शायद — लेकिन क्या होगा अगर दुश्मन की कोई कमज़ोरी ही न हो?' }, next: 'the_plan' },
       ],
     },
 
     the_plan: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-the-plan.jpg',
       scene: 'palace',
       text: {
         en: `The jackal whispered the plan. The crow's eyes grew wide — then bright.\n\nThe next day, the crow flew over the royal palace at the edge of the city. The queen and her ladies were bathing in the palace garden pool, their golden necklaces and jewels left on the steps.\n\nThe crow swooped down, snatched the most dazzling necklace in his beak, and flew slowly — deliberately, low enough to be seen — back toward his banyan tree.\n\nThe palace guards shouted. Then they ran.\n\nThe crow dropped the necklace into the hollow of the tree — right next to the sleeping serpent — and flew up to his nest to wait.`,
@@ -70,6 +84,7 @@ const crowAndSerpent = {
     },
 
     plan_risk: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-plan-risk.jpg',
       scene: 'village',
       isAlternate: true,
       text: {
@@ -87,6 +102,7 @@ const crowAndSerpent = {
     },
 
     plan_works: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-plan-works.jpg',
       scene: 'village',
       text: {
         en: `The guards reached the tree, peered into the dark hollow — and jumped back in alarm.\n\nThe great black serpent lay coiled around the royal necklace, hissing.\n\nThe guards had long sticks. They were many. The serpent was alone.\n\nThe crow watched from his branch as shouts and commotion filled the tree below. When silence returned, the hollow was empty. The serpent was gone — driven away, never to return.\n\nThat evening, the crow couple sat in their nest as the sun set golden over the banyan tree.\n\n"How did a necklace defeat a serpent?" the wife marvelled.\n\n"It didn't," said the crow quietly. "The serpent's own home defeated him. We just showed the right people where to look."`,
@@ -103,6 +119,7 @@ const crowAndSerpent = {
     },
 
     ending_wisdom: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-ending-wisdom.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `In the seasons that followed, the crow and his wife raised their chicks in peace.\n\nAnd whenever the young ones asked, "Father, how did you defeat the great serpent?" the crow would say:\n\n"I didn't fight him. I understood him. I understood what he wanted, where he lived, and what would bring his own world crashing down on him. A wise enemy is not defeated by force — he is defeated by knowing him better than he knows himself."\n\nThe Panchatantra teaches:\n"Before you raise your hand, raise your mind.\nThe cleverest victory is the one your enemy never sees coming."`,
@@ -113,6 +130,7 @@ const crowAndSerpent = {
     },
 
     ending_counsel: {
+      image: '/images/the-crow-and-the-serpent/the-crow-and-the-serpent-ending-counsel.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `The crow never forgot his debt to the jackal.\n\nEvery week, he flew to the edge of the forest with fruit and news from the village — a friendship of exchange, of mutual respect.\n\n"Why do you still visit him?" his wife asked one season. "The danger is long past."\n\n"Because," said the crow, "the day I needed wisdom I didn't have, he gave it freely. That is not a debt you repay once and forget. That is a friendship you tend for life."\n\nNitishastra teaches: "Surround yourself with those wiser than you, and wisdom will find you when you need it most."`,

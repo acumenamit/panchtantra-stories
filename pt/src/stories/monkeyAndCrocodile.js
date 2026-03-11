@@ -15,6 +15,7 @@ const monkeyAndCrocodile = {
 
   nodes: {
     start: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-start.jpg',
       scene: 'river_bank',
       text: {
         en: `On the banks of a wide, sparkling river, there lived a clever monkey named Raktamukha. He spent his days leaping between the branches of a great rose-apple tree, eating its sweet fruit and watching the world below.\n\nOne day, a large crocodile named Karalamakara pulled himself onto the bank below the tree, looking tired and hungry.\n\nRaktamukha, who had a generous heart, tossed down a handful of ripe rose-apples.\n\n"Eat, friend!" he called. "There is plenty here!"\n\nThe crocodile looked up in surprise. No one had ever called him friend before.`,
@@ -31,6 +32,7 @@ const monkeyAndCrocodile = {
     },
 
     friendship_grows: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-friendship-grows.jpg',
       scene: 'river_bank',
       text: {
         en: `Days turned to weeks. The crocodile returned every morning, and the monkey always had fruit waiting. They talked, laughed, and shared stories of the river and the trees.\n\nOne evening, Raktamukha sent home a large bundle of rose-apples with his friend. "For your wife," he said warmly. "From one home to another."\n\nKaralamakara's wife ate the fruit and found it delicious. But then a dark thought crept into her mind.\n\n"If the fruit from that tree is so sweet," she thought, "imagine how sweet must be the heart of the monkey who eats this fruit every day..."\n\nShe called her husband and said sweetly: "I want the monkey's heart. Bring it to me."`,
@@ -47,6 +49,7 @@ const monkeyAndCrocodile = {
     },
 
     no_friendship: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-no-friendship.jpg',
       scene: 'river_bank',
       isAlternate: true,
       text: {
@@ -63,6 +66,7 @@ const monkeyAndCrocodile = {
     },
 
     crocodile_refuses: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-crocodile-refuses.jpg',
       scene: 'river_bank',
       isAlternate: true,
       text: {
@@ -79,6 +83,7 @@ const monkeyAndCrocodile = {
     },
 
     on_the_river: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-on-the-river.jpg',
       scene: 'river_bank',
       text: {
         en: `Heavy with guilt, the crocodile swam to the monkey's tree the next morning.\n\n"Friend!" he called. "My wife is very ill. She wishes to meet you — she says only a holy monkey like you can cure her. Please come across the river with me."\n\nRaktamukha, worried for his friend's wife, leaped onto the crocodile's back without hesitation.\n\nThey were halfway across the deep river when the crocodile began to slow down... and then spoke the terrible truth.\n\n"I'm sorry, friend. My wife wants your heart. I have no choice."\n\nRaktamukha felt the world drop away beneath him. But he did not panic.`,
@@ -95,6 +100,7 @@ const monkeyAndCrocodile = {
     },
 
     monkey_struggles: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-monkey-struggles.jpg',
       scene: 'river_bank',
       isAlternate: true,
       text: {
@@ -111,6 +117,7 @@ const monkeyAndCrocodile = {
     },
 
     monkey_escapes: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-monkey-escapes.jpg',
       scene: 'river_bank',
       text: {
         en: `Raktamukha took one slow, deep breath. Then he laughed.\n\n"Oh, dear friend — you should have told me earlier! I would have brought it!"\n\nThe crocodile blinked. "What?"\n\n"My heart! I don't carry it with me when I travel — I leave it safely in the tree. All monkeys do. Take me back and I'll climb up and get it for you!"\n\nThe crocodile, not the cleverest of creatures, turned around and swam back to the bank.\n\nThe moment they touched the shore, Raktamukha leaped high into the branches, his heart hammering with relief.\n\n"You fool!" he called down. "Who leaves their heart in a tree? But you — you left your wisdom in your wife's pocket, and your friendship in the river. Go home."`,
@@ -127,6 +134,7 @@ const monkeyAndCrocodile = {
     },
 
     ending_wisdom: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-ending-wisdom.jpg',
       scene: 'river_bank', isEnding: true,
       text: {
         en: `Raktamukha sat in his tree for a long time, watching the river flow.\n\nHe had faced death — and beaten it not with claws or strength, but with a single calm thought at the right moment.\n\nThe Panchatantra teaches:\n"In times of danger, the one who keeps his head while others lose theirs shall always find a way."\n\nPresence of mind is not a gift you are born with. It is a habit you build — by staying curious, thinking clearly, and never letting fear make your decisions.`,
@@ -137,6 +145,7 @@ const monkeyAndCrocodile = {
     },
 
     ending_friendship: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-ending-friendship.jpg',
       scene: 'river_bank', isEnding: true,
       text: {
         en: `As the seasons changed, Raktamukha sometimes saw the crocodile drifting past below — alone now, shunned by other river creatures who had heard the story.\n\nHe felt no hatred. Only a quiet sadness.\n\n"A good friend," the monkey thought, "is rarer than rose-apples in winter. And a friendship destroyed by greed leaves a hole that nothing else can fill."\n\nNitishastra teaches: "Test a friend in small things before trusting them in large ones. And be the kind of friend you yourself would wish to have."`,
@@ -147,6 +156,7 @@ const monkeyAndCrocodile = {
     },
 
     ending_loyalty: {
+      image: '/images/the-monkey-and-the-crocodile/the-monkey-and-the-crocodile-ending-loyalty.jpg',
       scene: 'river_bank', isEnding: true,
       text: {
         en: `The crocodile and the monkey remained friends for many years — and their story became famous along the river.\n\nNot because the crocodile was strong, or the monkey was clever. But because one ordinary creature, in one difficult moment, chose to do the right thing.\n\nNitishastra teaches:\n"The truest test of character is not what you do when it is easy — but what you do when everything pulls you the other way."`,
