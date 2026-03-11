@@ -88,9 +88,8 @@ The geese spread their wings.`,
 हंसों ने पंख फैलाए।`,
       },
       question: {
-        en: `The geese warned him clearly. He agreed confidently.\n... But does he truly understand how hard staying silent will be — or does he only think he does?`,
-        hi: `हंसों ने साफ़ चेतावनी दी। उसने आत्मविश्वास से हाँ कही।\n... लेकिन क्या वह सच में समझता है कि चुप रहना कितना मुश्किल होगा — या वह बस सोचता है कि समझता है?`,
-      },
+        en: 'The geese warned you clearly. You agreed confidently. But somewhere deep down — do you actually know how hard this will be?',
+        hi: 'हंसों ने साफ़ चेतावनी दी। तुमने आत्मविश्वास से हाँ कहा। लेकिन कहीं गहरे में — क्या तुम सच में जानते हो यह कितना मुश्किल होगा?',
       },
       choices: [
         { text: { en: '😌 "I understand completely. How hard can staying quiet possibly be?"', hi: '😌 "मैं पूरी तरह समझता हूँ। चुप रहना आखिर कितना मुश्किल हो सकता है?"' }, next: 'in_the_air' },
@@ -164,9 +163,8 @@ Surely.`,
 ज़रूर।`,
       },
       question: {
-        en: `They laughed. His jaw aches from biting so hard. But he is still in the air.\n... Can he keep telling himself it doesn't matter — or is the urge to speak growing stronger with every second?`,
-        hi: `वे हँसे। बहुत ज़ोर से काटने से जबड़ा दर्द करता है। लेकिन वह अभी भी हवा में है।\n... क्या वह खुद को बताता रह सकता है कि कोई फर्क नहीं पड़ता — या बोलने की इच्छा हर पल और तेज़ होती जा रही है?`,
-      },
+        en: 'They laughed. You held on. Your jaw aches from biting so hard. But you are still in the air. What do you tell yourself right now?',
+        hi: 'वे हँसे। तुम थामे रहे। बहुत ज़ोर से काटने से जबड़ा दर्द करता है। लेकिन तुम अभी भी हवा में हो। अभी खुद से क्या कहते हो?',
       },
       choices: [
         { text: { en: '😬 "They\'re laughing. Fine. Let them laugh. I am NOT saying anything."', hi: '😬 "वे हँस रहे हैं। ठीक है। हँसने दो। मैं कुछ नहीं कहूँगा।"' }, next: 'the_taunt' },
@@ -234,9 +232,8 @@ His jaw trembled.`,
 उसके जबड़े में कंपन हुई।`,
       },
       question: {
-        en: `Someone just said he doesn't belong in the sky. The lake is two minutes away.\n... Does he hold his tongue and arrive — or does he open his mouth and answer back?`,
-        hi: `किसी ने अभी कहा कि वह आकाश में नहीं है। झील दो मिनट दूर है।\n... क्या वह ज़ुबान थामता है और पहुँच जाता है — या मुँह खोलता है और जवाब देता है?`,
-      },
+        en: 'Someone just told you that you don\'t belong in the sky. That you should stay in the mud where you were born. The lake is two minutes away. What do you do?',
+        hi: 'किसी ने अभी कहा कि तुम आकाश में नहीं हो। कि तुम्हें उसी कीचड़ में रहना चाहिए जहाँ तुम पैदा हुए। झील दो मिनट दूर है। तुम क्या करते हो?',
       },
       choices: [
         { text: { en: '🐢 "It doesn\'t matter what they say. The lake is close. Ten more minutes of silence is worth a lifetime."', hi: '🐢 "कोई फर्क नहीं पड़ता वे क्या कहते हैं। झील करीब है। दस मिनट की और चुप्पी पूरी ज़िंदगी के लायक है।"' }, next: 'safe_landing' },
@@ -318,13 +315,11 @@ He looked at the lake.
 "लेकिन मैं लगभग गिर गया था।"`,
       },
       question: {
-        en: `He made it. He is sitting at the edge of the most beautiful lake he has ever seen.\n... Was the hardest lesson that silence isn't losing — or that the people who say you don't belong are never the ones who pay the price for listening to them?`,
-        hi: `वह पहुँच गया। वह उस सबसे सुंदर झील के किनारे बैठा है जो उसने कभी देखी।\n... क्या सबसे कठिन सीख यह थी कि चुप रहना हारना नहीं है — या कि जो लोग कहते हैं तुम कहीं के नहीं हो वे कभी वे नहीं होते जिन्हें उन्हें सुनने की कीमत चुकानी पड़े?`,
-      },
+        en: 'You made it. You are sitting at the edge of the most beautiful lake you have ever seen. What did those two minutes teach you?',
+        hi: 'तुम पहुँच गए। तुम उस सबसे सुंदर झील के किनारे बैठे हो जो तुमने कभी देखी। उन दो मिनटों ने तुम्हें क्या सिखाया?',
       },
       choices: [
         { text: { en: '🌊 "The people who say you don\'t belong somewhere are never the ones who have to live with what you lose by listening to them."', hi: '🌊 "जो लोग कहते हैं कि तुम कहीं के नहीं हो, वे कभी वे नहीं होते जिन्हें उन्हें सुनने से होने वाले नुकसान के साथ जीना पड़े।"' }, next: 'ending_wise' },
-        { text: { en: '🐢 "Silence isn\'t losing. Sometimes silence is the only way to arrive."',                                                        hi: '🐢 "चुप रहना हारना नहीं है। कभी-कभी चुप्पी ही पहुँचने का एकमात्र तरीका है।"' },                                                              next: 'ending_wise' },
       ],
     },
 

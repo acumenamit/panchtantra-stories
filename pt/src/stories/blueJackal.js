@@ -53,9 +53,8 @@ He walked to a still puddle and stared at his reflection for a long, long time.
 "किसी ने," उसने धीरे-धीरे सोचा, "ऐसा कुछ कभी नहीं देखा।"`,
       },
       question: {
-        en: `He is soaking wet, bright blue, and every animal who sees him stumbles back in shock.\n... Does he walk back in and claim a throne — or does he tell them the truth right now?`,
-        hi: `वह पूरी तरह भीगा है, चमकीला नीला है, और जो भी जानवर उसे देखता है घबराकर पीछे हट जाता है।\n... क्या वह वापस जाकर सिंहासन का दावा करता है — या अभी उन्हें सच बताता है?`,
-      },
+        en: 'You are soaking wet, bright blue, and every animal who sees you stumbles back in shock. A wild thought crosses your mind. What do you do?',
+        hi: 'तुम पूरी तरह भीगे हो, चमकीले नीले हो, और जो भी जानवर तुम्हें देखता है घबराकर पीछे हट जाता है। एक पागल विचार मन में आता है। तुम क्या करते हो?',
       },
       choices: [
         { text: { en: '😲 "I could be a king. Right now. All I have to do is walk back in there."', hi: '😲 "मैं राजा बन सकता हूँ। अभी। बस वापस जाना है।"' },                             next: 'declares_kingship' },
@@ -113,13 +112,11 @@ Not one of them questioned it.`,
 एक ने भी सवाल नहीं किया।`,
       },
       question: {
-        en: `Every animal in the forest believes he is a god-sent king. The lion himself bows.\n... Does he go all in — or does he tell himself it's just for now, until he thinks of something better?`,
-        hi: `जंगल का हर जानवर मानता है कि वह भगवान के भेजे राजा है। शेर खुद झुकता है।\n... क्या वह पूरी तरह जाता है — या खुद से कहता है कि यह बस अभी के लिए है, जब तक कोई बेहतर योजना न सोचे?`,
-      },
+        en: 'Every animal in the forest believes you are a god-sent king. The lion himself bows. You are all in now. How deep do you go?',
+        hi: 'जंगल का हर जानवर मानता है कि तुम भगवान के भेजे राजा हो। शेर खुद झुकता है। अब तुम पूरी तरह अंदर हो। कितनी गहराई में जाओगे?',
       },
       choices: [
-        { text: { en: '👑 "I\'m going all in. Lions. Elephants. A throne. Let\'s go."',        hi: '👑 "मैं पूरी तरह जा रहा हूँ। शेर। हाथी। सिंहासन। चलो।"' }, next: 'ruling_the_forest' },
-        { text: { en: '😬 "Just for a while. Until I figure out a better plan. Just for now."', hi: '😬 "बस थोड़ी देर। जब तक कोई बेहतर योजना न सोचूँ। अभी के लिए।"' }, next: 'ruling_the_forest' },
+        { text: { en: '👑 "I\'m going all in. Lions. Elephants. A throne. Let\'s go."',        hi: '👑 "मैं पूरी तरह जा रहा हूँ। शेर। हाथी। सिंहासन। चलो।"' },             next: 'ruling_the_forest' },
       ],
     },
 
@@ -169,9 +166,8 @@ Another voice said: "But you will lose everything."`,
 दूसरी आवाज़ बोली: "लेकिन तुम सब कुछ खो दोगे।"`,
       },
       question: {
-        en: `He has everything — power, comfort, loyalty. But it is all built on a lie. Jackals are at the edge of the forest.\n... Does he chase them away — or does he finally owe these animals the truth?`,
-        hi: `उसके पास सब कुछ है — शक्ति, आराम, वफ़ादारी। लेकिन यह सब एक झूठ पर टिका है। सियार जंगल के किनारे हैं।\n... क्या वह उन्हें भगा देता है — या अब इन जानवरों को सच बताना उसका फर्ज़ है?`,
-      },
+        en: 'You have everything — power, comfort, loyalty. But it is all built on a lie. A pack of jackals is at the edge of the forest. What do you do?',
+        hi: 'तुम्हारे पास सब कुछ है — शक्ति, आराम, वफ़ादारी। लेकिन यह सब एक झूठ पर टिका है। सियारों का झुंड जंगल के किनारे है। तुम क्या करते हो?',
       },
       choices: [
         { text: { en: '🐺 "Chase them away. No jackal comes near this forest. Ever."', hi: '🐺 "उन्हें भगा दो। कोई सियार इस जंगल के पास नहीं आएगा। कभी नहीं।"' },        next: 'moonlit_night' },
@@ -225,13 +221,11 @@ His whole body trembled.
 "बस रोको। बस रोको। बस रो—"`,
       },
       question: {
-        en: `The jackals are howling. Every part of him remembers what he truly is.\n... Can he hold it in — or will the sound that made him come rising out no matter what?`,
-        hi: `सियार चिल्ला रहे हैं। उसका पूरा वजूद याद दिला रहा है कि वह सच में क्या है।\n... क्या वह रोक सकता है — या वह आवाज़ जो उसे बनाती है चाहे कुछ भी हो बाहर आ जाएगी?`,
-      },
+        en: 'The jackals are howling. Every part of you remembers what you are. Can you hold it in?',
+        hi: 'सियार चिल्ला रहे हैं। तुम्हारा पूरा वजूद याद दिला रहा है कि तुम क्या हो। क्या तुम रोक सकते हो?',
       },
       choices: [
         { text: { en: '😰 "No. No no no. I am Kakudruma. I am a KING. I will NOT— ...oh no."', hi: '😰 "नहीं। नहीं नहीं नहीं। मैं काकुद्रुम हूँ। मैं राजा हूँ। मैं नहीं— ...ओह नहीं।"' }, next: 'ending_unmasked' },
-        { text: { en: '🐺 "Just once. Just quietly. Just to feel it one more time..."',          hi: '🐺 "बस एक बार। बस धीरे से। बस एक बार और महसूस करने के लिए..."' },               next: 'ending_unmasked' },
       ],
     },
 
@@ -406,13 +400,11 @@ Chandarava stood in the middle of the clearing, paws open, completely honest —
 चंदरव मैदान के बीच में खड़ा था, पंजे खुले, पूरी तरह ईमानदार — और पूरी तरह अकेला।`,
       },
       question: {
-        en: `He told the whole forest the truth. But they are backing away in terror anyway. Nobody is listening.\n... Does he push harder — or does he already see in their eyes that they have decided?`,
-        hi: `उसने पूरे जंगल को सच बताया। लेकिन वे फिर भी डर के मारे पीछे हट रहे हैं। कोई नहीं सुन रहा।\n... क्या वह और ज़ोर लगाता है — या वह उनकी आँखों में पहले से देख लेता है कि उन्होंने तय कर लिया है?`,
-      },
+        en: 'You just told the whole forest the truth. But they are backing away in terror anyway. Nobody is listening. How does that feel?',
+        hi: 'तुमने पूरे जंगल को सच बताया। लेकिन वे फिर भी डर के मारे पीछे हट रहे हैं। कोई नहीं सुन रहा। यह कैसा लगता है?',
       },
       choices: [
         { text: { en: '😤 "This is ridiculous. Someone touch me, smell me — you KNOW me!"', hi: '😤 "यह बेतुका है। कोई मुझे छुओ, सूँघो — तुम मुझे जानते हो!"' }, next: 'crowded_out' },
-        { text: { en: '😔 "They\'re not going to believe me. I can see it in their eyes."',  hi: '😔 "ये मुझ पर यकीन नहीं करेंगे। मैं उनकी आँखों में देख सकता हूँ।"' }, next: 'crowded_out' },
       ],
     },
 
@@ -479,9 +471,8 @@ One animal had heard him.`,
 एक जानवर ने उसे सुना था।`,
       },
       question: {
-        en: `One animal believed him. The crowd silenced her. The council is deciding without him.\n... Does he walk into that circle and make his case — or does he wait outside and let them decide?`,
-        hi: `एक जानवर ने उस पर यकीन किया। भीड़ ने उसे चुप करा दिया। परिषद उसके बिना फैसला कर रही है।\n... क्या वह उस घेरे में जाकर अपनी बात रखता है — या बाहर इंतज़ार करता है और उन्हें फैसला करने देता है?`,
-      },
+        en: 'The one animal who believed you just got silenced by the crowd. What do you do?',
+        hi: 'जिस एक जानवर ने तुम पर यकीन किया उसे भीड़ ने चुप करा दिया। तुम क्या करते हो?',
       },
       choices: [
         { text: { en: '💪 "I walk into that circle. I\'m not letting them decide who I am without me."', hi: '💪 "मैं उस घेरे में जाता हूँ। मैं उन्हें मेरे बिना तय नहीं करने दूँगा कि मैं कौन हूँ।"' }, next: 'speaks_up' },
@@ -541,13 +532,11 @@ Chandarava was escorted to a throne he had never asked for, with a deer walking 
 चंदरव को उस सिंहासन तक ले जाया गया जो उसने कभी नहीं माँगा था, एक हिरनी उसके बगल में चुपचाप चलती हुई — एकमात्र जिसने उसे सच में देखा था।`,
       },
       question: {
-        en: `He said everything true. The deer believed him. But the lion's fear was louder, and he still got crowned.\n... Does he hold onto the one who heard — or does he let the weight of being ignored finally pull him under?`,
-        hi: `उसने सब सच कहा। हिरनी ने यकीन किया। लेकिन शेर का डर ज़्यादा ज़ोर से बोला, और फिर भी उसे ताज पहनाया गया।\n... क्या वह उसे थामता है जिसने सुना — या अनसुना किए जाने का बोझ आखिरकार उसे डुबो देता है?`,
-      },
+        en: 'You said everything true. The deer believed you. But the lion\'s fear was louder. You still got crowned. What do you hold onto?',
+        hi: 'तुमने सब सच कहा। हिरनी ने तुम पर यकीन किया। लेकिन शेर का डर ज़्यादा ज़ोर से बोला। फिर भी तुम्हें ताज पहनाया गया। तुम किसे थामे रखते हो?',
       },
       choices: [
         { text: { en: '🌱 "The deer heard me. One is enough. I\'ll keep being honest."',         hi: '🌱 "हिरनी ने सुना। एक काफी है। मैं ईमानदार रहूँगा।"' },               next: 'ruling_unwillingly' },
-        { text: { en: '😞 "Not even the truth was enough. Maybe nothing I do matters here."', hi: '😞 "सच भी काफी नहीं था। शायद यहाँ कुछ भी मायने नहीं रखता।"' }, next: 'ruling_unwillingly' },
       ],
     },
 
@@ -615,13 +604,11 @@ Chandarava looked at the ground.
 "मुझे पता है," उसने कहा। "मुझे पता है।"`,
       },
       question: {
-        en: `He let them decide without him. The deer waited for him to walk in. He didn't.\n... Does he feel regret — knowing he had the truth and stayed outside — or does he tell himself it wouldn't have changed anything?`,
-        hi: `उसने उन्हें अपने बिना तय करने दिया। हिरनी इंतज़ार करती रही कि वह अंदर आए। वह नहीं आया।\n... क्या उसे पछतावा है — यह जानते हुए कि उसके पास सच था और वह बाहर रहा — या वह खुद से कहता है कि इससे कुछ नहीं बदलता?`,
-      },
+        en: 'You let them decide without you. The deer waited for you to walk in. You didn\'t. What are you feeling right now?',
+        hi: 'तुमने उन्हें तुम्हारे बिना तय करने दिया। हिरनी इंतज़ार करती रही कि तुम अंदर आओ। तुम नहीं आए। अभी तुम क्या महसूस कर रहे हो?',
       },
       choices: [
         { text: { en: '😔 "Regret. I had the truth and I stayed outside. I should have walked in."', hi: '😔 "पछतावा। मेरे पास सच था और मैं बाहर रहा। मुझे अंदर जाना चाहिए था।"' }, next: 'ruling_unwillingly' },
-        { text: { en: '😶 "Nothing. What would it have changed? The lion had already decided."',    hi: '😶 "कुछ नहीं। क्या बदलता? शेर ने पहले ही तय कर लिया था।"' },               next: 'ruling_unwillingly' },
       ],
     },
 
@@ -676,13 +663,11 @@ The lion noticed. "Shall I drive them off, my king?"
 "नहीं," चंदरव ने धीरे कहा। "उन्हें रहने दो।"`,
       },
       question: {
-        en: `He is sitting on a throne he never asked for, wearing a crown built from everyone else's fear.\n... Does he just want to go home and be himself — or does he wait, believing one day they will finally see him clearly?`,
-        hi: `वह उस सिंहासन पर बैठा है जो उसने कभी नहीं माँगा, एक ऐसा ताज पहने जो सबके डर से बना है।\n... क्या वह बस घर जाना और खुद होना चाहता है — या इंतज़ार करता है, यह मानते हुए कि एक दिन वे उसे साफ़ देखेंगे?`,
-      },
+        en: 'You are sitting on a throne you never asked for, wearing a crown built on everyone else\'s fear. What goes through your mind?',
+        hi: 'तुम उस सिंहासन पर बैठे हो जो तुमने कभी नहीं माँगा, एक ऐसा ताज पहने हो जो सबके डर से बना है। मन में क्या चलता है?',
       },
       choices: [
         { text: { en: '🐾 "I just want to go home. Back to the forest. Back to being myself."', hi: '🐾 "मैं बस घर जाना चाहता हूँ। जंगल वापस। खुद वापस।"' },          next: 'moonlit_night_b' },
-        { text: { en: '👁️ "I\'ll wait. One day they\'ll see. One day they\'ll understand."',   hi: '👁️ "मैं इंतज़ार करूँगा। एक दिन वे देखेंगे। एक दिन समझेंगे।"' }, next: 'moonlit_night_b' },
       ],
     },
 
@@ -734,13 +719,11 @@ She had known all along.`,
 वह शुरू से जानती थी।`,
       },
       question: {
-        en: `The jackals are singing under the full moon. He didn't chase them away. For the first time in weeks something feels true.\n... Does he howl back loudly and joyfully — or just quietly, just enough to feel real again?`,
-        hi: `सियार पूर्णिमा के नीचे गा रहे हैं। उसने उन्हें नहीं भगाया। हफ्तों में पहली बार कुछ सच लगता है।\n... क्या वह ज़ोर से और खुशी से वापस चिल्लाता है — या बस धीरे से, बस इतना कि फिर से असली लगे?`,
-      },
+        en: 'The jackals are singing under the full moon. You didn\'t chase them away. For the first time in weeks something feels true. What do you do?',
+        hi: 'सियार पूर्णिमा के नीचे गा रहे हैं। तुमने उन्हें नहीं भगाया। हफ्तों में पहली बार कुछ सच लगता है। तुम क्या करते हो?',
       },
       choices: [
         { text: { en: '🌕 "I howl back. Loudly. Joyfully. I don\'t care who hears."',         hi: '🌕 "मैं वापस चिल्लाता हूँ। ज़ोर से। खुशी से। परवाह नहीं कौन सुनता है।"' }, next: 'animals_realise' },
-        { text: { en: '🤍 "Just quietly. Just enough to feel real again. Just for me."',       hi: '🤍 "बस धीरे से। बस इतना कि फिर से असली लगे। बस मेरे लिए।"' },           next: 'animals_realise' },
       ],
     },
 
@@ -800,13 +783,11 @@ The small deer walked quietly to Chandarava's side and stood there.
 "मैंने सुना था," उसने कहा। "मैंने हमेशा सुना था।"`,
       },
       question: {
-        en: `The animals just remembered he told them the truth from the very first day. They are looking at him differently now.\n... Does he say "I told you" — or "I know how frightening something different can look"?`,
-        hi: `जानवरों को अभी याद आया कि उसने शुरू से ही सच बताया था। वे अब उसे अलग नज़रों से देख रहे हैं।\n... क्या वह कहता है "मैंने बताया था" — या "मैं जानता हूँ कि अलग दिखने वाली चीज़ कितनी डरावनी लग सकती है"?`,
-      },
+        en: 'The animals just remembered that you told them the truth from the very beginning. They are looking at you differently now. What do you want to say?',
+        hi: 'जानवरों को अभी याद आया कि तुमने शुरू से ही सच बताया था। वे अब तुम्हें अलग नज़रों से देख रहे हैं। तुम क्या कहना चाहते हो?',
       },
       choices: [
         { text: { en: '💬 "I told you. I told you on the very first day and you didn\'t listen."', hi: '💬 "मैंने बताया था। पहले ही दिन बताया था और तुमने नहीं सुना।"' },          next: 'ending_believed' },
-        { text: { en: '🤝 "It\'s okay. I know how frightening something different can look."',     hi: '🤝 "कोई बात नहीं। मैं जानता हूँ अलग दिखने वाली चीज़ कितनी डरावनी लग सकती है।"' }, next: 'ending_believed' },
       ],
     },
 

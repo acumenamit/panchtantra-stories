@@ -21,13 +21,11 @@ const brahminAndCobra = {
         hi: `एक छोटे से गाँव में हरिदत्त नाम का एक ब्राह्मण किसान रहता था। उसके खेत सूखे थे, फसल पतली थी, और थैली खाली थी। वह हर दिन मेहनत करता था, लेकिन किस्मत ने कभी उस पर मुस्कुराया नहीं।\n\nएक झुलसाती दोपहर, एक पेड़ के नीचे थका हुआ बैठा था, तभी उसने अपने खेत के किनारे एक बाँबी से एक बड़ा नाग निकलते देखा। नाग ने अपना फन उठाया और उसे स्थिर दृष्टि से देखा।\n\nहरिदत्त का दिल डर से धड़का। लेकिन फिर एक विचार आया:\n\n"शायद यह सर्प मेरे खेत का रक्षक देवता है। इन सालों में मैंने उसका सम्मान करना भूल गया।"\n\nवह एक मिट्टी का कटोरा लाया, उसे ताज़े दूध से भरा, और नाग के सामने हाथ जोड़कर रख दिया।`,
       },
       question: {
-        en: `Was Haridatta wise to show the cobra reverence — honouring what he did not understand?\n... Or... was this a risky act that simply turned out well by chance?`,
-        hi: `क्या हरिदत्त का नाग के प्रति श्रद्धा दिखाना बुद्धिमानी थी — जो वह नहीं समझता उसका सम्मान करना?\n... या... क्या यह एक जोखिम भरा काम था जो संयोग से ठीक निकल गया?`,
-      },
+        en: 'Haridatta shows the cobra reverence instead of fear. Was this wise or foolish?',
+        hi: 'हरिदत्त नाग के प्रति डर की जगह श्रद्धा दिखाता है। क्या यह बुद्धिमानी थी या मूर्खता?',
       },
       choices: [
         { text: { en: '🙏 Wise — honouring what we don\'t understand costs little and may give much', hi: '🙏 बुद्धिमानी — जो हम नहीं समझते उसका सम्मान करने में थोड़ा लगता है और बहुत मिल सकता है' }, next: 'cobra_gifts' },
-        { text: { en: '😬 Risky — but kindness to the unknown is rarely truly foolish', hi: '😬 जोखिम भरा — लेकिन अज्ञात के प्रति दयालुता कभी भी सच में मूर्खता नहीं होती' }, next: 'cobra_gifts' },
       ],
     },
 
@@ -38,9 +36,8 @@ const brahminAndCobra = {
         hi: `अगली सुबह, हरिदत्त बाँबी के पास वापस आया और पाया — मिट्टी के कटोरे में — एक चमकता सोने का सिक्का।\n\nवह उसे देखता रहा। फिर उसने कटोरे में फिर से दूध भरा और घर चला गया।\n\nअगली सुबह, एक और सोने का सिक्का।\n\nहर दिन, बिना चूके, नाग कटोरे में एक सोने का सिक्का छोड़ता था। हरिदत्त का भाग्य बदल गया। उसके खेत फले-फूले। उसका घर गर्म और भरा हो गया।\n\nसाल बीत गए। हरिदत्त ने नाग की शांत भक्ति से देखभाल की — हर सुबह ताज़ा दूध, एक सम्मानजनक प्रणाम, कुछ और नहीं माँगा।\n\nफिर एक दिन, हरिदत्त को एक दूर के गाँव जाना पड़ा। उसने अपने युवा पुत्र से कहा कि वह उसकी अनुपस्थिति में नाग की देखभाल करे।`,
       },
       question: {
-        en: `Is the son's heart filling with excitement — one coin a day feels slow when the anthill might hold so much more?\n... Or... will he tend the cobra faithfully, just as his father asked, grateful for what is freely given?`,
-        hi: `क्या पुत्र के मन में उत्साह भर रहा है — एक सिक्का एक दिन धीमा लगता है जब बाँबी में इतना कुछ हो सकता है?\n... या... क्या वह नाग की देखभाल ईमानदारी से करेगा, जैसा उसके पिता ने कहा, जो मिलता है उसके लिए कृतज्ञ?`,
-      },
+        en: 'The son learns about the gold coins. What do you think he is feeling?',
+        hi: 'पुत्र को सोने के सिक्कों के बारे में पता चलता है। आपको क्या लगता है वह क्या महसूस कर रहा है?',
       },
       choices: [
         { text: { en: '🤩 Excited — one coin a day is slow, but the anthill might hold much more!', hi: '🤩 उत्साहित — एक सिक्का एक दिन धीमा है, लेकिन बाँबी में बहुत कुछ हो सकता है!' }, next: 'son_arrives' },
@@ -56,13 +53,11 @@ const brahminAndCobra = {
         hi: `पुत्र ने नाग की वफ़ादारी से देखभाल की — हर सुबह दूध, एक शांत प्रणाम, कुछ और नहीं।\n\nजब हरिदत्त वापस आया, उसने अपने पुत्र को शांत चेहरे के साथ और बीते दिनों जितने सोने के सिक्कों के साथ प्रतीक्षा करते पाया।\n\n"तुमने कुछ अतिरिक्त नहीं माँगा?" हरिदत्त ने कहा।\n\n"नाग जो देता है वह देता है," पुत्र ने उत्तर दिया। "हमें अधिक माँगने का अधिकार नहीं है।"\n\nहरिदत्त ने आँखों में आँसू लिए अपने पुत्र को गले लगाया।\n\n"तुमने कुछ ऐसा समझ लिया है जिसे समझने में अधिकांश लोगों को जीवन भर लग जाता है," उसने कहा। "कि कृतज्ञता प्रचुरता का बीज है — और लालच वह पाला है जो उसे मार देता है।"`,
       },
       question: {
-        en: `Did the son understand that enough is a feast — and the one who knows when to stop never truly goes hungry?\n... Or... is the teaching simpler than that — gratitude itself is what protects us from our own worst impulses?`,
-        hi: `क्या पुत्र ने समझ लिया कि पर्याप्त ही भोज है — और जो रुकना जानता है वह कभी भूखा नहीं रहता?\n... या... क्या शिक्षा उससे भी सरल है — कृतज्ञता ही वह है जो हमें अपनी बुरी इच्छाओं से बचाती है?`,
-      },
+        en: 'The son chose contentment over greed. What is the teaching here?',
+        hi: 'पुत्र ने लालच पर संतोष चुना। यहाँ क्या शिक्षा है?',
       },
       choices: [
         { text: { en: '🌱 Enough is a feast — the one who knows when to stop never goes hungry', hi: '🌱 पर्याप्त ही भोज है — जो रुकना जानता है वह कभी भूखा नहीं रहता' }, next: 'ending_contentment' },
-        { text: { en: '🙏 Gratitude protects us from ourselves',                                hi: '🙏 कृतज्ञता हमें हमसे ही बचाती है' },                                      next: 'ending_contentment' },
       ],
     },
 
@@ -73,13 +68,11 @@ const brahminAndCobra = {
         hi: `पुत्र ने कर्तव्यपूर्वक दूध रखा — लेकिन उसकी आँखें बाँबी की ओर जाती रहीं।\n\n"एक सिक्का एक दिन," उसने सोचा। "लेकिन अगर नाग सालों से सिक्के दे रहा है, तो बाँबी सोने से भरी होनी चाहिए। इंतज़ार क्यों? एक-एक सिक्के के लिए भीख क्यों माँगूँ जब मैं सब एक बार में ले सकता हूँ?"\n\nअगली सुबह, दूध की जगह, पुत्र एक छड़ी लेकर आया।\n\nउसने निकलते हुए नाग पर प्रहार किया।\n\nनाग तेज़ था। उसने पलटकर काट लिया — लड़के के हाथ पर एक काटना। पुत्र गिर पड़ा।\n\nकिसी चमत्कार से वह बच गया, लेकिन उसके हाथ पर घाव का निशान हमेशा के लिए रह गया।\n\nजब हरिदत्त वापस आया, नाग जा चुका था। कटोरा खाली था। और वह कभी फिर सोने से नहीं भरा।`,
       },
       question: {
-        en: `Did the son confuse a gift with a right — turning gratitude into entitlement without even noticing?\n... Or... did he simply want everything at once — what could only ever be given slowly, over time?`,
-        hi: `क्या पुत्र ने उपहार को अधिकार समझ लिया — कृतज्ञता को हकदारी में बदल दिया बिना जाने?\n... या... क्या वह बस एक बार में सब कुछ चाहता था — जो केवल धीरे-धीरे, समय के साथ ही मिल सकता था?`,
-      },
+        en: 'The son lost everything chasing what was never his to take. What went wrong in his thinking?',
+        hi: 'पुत्र ने वह सब खो दिया जो कभी उसका था ही नहीं, उसका पीछा करते हुए। उसकी सोच में क्या गलत हुआ?',
       },
       choices: [
         { text: { en: '💭 He confused a gift with a right — gratitude turned to entitlement',      hi: '💭 उसने उपहार को अधिकार समझ लिया — कृतज्ञता हकदारी बन गई' },         next: 'son_acts' },
-        { text: { en: '⏳ He wanted all at once what could only be given slowly, over time', hi: '⏳ वह एक बार में वह सब चाहता था जो केवल धीरे-धीरे, समय के साथ मिल सकता था' }, next: 'son_acts' },
       ],
     },
 
@@ -90,13 +83,11 @@ const brahminAndCobra = {
         hi: `हरिदत्त खाली बाँबी के पास काफी देर तक बैठा रहा।\n\nउसने सोने से ज़्यादा खो दिया था। उसने कुछ दुर्लभ खो दिया था — विश्वास पर बनी एक संबंध, दैनिक वफ़ादारी पर, खुले हाथ से प्रकट होने और बदले में कुछ न माँगने के सरल कार्य पर।\n\nआखिरकार वह हर सुबह बाँबी पर वापस आने लगा — दूध के साथ, प्रणाम के साथ, धैर्य के साथ।\n\nनाग कभी वापस नहीं आया।\n\nलेकिन हरिदत्त फिर भी आता रहा। हर सुबह।\n\nउसके पड़ोसियों ने उसे मूर्ख समझा। लेकिन हरिदत्त ने कुछ ऐसा समझा जो वे नहीं समझते थे:\n\nकुछ चीज़ें, एक बार लालच से टूट जाने पर, ठीक नहीं हो सकतीं। तुम केवल उस खाली जगह की देखभाल कर सकते हो जहाँ वे हुआ करती थीं, और उम्मीद कर सकते हो कि तुम्हारे बच्चे वह सीखें जो तुम्हारे अपने बच्चे ने नहीं सीखा।`,
       },
       question: {
-        en: `Does Haridatta return each morning because he valued the practice of gratitude — not just its rewards?\n... Or... because he was teaching himself and everyone watching what greed truly costs?`,
-        hi: `क्या हरिदत्त हर सुबह इसलिए आता है क्योंकि वह कृतज्ञता के अभ्यास को महत्व देता है — न कि सिर्फ उसके पुरस्कारों को?\n... या... क्योंकि वह खुद को और देखने वालों को सिखा रहा था कि लालच की असली कीमत क्या होती है?`,
-      },
+        en: 'Haridatta kept returning even after losing everything. What does that tell us about him?',
+        hi: 'हरिदत्त सब खोने के बाद भी आता रहा। यह हमें उसके बारे में क्या बताता है?',
       },
       choices: [
         { text: { en: '🙏 He valued the practice of gratitude, not just its rewards',          hi: '🙏 उसने कृतज्ञता के अभ्यास को महत्व दिया, न कि सिर्फ उसके पुरस्कारों को' }, next: 'ending_wisdom' },
-        { text: { en: '💔 He was teaching himself — and anyone watching — what greed truly costs', hi: '💔 वह खुद को — और जो देख रहे थे उन्हें — सिखा रहा था कि लालच की असली कीमत क्या है' }, next: 'ending_wisdom' },
       ],
     },
 
