@@ -22,8 +22,9 @@ const fourFriendsAndHunter = {
         hi: `एक साफ जंगल की झील के पास चार अप्रत्याशित मित्र रहते थे: चित्रग्रीव नाम का कौआ, जो पेड़ की चोटी से सब कुछ देखता था; हिरण्यक नाम का चूहा, जो जड़ों के पास एक बिल में रहता था; मन्थरक नाम का कछुआ, जो पानी के किनारे चट्टानों पर धूप सेंकता था; और श्वेतांक नाम का हिरण, जो हर शाम पानी पीने आता था।\n\nवे बहुत अलग-अलग प्राणी थे। उनमें एक बात के अलावा कुछ भी समान नहीं था: जब उनमें से कोई एक मुसीबत में होता, तो बाकी आ जाते।\n\nएक सुनहरी दोपहर, श्वेतांक हिरण झील पर नहीं आया।\n\nचित्रग्रीव कौआ, हमेशा देखते रहते, जंगल के ऊपर चौड़े चक्कर लगाता उड़ा। हवा से, उसने हिरण को देखा — एक शिकारी के जाल में फँसा, झील से बहुत दूर।`,
       },
       question: {
-        en: 'The crow has spotted the deer in a trap. He is small — what should he do first?',
-        hi: 'कौए ने जाल में हिरण को देखा है। वह छोटा है — उसे पहले क्या करना चाहिए?',
+        en: `Should the crow fly straight to the deer and try to peck through the net alone?\n... Or... should he alert all the friends first — because this rescue needs everyone working together?`,
+        hi: `क्या कौए को सीधे हिरण के पास उड़कर अकेले जाल को चोंच से काटने की कोशिश करनी चाहिए?\n... या... क्या उसे पहले सभी मित्रों को सूचित करना चाहिए — क्योंकि इस बचाव के लिए सबको मिलकर काम करना होगा?`,
+      },
       },
       choices: [
         { text: { en: '🐦 Fly to the deer immediately and try to peck through the net alone',  hi: '🐦 तुरंत हिरण के पास उड़ो और अकेले जाल को चोंच से काटने की कोशिश करो' }, next: 'crow_alone' },
@@ -40,8 +41,9 @@ const fourFriendsAndHunter = {
         hi: `चित्रग्रीव सीधे जाल के पास उड़ा और रस्सियों पर ज़ोर से चोंच मारने लगा।\n\nलेकिन उसकी चोंच छोटी थी। रस्सियाँ मोटी थीं। वह मुश्किल से कोई निशान बना सका।\n\nहिरण छटपटाया, शोर मचाया। दूरी में, शिकारी ने सुना और वापस चलने लगा।\n\nचित्रग्रीव ने अपनी छोटी चोंच को देखा। फिर उसने हिरण्यक चूहे के बारे में सोचा — जिसके दाँत मिनटों में रस्सी चबा सकते थे।\n\n"मुझे पहले मदद लेने जाना चाहिए था," उसने सोचा।\n\nवह पूरी गति से वापस उड़ा।`,
       },
       question: {
-        en: 'The crow realised he can\'t do it alone. What does this teach us about asking for help?',
-        hi: 'कौए को एहसास हुआ कि वह अकेले नहीं कर सकता। यह हमें मदद माँगने के बारे में क्या सिखाता है?',
+        en: `Is knowing when to ask for help wisdom — not weakness, as so many believe?\n... Or... is the lesson sharper than that — acting fast matters, but acting smart matters even more?`,
+        hi: `क्या यह जानना कि कब मदद माँगनी है बुद्धिमानी है — कमज़ोरी नहीं, जैसा बहुत लोग सोचते हैं?\n... या... क्या सीख उससे भी तीखी है — तेज़ी से काम करना ज़रूरी है, लेकिन समझदारी से काम करना और भी ज़रूरी?`,
+      },
       },
       choices: [
         { text: { en: '🤝 Knowing when to ask for help is wisdom, not weakness', hi: '🤝 यह जानना कि कब मदद माँगनी है बुद्धिमानी है, कमज़ोरी नहीं' }, next: 'deer_caught' },
@@ -57,8 +59,9 @@ const fourFriendsAndHunter = {
         hi: `चित्रग्रीव झील के पास वापस उड़ा, चेतावनी देते हुए।\n\nहिरण्यक चूहा तुरंत उछल पड़ा। "कहाँ? दिखाओ!"\n\nमन्थरक कछुआ चलने लगा — धीरे-धीरे, स्थिरता से।\n\n"तुम यहाँ रहो," कौए ने धीरे से कहा। "तुम बहुत धीमे हो। हम खत्म करने से पहले शिकारी वापस आ सकता है। सुरक्षित रहो।"\n\n"मेरे मित्र खतरे में हैं," कछुए ने सरलता से कहा। "मैं आ रहा हूँ।"\n\nचित्रग्रीव ने चूहे को अपनी चोंच में उठाया — तेज़ उड़ते हुए, नीचे उड़ते हुए — जबकि कछुआ पीछे लुढ़कता चला।\n\nवे हिरण के पास पहुँचे। हिरण्यक अपने तेज़ दाँतों से रस्सियों पर काम करने लगा — कुतरना, कुतरना, कुतरना।`,
       },
       question: {
-        en: 'Each friend brings a different strength. Can you see why all four were needed?',
-        hi: 'हर मित्र एक अलग शक्ति लाता है। क्या आप देख सकते हैं कि चारों की ज़रूरत क्यों थी?',
+        en: `Was it the crow's eyes that mattered most — without him, no one would have known the danger at all?\n... Or... was it the mouse's teeth that truly saved them — the crow's beak alone could never have done it?`,
+        hi: `क्या कौए की आँखें सबसे ज़रूरी थीं — उसके बिना किसी को खतरे का पता ही नहीं चलता?\n... या... क्या चूहे के दाँत ही थे जिन्होंने सच में बचाया — अकेली कौए की चोंच कभी यह नहीं कर सकती थी?`,
+      },
       },
       choices: [
         { text: { en: '👀 The crow\'s eyes spotted the danger — without him, no one would know', hi: '👀 कौए की आँखों ने खतरा देखा — उसके बिना, कोई नहीं जानता' }, next: 'friends_rescue' },
@@ -74,8 +77,9 @@ const fourFriendsAndHunter = {
         hi: `हिरण्यक ने आखिरी रस्सी तब चबाई जब जंगल में शिकारी के कदमों की आवाज़ तेज़ होती गई।\n\n"भागो!" कौए ने चिल्लाया।\n\nहिरण जंगल में कूदकर भाग गया। कौआ उड़ गया। चूहा एक खोखले लट्ठे में घुस गया।\n\nशिकारी पहुँचा — और केवल चबाई हुई रस्सियों का ढेर और एक खाली मैदान पाया।\n\nवह घबराकर इधर-उधर देखने लगा। फिर उसकी आँखें कुछ और पर पड़ीं:\n\nएक कछुआ। धीमा, लुढ़कता, अभी भी पेड़ों की सुरक्षा से बहुत दूर।\n\nशिकारी मुस्कुराया और अपने थैले की ओर हाथ बढ़ाया।`,
       },
       question: {
-        en: 'The tortoise who insisted on coming is now in danger because of his slowness. Was it right for him to come?',
-        hi: 'कछुआ जो आने पर ज़ोर देता था, अब अपनी धीमेपन की वजह से खतरे में है। क्या उसका आना सही था?',
+        en: `Was it right for the tortoise to come — because a friend who stays safe while others suffer is no friend at all?\n... Or... did his bravery without ability create a new problem that could cost everyone everything?`,
+        hi: `क्या कछुए का आना सही था — क्योंकि जो मित्र दूसरों के दुख में सुरक्षित रहे वह मित्र ही नहीं?\n... या... क्या बिना क्षमता के उसके साहस ने एक नई मुसीबत खड़ी कर दी जो सबको सब कुछ चुका सकती थी?`,
+      },
       },
       choices: [
         { text: { en: '❤️ Yes — a friend who stays safe while others suffer is no friend at all', hi: '❤️ हाँ — जो मित्र दूसरों के दुख में सुरक्षित रहे वह मित्र ही नहीं' }, next: 'tortoise_danger' },
@@ -91,8 +95,9 @@ const fourFriendsAndHunter = {
         hi: `शिकारी ने मन्थरक को उठाया और अपने थैले में बाँध दिया।\n\nपेड़ों से, तीन मित्रों ने भय से देखा।\n\n"यह मेरी गलती है," मन्थरक ने थैले के अंदर से कहा। "मुझे सुनना चाहिए था।"\n\n"नहीं," चित्रग्रीव ने दृढ़ता से कहा। "हम मित्रों को नहीं छोड़ते। हम रास्ता खोजते हैं।"\n\nचूहे ने जल्दी से सोचा। "चित्रग्रीव — रास्ते में शिकारी के आगे उड़ो। ज़मीन पर ऐसे उतरो जैसे तुम घायल हो। अपना पंख खींचो। उसे सोचने दो कि तुम आसान शिकार हो।"\n\n"और फिर?"\n\n"वह तुम्हें पकड़ने के लिए थैला रख देगा। जैसे ही वह रखे — हिरण्यक, तुम थैले को चबाओ। मैं शिकारी को व्यस्त रखूँगा। श्वेतांक — पेड़ों में साथ-साथ दौड़ो, शोर मचाओ, उसे भ्रमित करो।"`,
       },
       question: {
-        en: 'Each friend has a role in the rescue. This is a plan that uses everyone\'s strengths. What does this show?',
-        hi: 'हर मित्र की बचाव में एक भूमिका है। यह एक ऐसी योजना है जो सबकी शक्तियों का उपयोग करती है। यह क्या दर्शाता है?',
+        en: `Does this show that together, even the smallest creatures can outsmart the most powerful?\n... Or... that a good plan assigns each friend the role that uses their strength best?`,
+        hi: `क्या यह दिखाता है कि मिलकर, सबसे छोटे प्राणी भी सबसे शक्तिशाली को मात दे सकते हैं?\n... या... कि एक अच्छी योजना हर मित्र को वह भूमिका देती है जो उनकी शक्ति का सबसे अच्छा उपयोग करे?`,
+      },
       },
       choices: [
         { text: { en: '🌟 Together, small creatures can outsmart and outmanoeuvre the powerful', hi: '🌟 मिलकर, छोटे प्राणी शक्तिशाली को मात दे सकते हैं' },         next: 'plan_executes' },
@@ -108,8 +113,9 @@ const fourFriendsAndHunter = {
         hi: `योजना पूरी तरह से काम आई।\n\nचित्रग्रीव आगे रास्ते पर उतरा, पंख खींचते हुए, करुणापूर्वक चिल्लाते हुए। शिकारी की आँखें चमकीं — एक दिन में दो शिकार!\n\nउसने थैला रख दिया और आगे रेंगा।\n\nहिरण्यक दौड़ा, सेकंडों में थैले की गाँठ चबाई, और मन्थरक आज़ाद हो गया।\n\nहिरण बाईं तरफ झाड़ियों से ज़ोर से गुज़रा। शिकारी घूम गया।\n\nकौआ ऊपर उड़ा, पूरी तरह से बिना घाव के, और ऊँचाई से पुकारा।\n\nशिकारी ने बाईं ओर देखा। दाईं ओर देखा। ज़मीन पर अपना खाली थैला देखा।\n\nवह खाली हाथ घर गया।`,
       },
       question: {
-        en: 'Four very different creatures, working as one, defeated a human hunter. What is the deepest lesson?',
-        hi: 'चार बहुत अलग प्राणी, एक होकर, एक मानव शिकारी को हरा दिया। सबसे गहरी शिक्षा क्या है?',
+        en: `Is the deepest lesson that unity multiplies strength — divided, each was prey; together, they were unbeatable?\n... Or... that true friendship shows up — even slowly, even when it puts itself at risk?`,
+        hi: `क्या सबसे गहरी शिक्षा यह है कि एकता शक्ति को गुणा करती है — अलग-अलग, हर कोई शिकार था; मिलकर, वे अजेय थे?\n... या... कि सच्ची दोस्ती दिखती है — धीरे-धीरे भी, खुद को जोखिम में डालकर भी?`,
+      },
       },
       choices: [
         { text: { en: '🤝 Unity multiplies strength — divided, each was prey; together, they were unbeatable', hi: '🤝 एकता शक्ति को गुणा करती है — अलग-अलग, हर कोई शिकार था; मिलकर, वे अजेय थे' }, next: 'ending_wisdom' },

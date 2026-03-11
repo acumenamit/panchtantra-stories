@@ -21,8 +21,8 @@ const lionAndHare = {
         hi: `विन्ध्य के महान जंगल में भासुरक नाम का एक शक्तिशाली शेर रहता था। वह हर दिन बहुत से जानवरों को मारता था — जितना वह खा भी नहीं सकता था। सभी जानवर भय में जी रहे थे।\n\nएक दिन, जंगल के सभी जानवर पुराने बरगद के पेड़ के नीचे इकट्ठे हुए। हिरण, खरगोश, हाथी, बंदर और पक्षी सभी ने मिलकर कहा:\n\n"हे महाबली शेर! हम प्रतिदिन आपके लिए एक जानवर भेजेंगे। बदले में, कृपया इस व्यर्थ के हत्याकांड को बंद करें। जंगल खाली होता जा रहा है!"`,
       },
       question: {
-        en: "The lion thinks about the animals' offer. What do YOU think the lion should do?",
-        hi: 'शेर जानवरों के प्रस्ताव पर विचार करता है। आप क्या सोचते हैं — शेर को क्या करना चाहिए?',
+        en: `Should the lion refuse — because a king never bargains with prey?\n... Or... should he accept — and let the forest breathe again?`,
+        hi: `क्या शेर मना कर दे — क्योंकि राजा कभी शिकार से सौदा नहीं करता?\n... या... क्या वह मान ले — और जंगल को फिर से साँस लेने दे?`,
       },
       choices: [
         { text: { en: '🤝 Accept the deal — steady meals sound good!',        hi: '🤝 सौदा स्वीकार करो — रोज़ का खाना अच्छा लगता है!' }, next: 'lion_accepts' },
@@ -37,8 +37,8 @@ const lionAndHare = {
         hi: `शेर भासुरक ने सोच-समझकर अपनी अयाल पर हाथ फेरा। "बहुत अच्छा," वह गरजा। "मुझे रोज़ एक जानवर भेजो, और मैं बाकी सबको छोड़ दूँगा।"\n\nजानवरों ने राहत की साँस ली। दिन शांति से गुज़रने लगे। फिर स्थिरजीवी नाम के एक छोटे, चतुर खरगोश की बारी आई। बाकी जानवरों ने उसे दुखभरी नज़रों से देखा।\n\n"छोटे खरगोश, आज तुम्हारी बारी है," उन्होंने कहा।\n\nस्थिरजीवी शांति से मुस्कुराया। "चिंता मत करो, मित्रों। यह मुझ पर छोड़ दो। मेरे पास एक योजना है।"`,
       },
       question: {
-        en: "The hare walks slowly toward the lion's den, arriving very late. What is he planning?",
-        hi: 'खरगोश धीरे-धीरे शेर की गुफा की ओर चलता है, बहुत देर से पहुँचता है। वह क्या सोच रहा है?',
+        en: `Is the hare arriving late on purpose — to make the lion's anger part of the plan?\n... Or... is he simply too frightened to walk any faster?`,
+        hi: `क्या खरगोश जानबूझकर देर से आ रहा है — ताकि शेर का क्रोध भी योजना का हिस्सा बन जाए?\n... या... वह बस इतना डरा हुआ है कि तेज़ चल ही नहीं सकता?`,
       },
       choices: [
         { text: { en: "🧠 He wants to make the lion angry first — that's part of the plan!", hi: '🧠 वह पहले शेर को क्रोधित करना चाहता है — यह योजना का हिस्सा है!' }, next: 'hare_plan' },
@@ -53,8 +53,8 @@ const lionAndHare = {
         hi: `"चुप रहो!" शेर दहाड़ा। "मैं राजा हूँ! मैं जैसे चाहूँ शिकार करूँगा!"\n\nजानवर डर के मारे भाग गए। दिन बीतते गए और भासुरक का उत्पात जारी रहा। जल्द ही हिरण गायब हो गए। फिर छोटे जानवर भी। जंगल शांत और सूना हो गया।\n\nकोई शिकार न बचने पर, शेर को भूख लगने लगी। बहुत तेज़ भूख। वह एकाकी, शांत, बंजर जंगल में भटकने लगा।\n\n"सब जानवर कहाँ गए?" उसने सोचा।\n\nतब उसे समझ आया — उसने स्वयं उस राज्य को नष्ट कर दिया था जिस पर वह राज करता था। जो राजा अपनी प्रजा की रक्षा नहीं करता, उसका कोई राज्य नहीं होता।`,
       },
       question: {
-        en: 'The lion sits alone, hungry and surrounded by silence. What lesson has he learned?',
-        hi: 'शेर अकेला बैठा है, भूखा और चारों ओर सन्नाटा है। उसने क्या सीखा?',
+        en: `Has the lion learned that power without wisdom destroys the very kingdom it rules?\n... Or... does he believe he can simply move on and start again somewhere new?`,
+        hi: `क्या शेर ने सीख लिया कि बिना बुद्धि की शक्ति उसी राज्य को नष्ट कर देती है जिस पर वह राज करती है?\n... या... क्या वह सोचता है कि वह बस आगे बढ़कर कहीं और नए सिरे से शुरू कर सकता है?`,
       },
       choices: [
         { text: { en: '👑 A true king protects his people — power without wisdom destroys itself', hi: '👑 सच्चा राजा अपनी प्रजा की रक्षा करता है — बिना बुद्धि के शक्ति स्वयं को नष्ट कर लेती है' }, next: 'lesson_king' },
@@ -69,8 +69,8 @@ const lionAndHare = {
         hi: `"बेचारा छोटा खरगोश," जानवरों ने सोचा, उसे जाते हुए देखकर।\n\nलेकिन स्थिरजीवी सच में डरा हुआ था — और उस डर ने उसे जंगल की गहराई में भागकर छुपने पर मजबूर कर दिया।\n\nशेर इंतज़ार करता रहा। और इंतज़ार करता रहा। उसका क्रोध तूफ़ान की तरह बढ़ता गया। जब कोई जानवर नहीं आया, तो उसने पहले से भी बुरा नरसंहार किया।\n\nबाकी जानवरों ने खरगोश की कायरता की कीमत चुकाई।\n\nउस रात, स्थिरजीवी ने अपने मित्रों की चीखें सुनीं और अपने निर्णय का बोझ महसूस किया। समस्या से भागना उसे शायद ही कभी खत्म करता है — अक्सर वह और बड़ी हो जाती है।`,
       },
       question: {
-        en: 'Sthirajeevi feels terrible. What should he do now?',
-        hi: 'स्थिरजीवी बहुत बुरा महसूस कर रहा है। उसे अब क्या करना चाहिए?',
+        en: `Should Sthirajeevi find his courage and face the lion with a plan — even now?\n... Or... is it already too late, and hiding forever the only path left?`,
+        hi: `क्या स्थिरजीवी अब भी साहस जुटाकर एक योजना के साथ शेर का सामना करे?\n... या... क्या बहुत देर हो चुकी है, और हमेशा के लिए छुपे रहना ही एकमात्र रास्ता है?`,
       },
       choices: [
         { text: { en: '💪 Face the lion with a plan — courage and cleverness together', hi: '💪 योजना के साथ शेर का सामना करो — साहस और चतुराई एक साथ' }, next: 'hare_plan' },
@@ -85,8 +85,8 @@ const lionAndHare = {
         hi: `स्थिरजीवी घंटों देर से आने के बावजूद शांत चेहरे के साथ शेर की गुफा पर पहुँचा।\n\n"तुम इतनी देर कहाँ थे?!" भासुरक गरजा, ज़मीन काँप उठी।\n\n"हे महाराज," खरगोश ने गहरा प्रणाम करते हुए कहा। "मैं रास्ते में था तभी एक और शेर ने मुझे रोका! वह बहुत बड़ा है, आपसे भी बड़ा, और उसने कहा — इस जंगल का असली राजा आप नहीं, वह है!"\n\nशेर की आँखें क्रोध से फैल गईं। "क्या?! मुझे अभी उस ढोंगी के पास ले चलो!"\n\n"मेरे पीछे आइए, महाराज," छोटे खरगोश ने कहा, और विशाल शेर को जंगल में ले चला...`,
       },
       question: {
-        en: 'The hare leads the lion to a deep, still well. What happens next?',
-        hi: 'खरगोश शेर को एक गहरे, शांत कुएँ के पास ले जाता है। आगे क्या होता है?',
+        en: `Will the lion see his own reflection in the well — and believe it is a rival?\n... Or... will the hare's plan unravel before they even reach the water?`,
+        hi: `क्या शेर को कुएँ में अपना ही प्रतिबिंब दिखेगा — और वह सोचेगा कि यह कोई प्रतिद्वंद्वी है?\n... या... क्या खरगोश की योजना पानी तक पहुँचने से पहले ही बिखर जाएगी?`,
       },
       choices: [
         { text: { en: "🪞 The lion sees his own reflection and thinks it's the other lion!", hi: '🪞 शेर को अपना ही प्रतिबिंब दिखता है और वह सोचता है यह दूसरा शेर है!' }, next: 'well_trick' },
@@ -101,8 +101,8 @@ const lionAndHare = {
         hi: `खरगोश एक गहरे कुएँ के किनारे रुक गया। "वहाँ देखिए, महाराज! अंदर झाँकिए — वह दूसरा शेर वहीं छुपा है!"\n\nभासुरक ने कुएँ में झाँका। नीचे के शांत पानी में उसे एक विशाल शेर दिखा — गुर्राता, दाँत दिखाता, लड़ने को तैयार।\n\n(वह, ज़ाहिर है, उसका अपना प्रतिबिंब था।)\n\n"ग्राआआर!" भासुरक दहाड़ा, और प्रतिबिंब भी दहाड़ा!\n\n"मैं तुम्हें नष्ट कर दूँगा!" वह चिल्लाया — और सिर के बल कुएँ में कूद गया।\n\nधड़ाम!\n\nभयानक दहाड़ें शांत हो गईं। जंगल में सन्नाटा छा गया। फिर धीरे-धीरे जीवन की आवाज़ें वापस आईं — पक्षियों का गाना, हिरणों की दौड़, जानवर जो अब डरे नहीं थे।`,
       },
       question: {
-        en: "The animals celebrate their freedom! But the young ones ask — was it RIGHT to trick the lion?",
-        hi: 'जानवर अपनी आज़ादी का जश्न मनाते हैं! लेकिन छोटे जानवर पूछते हैं — क्या शेर को धोखा देना सही था?',
+        en: `Was it right to trick the lion — because a tyrant who cannot be reasoned with must be stopped another way?\n... Or... could the hare have found a more peaceful path if he had only looked harder?`,
+        hi: `क्या शेर को चकमा देना सही था — क्योंकि जिस अत्याचारी से बात नहीं हो सकती उसे किसी और तरीके से रोकना ही पड़ता है?\n... या... क्या खरगोश कोई शांतिपूर्ण रास्ता ढूँढ सकता था, अगर उसने थोड़ा और सोचा होता?`,
       },
       choices: [
         { text: { en: "✅ Yes! When a tyrant cannot be reasoned with, clever action saves many lives", hi: '✅ हाँ! जब अत्याचारी से बात नहीं हो सकती, तो चतुर कदम कई जीवन बचाता है' }, next: 'ending_wisdom' },
@@ -117,8 +117,8 @@ const lionAndHare = {
         hi: `खरगोश झाड़ियों में भाग गया!\n\nलेकिन शेर तेज़ था। उसने स्थिरजीवी को एक चट्टानी दीवार के पास घेर लिया।\n\n"तुमने सोचा तुम मुझे चकमा दे सकते हो?!" शेर गरजा।\n\nखरगोश का दिल धड़क रहा था। उसने बाईं ओर देखा — चट्टानें। दाईं ओर देखा — शेर। फिर नीचे देखा... और तीन कदम दूर वह गहरा कुआँ दिखा।\n\n"रुकिए, रुकिए, रुकिए!" खरगोश बोला। "मैं भाग नहीं रहा था! मैं आपको यहीं लाना चाहता था — वह दूसरा शेर सच में है, उस कुएँ में झाँकिए!"\n\nशेर हिचकिचाया... फिर देखा।`,
       },
       question: {
-        en: 'The lion looks into the well and sees his reflection roaring back. What does he do?',
-        hi: 'शेर कुएँ में झाँकता है और अपना प्रतिबिंब दहाड़ता देखता है। वह क्या करता है?',
+        en: `Will the lion leap into the well — fooled by his own reflection one last time?\n... Or... will he pause, see through the trick, and something unexpected happen instead?`,
+        hi: `क्या शेर कुएँ में कूद जाएगा — एक आखिरी बार अपने ही प्रतिबिंब से धोखा खाकर?\n... या... क्या वह रुकेगा, चाल भाँप लेगा, और इसके बजाय कुछ अप्रत्याशित घटेगा?`,
       },
       choices: [
         { text: { en: "🦁 He leaps into the well to destroy the 'other lion'!",                   hi: "🦁 वह 'दूसरे शेर' को नष्ट करने के लिए कुएँ में कूद जाता है!" },             next: 'ending_wisdom' },
@@ -133,8 +133,8 @@ const lionAndHare = {
         hi: `शेर ने खरगोश को देखा। फिर... धीरे-धीरे... वह हँसने लगा। एक गहरी, गूँजती, सच्ची हँसी।\n\n"तुम चालाक हो, छोटे। बहुत चालाक।" वह भारी कदमों से बैठ गया। "मैं मारता रहा, मारता रहा, और मैंने कभी नहीं सोचा कि मैं क्या नष्ट कर रहा हूँ।"\n\nखरगोश, काँपते हुए लेकिन साहसी, शेर के सामने बैठ गया। "महाराज, आपके पास ऐसी शक्ति है जिसकी बराबरी कोई नहीं कर सकता। लेकिन बुद्धि से निर्देशित शक्ति — यही एक सच्चे राजा को महान बनाती है।"\n\nशेर बहुत देर तक चुप रहा। फिर उसने सिर हिलाया।`,
       },
       question: {
-        en: 'A lion who listens — what happens next in the forest?',
-        hi: 'एक शेर जो सुनता है — जंगल में आगे क्या होता है?',
+        en: `Will the lion who listened become a just ruler — and let the forest finally flourish?\n... Or... will something even rarer happen — a lion and a hare becoming true friends?`,
+        hi: `क्या वह शेर जिसने सुना एक न्यायी राजा बनेगा — और जंगल को आखिरकार फलने-फूलने देगा?\n... या... क्या कुछ और भी दुर्लभ घटेगा — एक शेर और एक खरगोश की सच्ची दोस्ती?`,
       },
       choices: [
         { text: { en: '🌟 The lion becomes a just ruler and the forest flourishes!',         hi: '🌟 शेर एक न्यायी राजा बन जाता है और जंगल फलता-फूलता है!' },                  next: 'ending_wisdom' },
