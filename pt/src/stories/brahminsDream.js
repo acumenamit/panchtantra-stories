@@ -84,7 +84,7 @@ And one small thought, quiet as a mouse, crept into his mind:
         hi: 'बस एक छोटा सा विचार। काफी हानिरहित। यहाँ से यह कहाँ जाता है?',
       },
       choices: [
-        { text: { en: '✨ "And what if I sold the seeds first... and bought something better with the money?"', hi: '✨ "और क्या हो अगर मैं पहले बीज बेचूँ... और उन पैसों से कुछ बेहतर खरीदूँ?"' }, next: 'seeds_to_gold' },
+        { text: { en: '😏 "Oh, this is interesting. Keep going."', hi: '😏 "ओह, यह दिलचस्प है। आगे बढ़ते हैं।"' }, next: 'seeds_to_gold' },
       ],
     },
 
@@ -153,7 +153,7 @@ The pot sat beside him, full and silent and entirely unaware of what it had star
         hi: 'बकरियाँ मन में अच्छी तरह बढ़ रही हैं। यह आगे कहाँ जाता है?',
       },
       choices: [
-        { text: { en: '🐐 "And with that many goats, I could buy cows. And with cows — buffaloes..."', hi: '🐐 "और इतनी बकरियों से मैं गायें खरीद सकता हूँ। और गायों से — भैंसें..."' }, next: 'gold_to_cattle' },
+        { text: { en: '🤩 "Yes. Yes! This could actually work."', hi: '🤩 "हाँ। हाँ! यह सच में काम कर सकता है।"' }, next: 'gold_to_cattle' },
       ],
     },
 
@@ -215,7 +215,7 @@ A house needed a family.`,
         hi: 'घर बन गया। आँगन में तुलसी का पौधा है। इस दुनिया में जो तुम बना रहे हो, आगे क्या आता है?',
       },
       choices: [
-        { text: { en: '👶 "A fine house. A good wife. And then... a son."', hi: '👶 "एक अच्छा घर। एक अच्छी पत्नी। और फिर... एक बेटा।"' }, next: 'cattle_to_family' },
+        { text: { en: '😄 "I am just getting started."', hi: '😄 "मैं तो अभी शुरू ही हुआ हूँ।"' }, next: 'cattle_to_family' },
       ],
     },
 
@@ -233,13 +233,15 @@ A house needed a family.`,
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-family.jpg',
       text: {
-        en: `He had a wife now.
+        en: `And then — because why not, because things were going so well, because a man with horses and buffaloes and a stone house is a man who can ask for things — he had a wife.
 
-He had found her in the respectable way, after respectful negotiations with a good family, paid for by the buffaloes which had paid for themselves many times over. She was sensible and capable and kept the stone house in good order. He approved of her.
+She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting just offstage for the right moment. Sensible. Capable. She kept the stone house in good order. He approved of her enormously.
+
+He was barely done approving when —
 
 They had a son.
 
-This was where the dream became the most vivid. He could see the boy clearly — five years old perhaps, round-faced, with his mother's eyes. Running in the courtyard. Getting into things. A normal, healthy, maddening child.
+And now he could see it all so clearly — the boy especially. Five years old perhaps, round-faced, with his mother's eyes. Running in the courtyard. Getting into things. A normal, healthy, maddening child.
 
 He watched the boy with the particular mixture of pride and exasperation that only a parent knows.
 
@@ -258,13 +260,15 @@ Something at the edge of his mind. A small, cool voice.
 His arm was still raised. The boy waited in the courtyard that did not exist.
 
 The pot sat in the dark, one foot from his elbow.`,
-        hi: `अब उसकी पत्नी थी।
+        hi: `और फिर — क्यों नहीं, क्योंकि सब कुछ इतना अच्छा चल रहा था, क्योंकि घोड़ों और भैंसों और तुलसी के पौधे वाले पत्थर के घर वाला आदमी माँग सकता है — उसकी एक पत्नी थी।
 
-उसने उसे सम्मानजनक तरीके से पाया था, एक अच्छे परिवार के साथ सम्मानजनक बातचीत के बाद, जो भैंसों के पैसे से हुई थी जो कई बार अपनी कीमत वसूल कर चुकी थीं। वह समझदार और सक्षम थी और पत्थर के घर को ठीक रखती थी। वह उसे पसंद था।
+वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार करते हुए पर्दे के पीछे खड़ी थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी। वह उसे बहुत पसंद था।
+
+वह मुश्किल से उसे पसंद करना खत्म कर पाया था जब —
 
 उनका एक बेटा था।
 
-यहाँ सपना सबसे ज़्यादा साफ़ हो गया। वह लड़के को साफ़ देख सकता था — शायद पाँच साल का, गोल चेहरा, माँ की आँखें। आँगन में दौड़ता हुआ। चीज़ों में हाथ डालता हुआ। एक सामान्य, स्वस्थ, थकाने वाला बच्चा।
+और अब वह सब इतना साफ़ दिख रहा था — खासकर लड़का। शायद पाँच साल का, गोल चेहरा, माँ की आँखें। आँगन में दौड़ता हुआ। चीज़ों में हाथ डालता हुआ। एक सामान्य, स्वस्थ, थकाने वाला बच्चा।
 
 उसने लड़के को उस खास मिश्रण से देखा जो सिर्फ माता-पिता जानते हैं — गर्व और झुँझलाहट का।
 
