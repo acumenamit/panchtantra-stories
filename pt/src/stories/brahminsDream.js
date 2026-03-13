@@ -1,6 +1,6 @@
 const brahminsDream = {
-  id: 'brahmins-dream',
-  title:       { en: "The Brahmin's Dream",          hi: 'ब्राह्मण का सपना' },
+  id: 'one-pot-of-seeds',
+  title:       { en: 'One Pot of Seeds',               hi: 'तिल का एक घड़ा' },
   description: { en: 'A poor brahmin finds a pot of sesame seeds and lies down to sleep. But his mind has other plans. One thought leads to another — and an entire empire rises and falls before morning.',
                  hi: 'एक गरीब ब्राह्मण को तिल का एक घड़ा मिलता है और वह सोने लेट जाता है। लेकिन उसके मन की और ही योजना है। एक विचार दूसरे को जन्म देता है — और सुबह होने से पहले एक पूरा साम्राज्य उठता और गिरता है।' },
   theme:       { en: 'A dream unguarded can cost you everything real', hi: 'बेलगाम सपना सब कुछ असली छीन सकता है' },
