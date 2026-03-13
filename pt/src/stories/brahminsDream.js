@@ -253,13 +253,11 @@ Svabhavakripana raised his arm.
 
 He paused.
 
-Something at the edge of his mind. A small, cool voice.
+His arm was still in the air.
 
-*You are in a room. Alone. There is a pot of seeds beside you. That is all there is.*
+Somewhere behind the courtyard and the boy and the mud-covered stable, something hard and cool pressed against his elbow.
 
-His arm was still raised. The boy waited in the courtyard that did not exist.
-
-The pot sat in the dark, one foot from his elbow.`,
+He had forgotten it was there.`,
         hi: `और फिर — क्यों नहीं, क्योंकि सब कुछ इतना अच्छा चल रहा था, क्योंकि घोड़ों और भैंसों और तुलसी के पौधे वाले पत्थर के घर वाला आदमी माँग सकता है — उसकी एक पत्नी थी।
 
 वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार करते हुए पर्दे के पीछे खड़ी थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी। वह उसे बहुत पसंद था।
@@ -280,21 +278,19 @@ The pot sat in the dark, one foot from his elbow.`,
 
 वह रुका।
 
-मन के किनारे पर कुछ। एक छोटी, ठंडी आवाज़।
+उसका हाथ अभी भी हवा में था।
 
-*तुम एक कमरे में हो। अकेले। तुम्हारे पास बीजों का एक घड़ा है। बस यही है।*
+आँगन और लड़के और कीचड़ भरे अस्तबल के पीछे कहीं, कुछ सख्त और ठंडा उसकी कोहनी से लगा।
 
-उसका हाथ अभी भी उठा हुआ था। लड़का उस आँगन में इंतज़ार कर रहा था जो था ही नहीं।
-
-घड़ा अँधेरे में बैठा था, उसकी कोहनी से एक फुट दूर।`,
+वह भूल गया था कि वह वहाँ था।`,
       },
       question: {
-        en: 'Your arm is raised. The boy is waiting. The pot is one foot away. What do you do?',
-        hi: 'तुम्हारा हाथ उठा हुआ है। लड़का इंतज़ार कर रहा है। घड़ा एक फुट दूर है। तुम क्या करते हो?',
+        en: 'Your arm is up. The boy is waiting. Something cold is pressing against your elbow. What do you do?',
+        hi: 'तुम्हारा हाथ उठा है। लड़का इंतज़ार कर रहा है। कुछ ठंडा तुम्हारी कोहनी से लग रहा है। तुम क्या करते हो?',
       },
       choices: [
-        { text: { en: '👆 "I reach out. A father must be firm. The boy needs to learn."',  hi: '👆 "मैं हाथ बढ़ाता हूँ। पिता को दृढ़ होना चाहिए। लड़के को सीखना होगा।"' }, next: 'ending_crash' },
-        { text: { en: '😌 "Wait. Something feels wrong. Let me just... open my eyes."',    hi: '😌 "रुको। कुछ ठीक नहीं लग रहा। बस... आँखें खोलने दो।"' },              next: 'ending_awake' },
+        { text: { en: '👆 "Teach him. My arm is already raised — finish it."',  hi: '👆 "उसे सिखाओ। हाथ पहले से उठा है — पूरा करो।"' }, next: 'ending_crash' },
+        { text: { en: '😌 "Stop. Something just touched my elbow."',    hi: '😌 "रुको। अभी कुछ मेरी कोहनी से लगा।"' },              next: 'ending_awake' },
       ],
     },
 
