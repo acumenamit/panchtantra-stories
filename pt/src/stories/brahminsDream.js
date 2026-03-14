@@ -405,7 +405,7 @@ Dream well. And then wake up and begin."`,
 "वही कल्पना जो हवा में महल बनाती है, ज़मीन पर भी असली महल बना सकती है — लेकिन सिर्फ तभी जब एक आँख खुली रहे और एक हाथ वह थामे जो तुम्हारे पास सच में है।
 खूब सपने देखो। और फिर जागो और शुरू करो।"`,
       },
-      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds castles in the air can build real ones, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना जो मन में साम्राज्य बनाती है, दुनिया में भी असली साम्राज्य बना सकती है — अगर एक हाथ वह थामे जो तुम्हारे पास सच में है।' },
+      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds empires in the mind can build real ones in the world, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना जो मन में साम्राज्य बनाती है, दुनिया में भी असली साम्राज्य बना सकती है — अगर एक हाथ वह थामे जो तुम्हारे पास सच में है।' },
       lessonIcon: '🌅',
     },
 
