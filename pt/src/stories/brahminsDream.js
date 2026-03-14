@@ -97,9 +97,7 @@ One thought came:
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-seeds-to-gold.jpg',
       text: {
-        en: `Morning.
-
-The market is loud and the merchant is pleased — good seeds, clean seeds, exactly what he was looking for. The coins land in Svabhavakripana's palm one by one. He counts them without looking. He already knows the number.
+        en: `The market is loud and the merchant is pleased — good seeds, clean seeds, exactly what he was looking for. The coins land in Svabhavakripana's palm one by one. He counts them without looking. He already knows the number.
 
 He sits up slightly on his mat.
 
@@ -116,9 +114,7 @@ His breathing slows. His face settles into something new — the particular expr
 "Goats," he murmurs.
 
 The pot sits beside him. Full. Patient. Quietly responsible for everything.`,
-        hi: `सुबह।
-
-बाज़ार शोरगुल से भरा है और व्यापारी खुश है — अच्छे बीज, साफ़ बीज, ठीक वही जो वह चाहता था। सिक्के एक-एक करके स्वभावकृपण की हथेली पर गिरते हैं। वह बिना देखे गिनता है। गिनती पहले से पता है।
+        hi: `बाज़ार शोरगुल से भरा है और व्यापारी खुश है — अच्छे बीज, साफ़ बीज, ठीक वही जो वह चाहता था। सिक्के एक-एक करके स्वभावकृपण की हथेली पर गिरते हैं। वह बिना देखे गिनता है। गिनती पहले से पता है।
 
 वह चटाई पर थोड़ा उठकर बैठ जाता है।
 
