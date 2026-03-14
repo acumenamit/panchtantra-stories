@@ -7,6 +7,7 @@ import brahminsGoat from './brahminsGoat';
 import blueJackal from './blueJackal';
 import jackalAndWarDrum from './jackalAndWarDrum';
 import tortoiseAndGeese from './tortoiseAndGeese';
+import tortoiseAndGeese from './brahminsDream';
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
@@ -27,6 +28,7 @@ const STORIES = [
   blueJackal,
   jackalAndWarDrum,
   tortoiseAndGeese,
+  brahminsDream,
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -34,6 +36,6 @@ const STORIES = [
 //  Set this to the id of the story you want on the hero card.
 //  If the id doesn't match any story, falls back to newest.
 // ─────────────────────────────────────────────────────────────
-export const FEATURED_STORY_ID = 'tortoise-and-geese';
+export const FEATURED_STORY_ID = 'one-pot-of-seeds';
 
 export default STORIES;
