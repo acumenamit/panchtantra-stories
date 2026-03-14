@@ -126,7 +126,7 @@ const crowAndSerpent = {
         en: `The crow never forgot his debt to the jackal.\n\nEvery week, he flew to the edge of the forest with fruit and news from the village — a friendship of exchange, of mutual respect.\n\n"Why do you still visit him?" his wife asked one season. "The danger is long past."\n\n"Because," said the crow, "the day I needed wisdom I didn't have, he gave it freely. That is not a debt you repay once and forget. That is a friendship you tend for life."\n\nNitishastra teaches: "Surround yourself with those wiser than you, and wisdom will find you when you need it most."`,
         hi: `कौआ कभी सियार का अपना ऋण नहीं भूला।\n\nहर हफ्ते, वह जंगल के किनारे फल और गाँव की खबरें लेकर उड़ता — आदान-प्रदान की, आपसी सम्मान की दोस्ती।\n\n"तुम अभी भी उससे क्यों मिलते हो?" एक मौसम में उसकी पत्नी ने पूछा। "खतरा तो बहुत पहले खत्म हो गया।"\n\n"क्योंकि," कौए ने कहा, "जिस दिन मुझे वह बुद्धि चाहिए थी जो मेरे पास नहीं थी, उसने उसे स्वतंत्र रूप से दिया। यह एक ऐसा ऋण नहीं है जिसे तुम एक बार चुकाकर भूल जाओ। यह एक ऐसी दोस्ती है जिसे तुम जीवन भर निभाते हो।"\n\nनीतिशास्त्र सिखाता है: "अपने से बुद्धिमान लोगों के साथ रहो, और जब तुम्हें सबसे ज़्यादा ज़रूरत होगी, बुद्धि तुम तक आ जाएगी।"`,
       },
-      lesson: { en: 'A wise friend in need is worth more than a thousand allies who leave when times are hard.', hi: 'मुसीबत में एक बुद्धिमान मित्र हज़ार ऐसे साथियों से ज़्यादा कीमती है जो मुश्किल में साथ छोड़ दें।' },ै।' },
+      lesson: { en: 'A wise friend in need is worth more than a thousand allies who leave when times are hard.', hi: 'मुसीबत में एक बुद्धिमान मित्र हज़ार ऐसे साथियों से ज़्यादा कीमती है जो मुश्किल में साथ छोड़ दें।' },
       lessonIcon: '🦊',
     },
   },
