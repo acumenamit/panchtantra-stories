@@ -7,7 +7,7 @@ import brahminsGoat from './brahminsGoat';
 import blueJackal from './blueJackal';
 import jackalAndWarDrum from './jackalAndWarDrum';
 import tortoiseAndGeese from './tortoiseAndGeese';
-import tortoiseAndGeese from './brahminsDream';
+import brahminsDream from './brahminsDream';
 
 // ─────────────────────────────────────────────────────────────
 //  ADD NEW STORIES HERE
