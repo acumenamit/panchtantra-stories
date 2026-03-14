@@ -15,15 +15,6 @@ const brahminsDream = {
 
   nodes: {
 
-    // ── NODE 1 ─────────────────────────────────────────────────
-    // Brahmin finds the pot. Lies down. First thought arrives.
-    // Single choice — just one small wondering. Forward only.
-    // IMAGE: start.jpg — a thin brahmin lying on a simple mat
-    //        in a bare room at night, a clay pot of sesame seeds
-    //        beside him, one eye open, a single small thought
-    //        bubble beginning to form above his head, moonlight
-    //        through a small window, expression of quiet curiosity
-    // ──────────────────────────────────────────────────────────
     start: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-start.jpg',
@@ -84,15 +75,6 @@ One thought came:
       ],
     },
 
-    // ── NODE 2 ─────────────────────────────────────────────────
-    // Seeds sold, money in hand. Mind races to goats.
-    // Single choice — the first leap. Forward only.
-    // IMAGE: seeds_to_gold.jpg — the brahmin still lying on his
-    //        mat, eyes now bright and open, above him a dream
-    //        sequence begins to form: seeds transforming into
-    //        gleaming coins in his imagination, his hands
-    //        gesturing slightly in the air as he thinks
-    // ──────────────────────────────────────────────────────────
     seeds_to_gold: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-seeds-to-gold.jpg',
@@ -129,16 +111,6 @@ His breathing slows. His face settles into something new — the particular expr
       ],
     },
 
-    // ── NODE 3 ─────────────────────────────────────────────────
-    // Goats to cows to buffaloes to horses. A prosperous man now.
-    // Mind leaps to the social — a house, a wife, a family.
-    // Single choice — the biggest leap yet. Forward only.
-    // IMAGE: gold_to_cattle.jpg — brahmin on his mat, eyes closed
-    //        and smiling, above him an elaborate dream world
-    //        visible: goats, then cows, then buffaloes in
-    //        procession, a fine house beginning to take shape
-    //        at the edge of the dream, wealth accumulating
-    // ──────────────────────────────────────────────────────────
     gold_to_cattle: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-gold-to-cattle.jpg',
@@ -179,16 +151,6 @@ Then — because a courtyard this good deserves more than one person in it —`,
       ],
     },
 
-    // ── NODE 4 — THE REAL FORK ─────────────────────────────────
-    // The empire is complete. Now the son misbehaves.
-    // Brahmin reaches to discipline him. One moment of choice.
-    // IMAGE: cattle_to_family.jpg — brahmin sitting upright on
-    //        his mat now, fully animated, arm beginning to extend
-    //        outward mid-gesture, the clay pot VERY visible and
-    //        close beside him, above him in dream: a beautiful
-    //        house, wife, child, the whole imagined empire at
-    //        its peak — and the child beginning to misbehave
-    // ──────────────────────────────────────────────────────────
     cattle_to_family: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-family.jpg',
@@ -250,20 +212,10 @@ He had forgotten it was there.`,
       },
       choices: [
         { text: { en: '👆 "Teach him. My arm is already raised — finish it."',  hi: '👆 "उसे सिखाओ। हाथ पहले से उठा है — पूरा करो।"' }, next: 'ending_crash' },
-        { text: { en: '😌 "Stop. Something just touched my elbow."',    hi: '😌 "रुको। अभी कुछ मेरी कोहनी से लगा।"' },              next: 'ending_awake' },
+        { text: { en: '😌 "Stop. Something just touched my elbow."',            hi: '😌 "रुको। अभी कुछ मेरी कोहनी से लगा।"' },              next: 'ending_awake' },
       ],
     },
 
-    // ── ENDING 1 ───────────────────────────────────────────────
-    // He reaches. His elbow hits the pot. Seeds everywhere.
-    // Sits in the dark surrounded by the ruins of everything.
-    // IMAGE: ending_crash.jpg — brahmin sitting in shock on his
-    //        mat, the shattered or tipped clay pot beside him,
-    //        sesame seeds scattered across the floor catching
-    //        the moonlight, his arm still extended mid-gesture,
-    //        his expression the particular blankness of someone
-    //        who has just lost something very real and very gone
-    // ──────────────────────────────────────────────────────────
     ending_crash: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-ending-crash.jpg',
@@ -332,15 +284,6 @@ You cannot hold the pot and the empire at the same time. Choose which one is in 
       lessonIcon: '🏺',
     },
 
-    // ── ENDING 2 ───────────────────────────────────────────────
-    // He catches himself. Opens his eyes. Pot still there.
-    // In the morning, sells the seeds — one real step at a time.
-    // IMAGE: ending_awake.jpg — brahmin sitting on his mat in
-    //        early morning light, the clay pot safe beside him,
-    //        his hand resting gently on it, a small genuine smile,
-    //        the window showing the first pale light of dawn,
-    //        the room the same bare room but now somehow enough
-    // ──────────────────────────────────────────────────────────
     ending_awake: {
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-ending-awake.jpg',

@@ -271,7 +271,7 @@ The next day he told his children what had happened on the road.
 "I asked myself — what do I actually know? Not what do I fear, not what others are telling me. What do I KNOW?" He smiled. "And I knew I was holding a goat."
 
 The Panchatantra teaches:
-"The one who trusts their own tested knowledge against a flood of false words is worth more than a hundred who bow to the loudest mouth in the room."`,
+"The one who trusts their own tested knowledge against a chorus of false voices is worth more than a hundred who bow to the loudest mouth in the room."`,
         hi: `मित्र शर्मा बकरी के साथ घर पहुँचे, अच्छा खाना बनाया, और चैन से सोए।
 
 अगले दिन उन्होंने अपने बच्चों को राह में जो हुआ वो बताया।
@@ -285,7 +285,7 @@ The Panchatantra teaches:
 "मैंने खुद से पूछा — मैं वास्तव में क्या जानता हूँ? यह नहीं कि मैं क्या डर रहा हूँ, यह नहीं कि दूसरे क्या कह रहे हैं। मैं क्या जानता हूँ?" वे मुस्कुराए। "और मुझे पता था कि मेरे हाथ में बकरी है।"
 
 पञ्चतन्त्र सिखाता है:
-"जो अपने परखे हुए ज्ञान पर झूठे शब्दों की बाढ़ में भरोसा रखता है, वह उन सौ लोगों से बेहतर है जो कमरे में सबसे ऊँची आवाज़ के आगे झुक जाते हैं।"`,
+"जो अपने परखे हुए ज्ञान पर झूठी आवाज़ों के शोर में भरोसा रखता है, वह उन सौ लोगों से बेहतर है जो कमरे में सबसे ऊँची आवाज़ के आगे झुक जाते हैं।"`,
       },
       lesson: { en: "What you know with your own eyes and mind is more trustworthy than what a crowd repeats. A lie doesn't become truth just because it's told three times.", hi: 'जो आप अपनी आँखों और दिमाग से जानते हैं वह भीड़ की दोहराई बात से ज़्यादा भरोसेमंद है। झूठ तीन बार बोलने से सच नहीं बनता।' },
       lessonIcon: '🦁',
