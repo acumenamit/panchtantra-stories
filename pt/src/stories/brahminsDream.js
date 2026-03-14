@@ -99,11 +99,7 @@ One thought came:
       text: {
         en: `The market is loud and the merchant is pleased — good seeds, clean seeds, exactly what he was looking for. The coins land in Svabhavakripana's palm one by one. He counts them without looking. He already knows the number.
 
-He sits up slightly on his mat.
-
 A real sum. Not a fortune. A start.
-
-He lies back down. Hands behind his head. The ceiling is very interesting tonight.
 
 The coins become three goats. Young ones. Brown. One with a bell around her neck that rings every time she moves. They are in the pen behind the house — a good pen, solid posts, the goats fat and restless and entirely his.
 
@@ -111,16 +107,10 @@ Three goats become six. Six become twelve. The bell rings and rings.
 
 His breathing slows. His face settles into something new — the particular expression of a man watching his own life improve.
 
-"Goats," he murmurs.
-
-The pot sits beside him. Full. Patient. Quietly responsible for everything.`,
+"Goats," he murmurs.`,
         hi: `बाज़ार शोरगुल से भरा है और व्यापारी खुश है — अच्छे बीज, साफ़ बीज, ठीक वही जो वह चाहता था। सिक्के एक-एक करके स्वभावकृपण की हथेली पर गिरते हैं। वह बिना देखे गिनता है। गिनती पहले से पता है।
 
-वह चटाई पर थोड़ा उठकर बैठ जाता है।
-
 एक असली रकम। भाग्य नहीं। एक शुरुआत।
-
-वह फिर लेट जाता है। हाथ सिर के पीछे। आज रात छत बहुत दिलचस्प है।
 
 सिक्के तीन बकरियाँ बन जाते हैं। छोटी। भूरी। एक के गले में घंटी जो हर बार हिलने पर बजती है। वे घर के पीछे बाड़े में हैं — अच्छा बाड़ा, मज़बूत खम्भे, बकरियाँ मोटी और बेचैन और पूरी तरह उसकी।
 
@@ -128,9 +118,7 @@ The pot sits beside him. Full. Patient. Quietly responsible for everything.`,
 
 उसकी साँस धीमी हो जाती है। चेहरे पर कुछ नया उतरता है — एक आदमी का वह खास भाव जो अपनी ज़िंदगी को बेहतर होते देख रहा हो।
 
-"बकरियाँ," वह बुदबुदाता है।
-
-घड़ा उसके पास बैठा है। भरा हुआ। धैर्यशील। सब कुछ के लिए चुपचाप ज़िम्मेदार।`,
+"बकरियाँ," वह बुदबुदाता है।`,
       },
       question: {
         en: 'The goats are multiplying nicely in your mind. Where does this go next?',
@@ -161,11 +149,7 @@ In their place — cows. Four, then eight. The man outside the village who deals
 
 Eight cows become four buffaloes. Big ones. The kind that give milk by the vat, the kind city merchants send riders out to buy. The new pen is larger, sturdier, built from good timber. It smells of hay and animals and money.
 
-The fire has burned low. He doesn't notice.
-
 Two horses stand in the stable. Maybe three. People in the village look at him differently now — they step aside, they ask his opinion, they remember his name. He rides to the city. He rides back. The road between here and there belongs to him.
-
-He is sitting up on his mat now, though he doesn't remember doing it. His hands move slightly in the dark — counting, arranging, building.
 
 The stone house takes shape around him. Two rooms, then three. A proper courtyard. A tulsi plant in the centre in a good clay pot, because that is what a home has.
 
@@ -178,11 +162,7 @@ Then — because a courtyard this good deserves more than one person in it —`,
 
 आठ गायें चार भैंसें बन जाती हैं। बड़ी। घड़ों भर दूध देने वाली, जैसी शहर के व्यापारी सवार भेजकर खरीदते हैं। नया बाड़ा बड़ा है, मज़बूत है, अच्छी लकड़ी से बना है। भूसे और जानवरों और पैसे की खुशबू आती है।
 
-आग मद्धम हो गई है। उसे ध्यान नहीं।
-
 अस्तबल में दो घोड़े खड़े हैं। शायद तीन। गाँव के लोग अब उसे अलग नज़र से देखते हैं — रास्ता देते हैं, राय माँगते हैं, नाम याद रखते हैं। वह शहर जाता है। वापस आता है। यहाँ से वहाँ तक का रास्ता उसका है।
-
-वह चटाई पर बैठा है अब, हालाँकि याद नहीं कब उठकर बैठा। हाथ अँधेरे में हल्के से हिलते हैं — गिनते, व्यवस्थित करते, बनाते।
 
 पत्थर का घर उसके चारों ओर आकार लेता है। दो कमरे, फिर तीन। एक सही आँगन। बीच में एक अच्छे मिट्टी के घड़े में तुलसी का पौधा, क्योंकि घर में यही होता है।
 
@@ -215,9 +195,9 @@ Then — because a courtyard this good deserves more than one person in it —`,
       text: {
         en: `And then — because why not, because things were going so well, because a man with horses and buffaloes and a stone house is a man who can ask for things — he had a wife.
 
-She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting just offstage for the right moment. Sensible. Capable. She kept the stone house in good order. He approved of her enormously.
+She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting for the right moment. Sensible. Capable. She kept the stone house in good order.
 
-He was barely done approving when —
+And then —
 
 They had a son.
 
@@ -240,9 +220,9 @@ Somewhere behind the courtyard and the boy and the mud-covered stable, something
 He had forgotten it was there.`,
         hi: `और फिर — क्यों नहीं, क्योंकि सब कुछ इतना अच्छा चल रहा था, क्योंकि घोड़ों और भैंसों और तुलसी के पौधे वाले पत्थर के घर वाला आदमी माँग सकता है — उसकी एक पत्नी थी।
 
-वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार करते हुए पर्दे के पीछे खड़ी थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी। वह उसे बहुत पसंद था।
+वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार कर रही थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी।
 
-वह मुश्किल से उसे पसंद करना खत्म कर पाया था जब —
+और फिर —
 
 उनका एक बेटा था।
 
@@ -299,9 +279,11 @@ He looked at the seeds spread across the bare floor. White in the moonlight. Eve
 
 Except that now they were all over the floor.
 
+He had been daydreaming.
+
 He sat there for a long time.
 
-The horses were gone. The buffaloes were gone. The stone house with the courtyard and the tulsi plant — gone. The sensible wife he had approved of — gone. The round-faced boy with mud on his feet who did not listen — gone.
+The horses were gone. The buffaloes were gone. The stone house with the courtyard and the tulsi plant — gone. The wife — gone. The round-faced boy with mud on his feet — gone.
 
 He had built an empire tonight.
 
@@ -326,9 +308,11 @@ You cannot hold the pot and the empire at the same time. Choose which one is in 
 
 बस अब वे फर्श पर बिखरे थे।
 
+वह दिवास्वप्न देख रहा था।
+
 वह बहुत देर तक वहाँ बैठा रहा।
 
-घोड़े चले गए। भैंसें चली गईं। आँगन और तुलसी के पौधे वाला पत्थर का घर — चला गया। वह समझदार पत्नी जिसे वह पसंद करता था — चली गई। पैरों पर कीचड़ लगाए वह गोल चेहरे वाला लड़का जो नहीं सुनता था — चला गया।
+घोड़े चले गए। भैंसें चली गईं। आँगन और तुलसी के पौधे वाला पत्थर का घर — चला गया। पत्नी — चली गई। पैरों पर कीचड़ लगाए वह गोल चेहरे वाला लड़का — चला गया।
 
 उसने आज रात एक साम्राज्य बनाया था।
 
@@ -364,6 +348,8 @@ You cannot hold the pot and the empire at the same time. Choose which one is in 
       text: {
         en: `Svabhavakripana opened his eyes.
 
+He had been daydreaming.
+
 The room was dark. The fire was low. The pot was beside him, one foot from his elbow, exactly where he had placed it.
 
 He looked at his arm — still raised slightly, reaching toward a boy who did not exist, in a courtyard that had never been built, behind a house he did not own.
@@ -387,9 +373,11 @@ One step. One real step.
 And as he walked home with his hands in his pockets and the faint smell of sesame still on his fingers, he thought about the stone house and almost smiled.
 
 The Panchatantra teaches:
-"The same imagination that builds castles in the air can build real ones on the ground — but only if you keep one eye open and one hand on what you actually have.
+"The same imagination that builds empires in the mind can build real ones in the world — but only if you keep one hand on what you actually have.
 Dream well. And then wake up and begin."`,
         hi: `स्वभावकृपण ने आँखें खोलीं।
+
+वह दिवास्वप्न देख रहा था।
 
 कमरा अँधेरा था। आग मद्धम थी। घड़ा उसके पास था, कोहनी से एक फुट दूर, ठीक वहाँ जहाँ उसने रखा था।
 
@@ -417,7 +405,7 @@ Dream well. And then wake up and begin."`,
 "वही कल्पना जो हवा में महल बनाती है, ज़मीन पर भी असली महल बना सकती है — लेकिन सिर्फ तभी जब एक आँख खुली रहे और एक हाथ वह थामे जो तुम्हारे पास सच में है।
 खूब सपने देखो। और फिर जागो और शुरू करो।"`,
       },
-      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds castles in the air can build real ones, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना हवा में और ज़मीन पर दोनों महल बना सकती है, अगर एक हाथ वह थामे जो तुम्हारे पास है।' },
+      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds castles in the air can build real ones, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना जो मन में साम्राज्य बनाती है, दुनिया में भी असली साम्राज्य बना सकती है — अगर एक हाथ वह थामे जो तुम्हारे पास सच में है।' },
       lessonIcon: '🌅',
     },
 
