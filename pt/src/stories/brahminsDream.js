@@ -48,9 +48,7 @@ The fire crackled. Outside, the village settled into night. Somewhere a dog bark
 
 Svabhavakripana looked at the pot.
 
-The pot looked back.
-
-And one small thought, quiet as a mouse, crept into his mind:
+One thought came:
 
 "What if I sold these seeds tomorrow?"`,
         hi: `स्वभावकृपण ब्राह्मण, अपनी स्वीकृति से, बहुत कम का आदमी था।
@@ -73,9 +71,7 @@ And one small thought, quiet as a mouse, crept into his mind:
 
 स्वभावकृपण ने घड़े को देखा।
 
-घड़े ने वापस देखा।
-
-और एक छोटा विचार, चूहे जितना शांत, उसके मन में आ घुसा:
+एक विचार आया:
 
 "क्या हो अगर मैं कल ये बीज बेच दूँ?"`,
       },
@@ -101,52 +97,28 @@ And one small thought, quiet as a mouse, crept into his mind:
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-seeds-to-gold.jpg',
       text: {
-        en: `The thought had a life of its own now.
+        en: `The market is loud and the merchant is pleased — good seeds, clean seeds, exactly what he was looking for. The coins land in Svabhavakripana's palm one by one. He counts them without looking. He already knows the number.
 
-He would sell the seeds first thing in the morning. The merchant had said good seeds — the market would agree. He calculated quickly in the dark. That many seeds, that weight, that quality...
+A real sum. Not a fortune. A start.
 
-He sat up slightly.
+The coins become three goats. Young ones. Brown. One with a bell around her neck that rings every time she moves. They are in the pen behind the house — a good pen, solid posts, the goats fat and restless and entirely his.
 
-Yes. A real sum. Not a fortune, but a start.
+Three goats become six. Six become twelve. The bell rings and rings.
 
-And with a start—
+His breathing slows. His face settles into something new — the particular expression of a man watching his own life improve.
 
-He lay back down. His hands laced behind his head. The ceiling was becoming interesting.
+"Goats," he murmurs.`,
+        hi: `बाज़ार शोरगुल से भरा है और व्यापारी खुश है — अच्छे बीज, साफ़ बीज, ठीक वही जो वह चाहता था। सिक्के एक-एक करके स्वभावकृपण की हथेली पर गिरते हैं। वह बिना देखे गिनता है। गिनती पहले से पता है।
 
-With that money — not all of it, just half — he could buy goats. Two, maybe three. Young ones. Healthy. Goats multiplied quickly if you knew what you were doing, and Svabhavakripana knew enough.
+एक असली रकम। भाग्य नहीं। एक शुरुआत।
 
-He closed his eyes and saw them clearly. Three goats in a small pen behind his house, which he didn't have yet but would. Brown ones. One with a bell.
+सिक्के तीन बकरियाँ बन जाते हैं। छोटी। भूरी। एक के गले में घंटी जो हर बार हिलने पर बजती है। वे घर के पीछे बाड़े में हैं — अच्छा बाड़ा, मज़बूत खम्भे, बकरियाँ मोटी और बेचैन और पूरी तरह उसकी।
 
-Three goats became six. Six became twelve.
+तीन बकरियाँ छह हो जाती हैं। छह बारह। घंटी बजती रहती है।
 
-His breathing slowed. His face had a different expression now — something between calculation and pleasure.
+उसकी साँस धीमी हो जाती है। चेहरे पर कुछ नया उतरता है — एक आदमी का वह खास भाव जो अपनी ज़िंदगी को बेहतर होते देख रहा हो।
 
-"Goats," he murmured softly.
-
-The pot sat beside him, full and silent and entirely unaware of what it had started.`,
-        hi: `अब वह विचार अपनी ज़िंदगी जीने लगा था।
-
-वह सुबह सबसे पहले बीज बेचेगा। व्यापारी ने अच्छे बीज कहे थे — बाज़ार भी मानेगा। उसने अँधेरे में जल्दी से हिसाब लगाया। इतने बीज, इतना वज़न, इतनी गुणवत्ता...
-
-वह थोड़ा उठकर बैठ गया।
-
-हाँ। एक असली रकम। भाग्य नहीं, लेकिन एक शुरुआत।
-
-और एक शुरुआत के साथ —
-
-वह फिर लेट गया। हाथ सिर के पीछे बाँध लिए। छत दिलचस्प होती जा रही थी।
-
-उस पैसे से — सब नहीं, बस आधे से — वह बकरियाँ खरीद सकता था। दो, शायद तीन। छोटी। स्वस्थ। बकरियाँ जल्दी बढ़ती हैं अगर तुम जानते हो क्या करना है, और स्वभावकृपण काफी जानता था।
-
-उसने आँखें बंद कीं और उन्हें साफ़ देखा। अपने घर के पीछे एक छोटे बाड़े में तीन बकरियाँ, जो अभी नहीं था लेकिन होगा। भूरी। एक के गले में घंटी।
-
-तीन बकरियाँ छह हो गईं। छह बारह।
-
-उसकी साँस धीमी हो गई। उसके चेहरे पर अब एक अलग भाव था — हिसाब और खुशी के बीच कुछ।
-
-"बकरियाँ," उसने धीरे से बुदबुदाया।
-
-घड़ा उसके पास बैठा रहा, भरा हुआ और चुप, इस बात से बिल्कुल अनजान कि उसने क्या शुरू किया था।`,
+"बकरियाँ," वह बुदबुदाता है।`,
       },
       question: {
         en: 'The goats are multiplying nicely in your mind. Where does this go next?',
@@ -171,44 +143,32 @@ The pot sat beside him, full and silent and entirely unaware of what it had star
       scene: 'village',
       image: '/images/the-brahmins-dream/the-brahmins-dream-gold-to-cattle.jpg',
       text: {
-        en: `The goats became cows without any effort at all.
+        en: `The goats are gone.
 
-Twelve goats, carefully traded, carefully timed — cows. Four cows, then eight. He knew a man outside the village who dealt in cattle. Honest enough. They shook hands in his mind and the deal was done.
+In their place — cows. Four, then eight. The man outside the village who deals in cattle is honest enough and the handshake is firm. The deal is done before either of them can change their minds.
 
-Eight cows became four buffaloes. Buffaloes were where the real money was — milk in quantity, the kind merchants bought by the vat. He would need a larger pen now. He built it in his mind in about thirty seconds, which was faster than actual construction but produced excellent results.
+Eight cows become four buffaloes. Big ones. The kind that give milk by the vat, the kind city merchants send riders out to buy. The new pen is larger, sturdier, built from good timber. It smells of hay and animals and money.
 
-The fire had burned low. He didn't notice.
+Two horses stand in the stable. Maybe three. People in the village look at him differently now — they step aside, they ask his opinion, they remember his name. He rides to the city. He rides back. The road between here and there belongs to him.
 
-The buffaloes became horses. Not many — two, perhaps three. A man with horses was a man people looked at differently. A man with horses could travel. A man with horses could do business with the people in the city, not just the village.
+The stone house takes shape around him. Two rooms, then three. A proper courtyard. A tulsi plant in the centre in a good clay pot, because that is what a home has.
 
-He was sitting up again now, though he didn't remember doing it.
+He sits in the courtyard for a moment and looks at what is his.
 
-His hands were moving slightly in the dark — adding, counting, arranging.
+Then — because a courtyard this good deserves more than one person in it —`,
+        hi: `बकरियाँ जा चुकी हैं।
 
-A house. He would need a proper house. Stone, not mud. Two rooms, then three. A courtyard with a tulsi plant in the centre, because that was what a proper home had.
+उनकी जगह — गायें। चार, फिर आठ। गाँव के बाहर का मवेशी व्यापारी ईमानदार है और हाथ मिलाना पक्का है। दोनों के मन बदलने से पहले सौदा हो जाता है।
 
-And a house needed — he paused here, just for a moment, because this was a larger thought than the others.
+आठ गायें चार भैंसें बन जाती हैं। बड़ी। घड़ों भर दूध देने वाली, जैसी शहर के व्यापारी सवार भेजकर खरीदते हैं। नया बाड़ा बड़ा है, मज़बूत है, अच्छी लकड़ी से बना है। भूसे और जानवरों और पैसे की खुशबू आती है।
 
-A house needed a family.`,
-        hi: `बकरियाँ बिना किसी मेहनत के गायें बन गईं।
+अस्तबल में दो घोड़े खड़े हैं। शायद तीन। गाँव के लोग अब उसे अलग नज़र से देखते हैं — रास्ता देते हैं, राय माँगते हैं, नाम याद रखते हैं। वह शहर जाता है। वापस आता है। यहाँ से वहाँ तक का रास्ता उसका है।
 
-बारह बकरियाँ, सावधानी से बेची, सावधानी से समय लगाया — गायें। चार गायें, फिर आठ। वह गाँव के बाहर एक आदमी को जानता था जो मवेशियों का व्यापार करता था। काफी ईमानदार। उन्होंने मन में हाथ मिलाया और सौदा हो गया।
+पत्थर का घर उसके चारों ओर आकार लेता है। दो कमरे, फिर तीन। एक सही आँगन। बीच में एक अच्छे मिट्टी के घड़े में तुलसी का पौधा, क्योंकि घर में यही होता है।
 
-आठ गायें चार भैंसें बन गईं। भैंसें वह जगह थीं जहाँ असली पैसा था — ढेर सारा दूध, जैसा व्यापारी घड़ों में खरीदते हैं। अब उसे बड़े बाड़े की ज़रूरत होगी। उसने इसे मन में लगभग तीस सेकंड में बना लिया, जो असली निर्माण से तेज़ था लेकिन बेहतरीन नतीजे देता था।
+वह एक पल आँगन में बैठता है और जो उसका है उसे देखता है।
 
-आग मद्धम हो गई थी। उसने ध्यान नहीं दिया।
-
-भैंसें घोड़े बन गईं। ज़्यादा नहीं — दो, शायद तीन। घोड़े वाले आदमी को लोग अलग नज़र से देखते हैं। घोड़े वाला आदमी यात्रा कर सकता है। घोड़े वाला आदमी गाँव के नहीं, शहर के लोगों से व्यापार कर सकता है।
-
-वह अब फिर से बैठ गया था, हालाँकि उसे याद नहीं कि कब।
-
-उसके हाथ अँधेरे में थोड़ा हिल रहे थे — जोड़ते, गिनते, व्यवस्थित करते।
-
-एक घर। उसे एक सही घर चाहिए होगा। पत्थर का, मिट्टी का नहीं। दो कमरे, फिर तीन। बीच में तुलसी का पौधा लगे आँगन, क्योंकि सही घर में यही होता है।
-
-और एक घर की ज़रूरत थी — यहाँ वह एक पल रुका, बस एक पल, क्योंकि यह बाकी से बड़ा विचार था।
-
-एक घर को परिवार की ज़रूरत थी।`,
+फिर — क्योंकि इतने अच्छे आँगन में एक से ज़्यादा इंसान होने चाहिए —`,
       },
       question: {
         en: 'The house is built. The courtyard has a tulsi plant. What comes next in this world you are making?',
@@ -235,9 +195,9 @@ A house needed a family.`,
       text: {
         en: `And then — because why not, because things were going so well, because a man with horses and buffaloes and a stone house is a man who can ask for things — he had a wife.
 
-She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting just offstage for the right moment. Sensible. Capable. She kept the stone house in good order. He approved of her enormously.
+She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting for the right moment. Sensible. Capable. She kept the stone house in good order.
 
-He was barely done approving when —
+And then —
 
 They had a son.
 
@@ -260,9 +220,9 @@ Somewhere behind the courtyard and the boy and the mud-covered stable, something
 He had forgotten it was there.`,
         hi: `और फिर — क्यों नहीं, क्योंकि सब कुछ इतना अच्छा चल रहा था, क्योंकि घोड़ों और भैंसों और तुलसी के पौधे वाले पत्थर के घर वाला आदमी माँग सकता है — उसकी एक पत्नी थी।
 
-वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार करते हुए पर्दे के पीछे खड़ी थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी। वह उसे बहुत पसंद था।
+वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार कर रही थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी।
 
-वह मुश्किल से उसे पसंद करना खत्म कर पाया था जब —
+और फिर —
 
 उनका एक बेटा था।
 
@@ -319,9 +279,11 @@ He looked at the seeds spread across the bare floor. White in the moonlight. Eve
 
 Except that now they were all over the floor.
 
+He had been daydreaming.
+
 He sat there for a long time.
 
-The horses were gone. The buffaloes were gone. The stone house with the courtyard and the tulsi plant — gone. The sensible wife he had approved of — gone. The round-faced boy with mud on his feet who did not listen — gone.
+The horses were gone. The buffaloes were gone. The stone house with the courtyard and the tulsi plant — gone. The wife — gone. The round-faced boy with mud on his feet — gone.
 
 He had built an empire tonight.
 
@@ -346,9 +308,11 @@ You cannot hold the pot and the empire at the same time. Choose which one is in 
 
 बस अब वे फर्श पर बिखरे थे।
 
+वह दिवास्वप्न देख रहा था।
+
 वह बहुत देर तक वहाँ बैठा रहा।
 
-घोड़े चले गए। भैंसें चली गईं। आँगन और तुलसी के पौधे वाला पत्थर का घर — चला गया। वह समझदार पत्नी जिसे वह पसंद करता था — चली गई। पैरों पर कीचड़ लगाए वह गोल चेहरे वाला लड़का जो नहीं सुनता था — चला गया।
+घोड़े चले गए। भैंसें चली गईं। आँगन और तुलसी के पौधे वाला पत्थर का घर — चला गया। पत्नी — चली गई। पैरों पर कीचड़ लगाए वह गोल चेहरे वाला लड़का — चला गया।
 
 उसने आज रात एक साम्राज्य बनाया था।
 
@@ -384,6 +348,8 @@ You cannot hold the pot and the empire at the same time. Choose which one is in 
       text: {
         en: `Svabhavakripana opened his eyes.
 
+He had been daydreaming.
+
 The room was dark. The fire was low. The pot was beside him, one foot from his elbow, exactly where he had placed it.
 
 He looked at his arm — still raised slightly, reaching toward a boy who did not exist, in a courtyard that had never been built, behind a house he did not own.
@@ -407,9 +373,11 @@ One step. One real step.
 And as he walked home with his hands in his pockets and the faint smell of sesame still on his fingers, he thought about the stone house and almost smiled.
 
 The Panchatantra teaches:
-"The same imagination that builds castles in the air can build real ones on the ground — but only if you keep one eye open and one hand on what you actually have.
+"The same imagination that builds empires in the mind can build real ones in the world — but only if you keep one hand on what you actually have.
 Dream well. And then wake up and begin."`,
         hi: `स्वभावकृपण ने आँखें खोलीं।
+
+वह दिवास्वप्न देख रहा था।
 
 कमरा अँधेरा था। आग मद्धम थी। घड़ा उसके पास था, कोहनी से एक फुट दूर, ठीक वहाँ जहाँ उसने रखा था।
 
@@ -437,7 +405,7 @@ Dream well. And then wake up and begin."`,
 "वही कल्पना जो हवा में महल बनाती है, ज़मीन पर भी असली महल बना सकती है — लेकिन सिर्फ तभी जब एक आँख खुली रहे और एक हाथ वह थामे जो तुम्हारे पास सच में है।
 खूब सपने देखो। और फिर जागो और शुरू करो।"`,
       },
-      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds castles in the air can build real ones, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना हवा में और ज़मीन पर दोनों महल बना सकती है, अगर एक हाथ वह थामे जो तुम्हारे पास है।' },
+      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds castles in the air can build real ones, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना जो मन में साम्राज्य बनाती है, दुनिया में भी असली साम्राज्य बना सकती है — अगर एक हाथ वह थामे जो तुम्हारे पास सच में है।' },
       lessonIcon: '🌅',
     },
 
