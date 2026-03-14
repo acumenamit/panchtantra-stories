@@ -45,6 +45,7 @@ const fourFriendsAndHunter = {
       },
       choices: [
         { text: { en: '🤝 Knowing when to ask for help is wisdom, not weakness', hi: '🤝 यह जानना कि कब मदद माँगनी है बुद्धिमानी है, कमज़ोरी नहीं' }, next: 'deer_caught' },
+        { text: { en: '⚡ Acting fast matters — but acting smart matters more',  hi: '⚡ तेज़ी से कार्य करना महत्वपूर्ण है — लेकिन समझदारी से कार्य करना अधिक महत्वपूर्ण है' }, next: 'deer_caught' },
       ],
     },
 
@@ -61,6 +62,7 @@ const fourFriendsAndHunter = {
       },
       choices: [
         { text: { en: '👀 The crow\'s eyes spotted the danger — without him, no one would know', hi: '👀 कौए की आँखों ने खतरा देखा — उसके बिना, कोई नहीं जानता' }, next: 'friends_rescue' },
+        { text: { en: '🦷 The mouse\'s teeth could free them — the crow\'s beak never could',   hi: '🦷 चूहे के दाँत उन्हें आज़ाद कर सकते थे — कौए की चोंच कभी नहीं' },   next: 'friends_rescue' },
       ],
     },
 
@@ -77,6 +79,7 @@ const fourFriendsAndHunter = {
       },
       choices: [
         { text: { en: '❤️ Yes — a friend who stays safe while others suffer is no friend at all', hi: '❤️ हाँ — जो मित्र दूसरों के दुख में सुरक्षित रहे वह मित्र ही नहीं' }, next: 'tortoise_danger' },
+        { text: { en: '🤔 Maybe — bravery without ability can create new problems',              hi: '🤔 शायद — बिना क्षमता का साहस नई समस्याएँ पैदा कर सकता है' },         next: 'tortoise_danger' },
       ],
     },
 
@@ -93,6 +96,7 @@ const fourFriendsAndHunter = {
       },
       choices: [
         { text: { en: '🌟 Together, small creatures can outsmart and outmanoeuvre the powerful', hi: '🌟 मिलकर, छोटे प्राणी शक्तिशाली को मात दे सकते हैं' },         next: 'plan_executes' },
+        { text: { en: '♟️ A good plan assigns each person what they do best',                  hi: '♟️ एक अच्छी योजना हर व्यक्ति को वह काम देती है जो वह सबसे अच्छा करता है' }, next: 'plan_executes' },
       ],
     },
 
@@ -128,8 +132,8 @@ const fourFriendsAndHunter = {
       image: '/images/the-four-friends-and-the-hunter/the-four-friends-and-the-hunter-ending-friendship.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
-        en: `The tortoise reached the lake long after the others.\n\nNo one had left. All three sat waiting.\n\n"You waited," said Mantharaka, surprised.\n\n"You came for us when you were slow," said Shvetanka. "We can wait for you when you are slower."\n\nMantharaka looked at each of his friends for a long moment.\n\nThen he said something the Panchatantra has remembered for two thousand years:\n\n"A friend who stays only when it is easy is a fair-weather friend. But a friend who stays when it is hard — that friend is family."\n\nNitishastra teaches: "Do not measure friends by what they have. Measure them by what they do when you need them most."`,
-        hi: `कछुआ दूसरों के बहुत बाद झील पर पहुँचा।\n\nकोई नहीं गया था। तीनों इंतज़ार करते बैठे थे।\n\n"तुम रुके," मन्थरक ने आश्चर्य से कहा।\n\n"जब तुम धीमे थे तो तुम हमारे लिए आए," श्वेतांक ने कहा। "जब तुम और धीमे हो तो हम तुम्हारे लिए इंतज़ार कर सकते हैं।"\n\nमन्थरक ने एक लंबे पल के लिए अपने हर मित्र को देखा।\n\nफिर उसने कुछ ऐसा कहा जिसे पञ्चतन्त्र ने दो हज़ार साल तक याद रखा:\n\n"जो मित्र केवल तब रहे जब आसान हो वह मौसमी मित्र है। लेकिन जो मित्र तब रहे जब कठिन हो — वह मित्र परिवार है।"\n\nनीतिशास्त्र सिखाता है: "मित्रों को इससे मत नापो कि उनके पास क्या है। उन्हें इससे नापो कि जब तुम्हें सबसे ज़्यादा ज़रूरत हो तो वे क्या करते हैं।"`,
+        en: `The tortoise reached the lake long after the others.\n\nNo one had left. All three sat waiting.\n\n"You waited," said Mantharaka, surprised.\n\n"You came for us when you were slow," said Shvetanka. "We can wait for you when you are slower."\n\nMantharaka looked at each of his friends for a long moment.\n\nThen he said something the Panchatantra has remembered for two thousand years:\n\n"A friend who stays only when it is easy is no true friend. But a friend who stays when it is hard — that friend is family."\n\nNitishastra teaches: "Do not measure friends by what they have. Measure them by what they do when you need them most."`,
+        hi: `कछुआ दूसरों के बहुत बाद झील पर पहुँचा।\n\nकोई नहीं गया था। तीनों इंतज़ार करते बैठे थे।\n\n"तुम रुके," मन्थरक ने आश्चर्य से कहा।\n\n"जब तुम धीमे थे तो तुम हमारे लिए आए," श्वेतांक ने कहा। "जब तुम और धीमे हो तो हम तुम्हारे लिए इंतज़ार कर सकते हैं।"\n\nमन्थरक ने एक लंबे पल के लिए अपने हर मित्र को देखा।\n\nफिर उसने कुछ ऐसा कहा जिसे पञ्चतन्त्र ने दो हज़ार साल तक याद रखा:\n\n"जो मित्र केवल तब रहे जब आसान हो वह सच्चा मित्र नहीं। लेकिन जो मित्र तब रहे जब कठिन हो — वह मित्र परिवार है।"\n\nनीतिशास्त्र सिखाता है: "मित्रों को इससे मत नापो कि उनके पास क्या है। उन्हें इससे नापो कि जब तुम्हें सबसे ज़्यादा ज़रूरत हो तो वे क्या करते हैं।"`,
       },
       lesson: { en: 'A friend who stays when it is hard is not a friend — they are family.', hi: 'जो मित्र कठिन समय में रहे वह मित्र नहीं — वह परिवार है।' },
       lessonIcon: '💙',

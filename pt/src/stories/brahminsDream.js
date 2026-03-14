@@ -1,0 +1,415 @@
+const brahminsDream = {
+  id: 'one-pot-of-seeds',
+  title:       { en: 'One Pot of Seeds',               hi: 'तिल का एक घड़ा' },
+  description: { en: 'A poor brahmin finds a pot of sesame seeds and lies down to sleep. But his mind has other plans. One thought leads to another — and an entire empire rises and falls before morning.',
+                 hi: 'एक गरीब ब्राह्मण को तिल का एक घड़ा मिलता है और वह सोने लेट जाता है। लेकिन उसके मन की और ही योजना है। एक विचार दूसरे को जन्म देता है — और सुबह होने से पहले एक पूरा साम्राज्य उठता और गिरता है।' },
+  theme:       { en: 'A dream unguarded can cost you everything real', hi: 'बेलगाम सपना सब कुछ असली छीन सकता है' },
+  age: '6+',
+  duration:    { en: '8–12 min', hi: '८–१२ मिनट' },
+  addedOn: '2026-03-09',
+  featured: false,
+  emoji: '🏺',
+  color: '#f59e0b',
+  book:        { en: 'Panchatantra — Book IV', hi: 'पञ्चतन्त्र — चतुर्थ भाग' },
+  progressSteps: ['start', 'seeds_to_gold', 'gold_to_cattle', 'cattle_to_family', 'ending_crash'],
+
+  nodes: {
+
+    // ── NODE 1 ─────────────────────────────────────────────────
+    // Brahmin finds the pot. Lies down. First thought arrives.
+    // Single choice — just one small wondering. Forward only.
+    // IMAGE: start.jpg — a thin brahmin lying on a simple mat
+    //        in a bare room at night, a clay pot of sesame seeds
+    //        beside him, one eye open, a single small thought
+    //        bubble beginning to form above his head, moonlight
+    //        through a small window, expression of quiet curiosity
+    // ──────────────────────────────────────────────────────────
+    start: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-start.jpg',
+      text: {
+        en: `Svabhavakripana the brahmin was, by his own admission, a man of very little.
+
+A bare room. A thin mat. A small fire that gave more smoke than heat. He worked as a teacher of verses, which in his village meant he was paid mostly in gratitude and occasionally in grain.
+
+But today had been different.
+
+A wealthy merchant, pleased with a recitation, had given him something extraordinary — a large clay pot, filled to the brim with sesame seeds. Good seeds. Clean seeds. Worth real money at the market.
+
+He carried it home carefully, set it beside his mat, and lay down to sleep.
+
+He placed one hand on the pot. Just to be sure it was there.
+
+It was there.
+
+He stared at the ceiling.
+
+The fire crackled. Outside, the village settled into night. Somewhere a dog barked once and went quiet.
+
+Svabhavakripana looked at the pot.
+
+One thought came:
+
+"What if I sold these seeds tomorrow?"`,
+        hi: `स्वभावकृपण ब्राह्मण, अपनी स्वीकृति से, बहुत कम का आदमी था।
+
+एक खाली कमरा। एक पतली चटाई। एक छोटी आग जो गर्मी से ज़्यादा धुआँ देती थी। वह श्लोक पढ़ाने का काम करता था, जिसका मतलब उसके गाँव में था कि उसे ज़्यादातर कृतज्ञता और कभी-कभी अनाज मिलता था।
+
+लेकिन आज का दिन अलग था।
+
+एक अमीर व्यापारी, एक पाठ से प्रसन्न होकर, उसे कुछ असाधारण दे गया था — एक बड़ा मिट्टी का घड़ा, तिल के बीजों से भरा हुआ। अच्छे बीज। साफ़ बीज। बाज़ार में असली पैसे की कीमत।
+
+वह उसे सावधानी से घर ले आया, चटाई के पास रखा, और सोने लेट गया।
+
+उसने एक हाथ घड़े पर रखा। बस यह पक्का करने के लिए कि वह वहाँ है।
+
+था।
+
+उसने छत को देखा।
+
+आग चटचटाई। बाहर, गाँव रात में सो गया। कहीं एक कुत्ता एक बार भौंका और चुप हो गया।
+
+स्वभावकृपण ने घड़े को देखा।
+
+एक विचार आया:
+
+"क्या हो अगर मैं कल ये बीज बेच दूँ?"`,
+      },
+      question: {
+        en: 'Just one small thought. Harmless enough. Where does it go from here?',
+        hi: 'बस एक छोटा सा विचार। काफी हानिरहित। यहाँ से यह कहाँ जाता है?',
+      },
+      choices: [
+        { text: { en: '😏 "Oh, this is interesting. Keep going."', hi: '😏 "ओह, यह दिलचस्प है। आगे बढ़ते हैं।"' }, next: 'seeds_to_gold' },
+      ],
+    },
+
+    // ── NODE 2 ─────────────────────────────────────────────────
+    // Seeds sold, money in hand. Mind races to goats.
+    // Single choice — the first leap. Forward only.
+    // IMAGE: seeds_to_gold.jpg — the brahmin still lying on his
+    //        mat, eyes now bright and open, above him a dream
+    //        sequence begins to form: seeds transforming into
+    //        gleaming coins in his imagination, his hands
+    //        gesturing slightly in the air as he thinks
+    // ──────────────────────────────────────────────────────────
+    seeds_to_gold: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-seeds-to-gold.jpg',
+      text: {
+        en: `The market is loud and the merchant is pleased — good seeds, clean seeds, exactly what he was looking for. The coins land in Svabhavakripana's palm one by one. He counts them without looking. He already knows the number.
+
+A real sum. Not a fortune. A start.
+
+The coins become three goats. Young ones. Brown. One with a bell around her neck that rings every time she moves. They are in the pen behind the house — a good pen, solid posts, the goats fat and restless and entirely his.
+
+Three goats become six. Six become twelve. The bell rings and rings.
+
+His breathing slows. His face settles into something new — the particular expression of a man watching his own life improve.
+
+"Goats," he murmurs.`,
+        hi: `बाज़ार शोरगुल से भरा है और व्यापारी खुश है — अच्छे बीज, साफ़ बीज, ठीक वही जो वह चाहता था। सिक्के एक-एक करके स्वभावकृपण की हथेली पर गिरते हैं। वह बिना देखे गिनता है। गिनती पहले से पता है।
+
+एक असली रकम। भाग्य नहीं। एक शुरुआत।
+
+सिक्के तीन बकरियाँ बन जाते हैं। छोटी। भूरी। एक के गले में घंटी जो हर बार हिलने पर बजती है। वे घर के पीछे बाड़े में हैं — अच्छा बाड़ा, मज़बूत खम्भे, बकरियाँ मोटी और बेचैन और पूरी तरह उसकी।
+
+तीन बकरियाँ छह हो जाती हैं। छह बारह। घंटी बजती रहती है।
+
+उसकी साँस धीमी हो जाती है। चेहरे पर कुछ नया उतरता है — एक आदमी का वह खास भाव जो अपनी ज़िंदगी को बेहतर होते देख रहा हो।
+
+"बकरियाँ," वह बुदबुदाता है।`,
+      },
+      question: {
+        en: 'The goats are multiplying nicely in your mind. Where does this go next?',
+        hi: 'बकरियाँ मन में अच्छी तरह बढ़ रही हैं। यह आगे कहाँ जाता है?',
+      },
+      choices: [
+        { text: { en: '🤩 "Yes. Yes! This could actually work."', hi: '🤩 "हाँ। हाँ! यह सच में काम कर सकता है।"' }, next: 'gold_to_cattle' },
+      ],
+    },
+
+    // ── NODE 3 ─────────────────────────────────────────────────
+    // Goats to cows to buffaloes to horses. A prosperous man now.
+    // Mind leaps to the social — a house, a wife, a family.
+    // Single choice — the biggest leap yet. Forward only.
+    // IMAGE: gold_to_cattle.jpg — brahmin on his mat, eyes closed
+    //        and smiling, above him an elaborate dream world
+    //        visible: goats, then cows, then buffaloes in
+    //        procession, a fine house beginning to take shape
+    //        at the edge of the dream, wealth accumulating
+    // ──────────────────────────────────────────────────────────
+    gold_to_cattle: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-gold-to-cattle.jpg',
+      text: {
+        en: `The goats are gone.
+
+In their place — cows. Four, then eight. The man outside the village who deals in cattle is honest enough and the handshake is firm. The deal is done before either of them can change their minds.
+
+Eight cows become four buffaloes. Big ones. The kind that give milk by the vat, the kind city merchants send riders out to buy. The new pen is larger, sturdier, built from good timber. It smells of hay and animals and money.
+
+Two horses stand in the stable. Maybe three. People in the village look at him differently now — they step aside, they ask his opinion, they remember his name. He rides to the city. He rides back. The road between here and there belongs to him.
+
+The stone house takes shape around him. Two rooms, then three. A proper courtyard. A tulsi plant in the centre in a good clay pot, because that is what a home has.
+
+He sits in the courtyard for a moment and looks at what is his.
+
+Then — because a courtyard this good deserves more than one person in it —`,
+        hi: `बकरियाँ जा चुकी हैं।
+
+उनकी जगह — गायें। चार, फिर आठ। गाँव के बाहर का मवेशी व्यापारी ईमानदार है और हाथ मिलाना पक्का है। दोनों के मन बदलने से पहले सौदा हो जाता है।
+
+आठ गायें चार भैंसें बन जाती हैं। बड़ी। घड़ों भर दूध देने वाली, जैसी शहर के व्यापारी सवार भेजकर खरीदते हैं। नया बाड़ा बड़ा है, मज़बूत है, अच्छी लकड़ी से बना है। भूसे और जानवरों और पैसे की खुशबू आती है।
+
+अस्तबल में दो घोड़े खड़े हैं। शायद तीन। गाँव के लोग अब उसे अलग नज़र से देखते हैं — रास्ता देते हैं, राय माँगते हैं, नाम याद रखते हैं। वह शहर जाता है। वापस आता है। यहाँ से वहाँ तक का रास्ता उसका है।
+
+पत्थर का घर उसके चारों ओर आकार लेता है। दो कमरे, फिर तीन। एक सही आँगन। बीच में एक अच्छे मिट्टी के घड़े में तुलसी का पौधा, क्योंकि घर में यही होता है।
+
+वह एक पल आँगन में बैठता है और जो उसका है उसे देखता है।
+
+फिर — क्योंकि इतने अच्छे आँगन में एक से ज़्यादा इंसान होने चाहिए —`,
+      },
+      question: {
+        en: 'The house is built. The courtyard has a tulsi plant. What comes next in this world you are making?',
+        hi: 'घर बन गया। आँगन में तुलसी का पौधा है। इस दुनिया में जो तुम बना रहे हो, आगे क्या आता है?',
+      },
+      choices: [
+        { text: { en: '😄 "I am just getting started."', hi: '😄 "मैं तो अभी शुरू ही हुआ हूँ।"' }, next: 'cattle_to_family' },
+      ],
+    },
+
+    // ── NODE 4 — THE REAL FORK ─────────────────────────────────
+    // The empire is complete. Now the son misbehaves.
+    // Brahmin reaches to discipline him. One moment of choice.
+    // IMAGE: cattle_to_family.jpg — brahmin sitting upright on
+    //        his mat now, fully animated, arm beginning to extend
+    //        outward mid-gesture, the clay pot VERY visible and
+    //        close beside him, above him in dream: a beautiful
+    //        house, wife, child, the whole imagined empire at
+    //        its peak — and the child beginning to misbehave
+    // ──────────────────────────────────────────────────────────
+    cattle_to_family: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-family.jpg',
+      text: {
+        en: `And then — because why not, because things were going so well, because a man with horses and buffaloes and a stone house is a man who can ask for things — he had a wife.
+
+She arrived the way good things arrive when everything is going very well: completely, without difficulty, as if she had been waiting for the right moment. Sensible. Capable. She kept the stone house in good order.
+
+And then —
+
+They had a son.
+
+And now he could see it all so clearly — the boy especially. Five years old perhaps, round-faced, with his mother's eyes. Running in the courtyard. Getting into things. A normal, healthy, maddening child.
+
+He watched the boy with the particular mixture of pride and exasperation that only a parent knows.
+
+The horses needed attention and the boy had gone into the stable despite being told three times this week, explicitly, not to go into the stable, and now there was mud everywhere—
+
+Svabhavakripana raised his arm.
+
+"Come here. I have told you before about the stable. You do not listen and a father must—"
+
+He paused.
+
+His arm was still in the air.
+
+Somewhere behind the courtyard and the boy and the mud-covered stable, something hard and cool pressed against his elbow.
+
+He had forgotten it was there.`,
+        hi: `और फिर — क्यों नहीं, क्योंकि सब कुछ इतना अच्छा चल रहा था, क्योंकि घोड़ों और भैंसों और तुलसी के पौधे वाले पत्थर के घर वाला आदमी माँग सकता है — उसकी एक पत्नी थी।
+
+वह उस तरह आई जैसे अच्छी चीज़ें तब आती हैं जब सब कुछ ठीक चल रहा हो: पूरी तरह, बिना किसी मुश्किल के, जैसे सही पल का इंतज़ार कर रही थी। समझदार। सक्षम। वह पत्थर के घर को ठीक रखती थी।
+
+और फिर —
+
+उनका एक बेटा था।
+
+और अब वह सब इतना साफ़ दिख रहा था — खासकर लड़का। शायद पाँच साल का, गोल चेहरा, माँ की आँखें। आँगन में दौड़ता हुआ। चीज़ों में हाथ डालता हुआ। एक सामान्य, स्वस्थ, थकाने वाला बच्चा।
+
+उसने लड़के को उस खास मिश्रण से देखा जो सिर्फ माता-पिता जानते हैं — गर्व और झुँझलाहट का।
+
+घोड़ों को ध्यान देने की ज़रूरत थी और लड़का अस्तबल में चला गया था, इस हफ्ते तीन बार साफ़ मना करने के बावजूद, अस्तबल में मत जाओ, और अब हर जगह कीचड़ था —
+
+स्वभावकृपण ने हाथ उठाया।
+
+"इधर आओ। मैंने तुम्हें अस्तबल के बारे में पहले भी बताया है। तुम सुनते नहीं और एक पिता को —"
+
+वह रुका।
+
+उसका हाथ अभी भी हवा में था।
+
+आँगन और लड़के और कीचड़ भरे अस्तबल के पीछे कहीं, कुछ सख्त और ठंडा उसकी कोहनी से लगा।
+
+वह भूल गया था कि वह वहाँ था।`,
+      },
+      question: {
+        en: 'Your arm is up. The boy is waiting. Something cold is pressing against your elbow. What do you do?',
+        hi: 'तुम्हारा हाथ उठा है। लड़का इंतज़ार कर रहा है। कुछ ठंडा तुम्हारी कोहनी से लग रहा है। तुम क्या करते हो?',
+      },
+      choices: [
+        { text: { en: '👆 "Teach him. My arm is already raised — finish it."',  hi: '👆 "उसे सिखाओ। हाथ पहले से उठा है — पूरा करो।"' }, next: 'ending_crash' },
+        { text: { en: '😌 "Stop. Something just touched my elbow."',    hi: '😌 "रुको। अभी कुछ मेरी कोहनी से लगा।"' },              next: 'ending_awake' },
+      ],
+    },
+
+    // ── ENDING 1 ───────────────────────────────────────────────
+    // He reaches. His elbow hits the pot. Seeds everywhere.
+    // Sits in the dark surrounded by the ruins of everything.
+    // IMAGE: ending_crash.jpg — brahmin sitting in shock on his
+    //        mat, the shattered or tipped clay pot beside him,
+    //        sesame seeds scattered across the floor catching
+    //        the moonlight, his arm still extended mid-gesture,
+    //        his expression the particular blankness of someone
+    //        who has just lost something very real and very gone
+    // ──────────────────────────────────────────────────────────
+    ending_crash: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-ending-crash.jpg',
+      isEnding: true,
+      text: {
+        en: `His elbow caught the pot.
+
+The sound was not dramatic. A soft thud, a rolling, a long hiss as thousands of seeds poured across the floor.
+
+Svabhavakripana sat very still.
+
+He looked at the seeds spread across the bare floor. White in the moonlight. Every single one of them exactly where it had been before — still seeds, still real, still worth the same money at tomorrow's market.
+
+Except that now they were all over the floor.
+
+He had been daydreaming.
+
+He sat there for a long time.
+
+The horses were gone. The buffaloes were gone. The stone house with the courtyard and the tulsi plant — gone. The wife — gone. The round-faced boy with mud on his feet — gone.
+
+He had built an empire tonight.
+
+He had also destroyed it.
+
+Both, without leaving this room. Both, without the seeds ever becoming anything more than seeds.
+
+He began, slowly, to sweep them back into the pot with his hands.
+
+The fire had gone out. The room was cold. Outside, the dog barked once and went quiet.
+
+The Panchatantra teaches:
+"The man who lives only in his dreams forgets to guard what is real. While he is being a king in his mind, the seeds spill on the floor.
+You cannot hold the pot and the empire at the same time. Choose which one is in your hands."`,
+        hi: `उसकी कोहनी घड़े से लगी।
+
+आवाज़ नाटकीय नहीं थी। एक हल्की थपथपाहट, लुढ़कना, एक लंबी सी आवाज़ जब हज़ारों बीज फर्श पर बिखर गए।
+
+स्वभावकृपण बिल्कुल स्थिर बैठा रहा।
+
+उसने खाली फर्श पर फैले बीजों को देखा। चाँदनी में सफ़ेद। उनमें से हर एक ठीक वहीं था जहाँ पहले था — अभी भी बीज, अभी भी असली, कल के बाज़ार में अभी भी उतनी ही कीमत।
+
+बस अब वे फर्श पर बिखरे थे।
+
+वह दिवास्वप्न देख रहा था।
+
+वह बहुत देर तक वहाँ बैठा रहा।
+
+घोड़े चले गए। भैंसें चली गईं। आँगन और तुलसी के पौधे वाला पत्थर का घर — चला गया। पत्नी — चली गई। पैरों पर कीचड़ लगाए वह गोल चेहरे वाला लड़का — चला गया।
+
+उसने आज रात एक साम्राज्य बनाया था।
+
+उसने उसे नष्ट भी किया था।
+
+दोनों, इस कमरे से बाहर जाए बिना। दोनों, बिना बीजों के बीजों से कुछ और बने।
+
+उसने धीरे-धीरे उन्हें हाथों से घड़े में वापस समेटना शुरू किया।
+
+आग बुझ गई थी। कमरा ठंडा था। बाहर, कुत्ता एक बार भौंका और चुप हो गया।
+
+पञ्चतन्त्र सिखाता है:
+"जो आदमी केवल सपनों में जीता है वह असली चीज़ की रखवाली करना भूल जाता है। जब वह मन में राजा बन रहा होता है, बीज फर्श पर बिखर जाते हैं।
+घड़ा और साम्राज्य एक साथ हाथ में नहीं रह सकते। चुनो कि तुम्हारे हाथ में कौन सा है।"`,
+      },
+      lesson: { en: "You cannot hold the pot and the empire at the same time. Dreams are good servants but dangerous masters.", hi: 'घड़ा और साम्राज्य एक साथ हाथ में नहीं रह सकते। सपने अच्छे सेवक हैं लेकिन खतरनाक मालिक।' },
+      lessonIcon: '🏺',
+    },
+
+    // ── ENDING 2 ───────────────────────────────────────────────
+    // He catches himself. Opens his eyes. Pot still there.
+    // In the morning, sells the seeds — one real step at a time.
+    // IMAGE: ending_awake.jpg — brahmin sitting on his mat in
+    //        early morning light, the clay pot safe beside him,
+    //        his hand resting gently on it, a small genuine smile,
+    //        the window showing the first pale light of dawn,
+    //        the room the same bare room but now somehow enough
+    // ──────────────────────────────────────────────────────────
+    ending_awake: {
+      scene: 'village',
+      image: '/images/the-brahmins-dream/the-brahmins-dream-ending-awake.jpg',
+      isEnding: true,
+      text: {
+        en: `Svabhavakripana opened his eyes.
+
+He had been daydreaming.
+
+The room was dark. The fire was low. The pot was beside him, one foot from his elbow, exactly where he had placed it.
+
+He looked at his arm — still raised slightly, reaching toward a boy who did not exist, in a courtyard that had never been built, behind a house he did not own.
+
+He lowered his arm slowly.
+
+He sat with it for a moment. The whole journey — the seeds, the goats, the cows, the buffaloes, the horses, the stone house, the sensible wife, the round-faced boy with mud on his feet. The entire empire that had risen and nearly fallen in the space of a single night.
+
+Then he laughed. A short, real, quiet laugh — the kind that comes when you catch yourself doing something very human.
+
+He put his hand on the pot. It was cool and full and solid.
+
+"Still here," he said.
+
+He lay back down. This time he slept.
+
+In the morning, he went to the market. He sold the seeds for a fair price. He spent the money carefully — a little for food, a little saved, a little toward a better fire for the winter.
+
+One step. One real step.
+
+And as he walked home with his hands in his pockets and the faint smell of sesame still on his fingers, he thought about the stone house and almost smiled.
+
+The Panchatantra teaches:
+"The same imagination that builds empires in the mind can build real ones in the world — but only if you keep one hand on what you actually have.
+Dream well. And then wake up and begin."`,
+        hi: `स्वभावकृपण ने आँखें खोलीं।
+
+वह दिवास्वप्न देख रहा था।
+
+कमरा अँधेरा था। आग मद्धम थी। घड़ा उसके पास था, कोहनी से एक फुट दूर, ठीक वहाँ जहाँ उसने रखा था।
+
+उसने अपना हाथ देखा — अभी भी थोड़ा उठा हुआ, एक ऐसे लड़के की तरफ पहुँचता जो था ही नहीं, उस आँगन में जो कभी बना ही नहीं, उस घर के पीछे जो उसका था ही नहीं।
+
+उसने धीरे-धीरे हाथ नीचे किया।
+
+वह एक पल के साथ बैठा रहा। पूरी यात्रा — बीज, बकरियाँ, गायें, भैंसें, घोड़े, पत्थर का घर, समझदार पत्नी, पैरों पर कीचड़ लगाए गोल चेहरे वाला लड़का। पूरा साम्राज्य जो एक ही रात में उठा था और लगभग गिर गया था।
+
+फिर वह हँसा। एक छोटी, असली, शांत हँसी — जो तब आती है जब तुम खुद को कुछ बहुत इंसानी करते हुए पकड़ लो।
+
+उसने घड़े पर हाथ रखा। ठंडा और भरा और ठोस था।
+
+"अभी भी यहाँ है," उसने कहा।
+
+वह फिर लेट गया। इस बार सो गया।
+
+सुबह, वह बाज़ार गया। उसने बीज सही दाम पर बेचे। पैसे सावधानी से खर्च किए — थोड़ा खाने के लिए, थोड़ा बचाया, थोड़ा सर्दी के लिए बेहतर आग की तरफ।
+
+एक कदम। एक असली कदम।
+
+और जब वह जेब में हाथ डाले घर चला और उँगलियों पर तिल की हल्की खुशबू थी, तो उसने पत्थर के घर के बारे में सोचा और लगभग मुस्कुराया।
+
+पञ्चतन्त्र सिखाता है:
+"वही कल्पना जो हवा में महल बनाती है, ज़मीन पर भी असली महल बना सकती है — लेकिन सिर्फ तभी जब एक आँख खुली रहे और एक हाथ वह थामे जो तुम्हारे पास सच में है।
+खूब सपने देखो। और फिर जागो और शुरू करो।"`,
+      },
+      lesson: { en: "Dream well — and then wake up and begin. The same imagination that builds empires in the mind can build real ones in the world, if you keep one hand on what you have.", hi: 'खूब सपने देखो — और फिर जागो और शुरू करो। वही कल्पना जो मन में साम्राज्य बनाती है, दुनिया में भी असली साम्राज्य बना सकती है — अगर एक हाथ वह थामे जो तुम्हारे पास सच में है।' },
+      lessonIcon: '🌅',
+    },
+
+  },
+};
+
+export default brahminsDream;

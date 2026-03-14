@@ -71,8 +71,8 @@ He stood at the edge of the field, one paw raised, the sound still ringing in hi
 वह मैदान के किनारे खड़ा था, एक पंजा उठा हुआ, कानों में अभी भी वह आवाज़ गूँज रही थी।`,
       },
       question: {
-        en: `Three days of hunger. One enormous sound. Does hunger win — or does fear?\n... Or... do his legs carry him back into the dark before he even decides?`,
-        hi: `तीन दिन की भूख। एक विशाल आवाज़। क्या भूख जीतती है — या डर?\n... या... क्या उसके पैर उसे तय करने से पहले ही वापस अँधेरे में ले जाते हैं?`,
+        en: 'Your legs want to run. Your stomach says stay. What do you hold onto right now?',
+        hi: 'पैर भागना चाहते हैं। पेट कहता है रुको। अभी तुम किसे थामे रहते हो?',
       },
       choices: [
         { text: { en: '😤 "I\'ve been hungry for three days. Whatever that sound is — it\'s not going to stop me from eating tonight."', hi: '😤 "तीन दिन से भूखा हूँ। वह आवाज़ चाहे जो हो — आज रात मुझे खाने से नहीं रोकेगी।"' }, next: 'the_mind_invents' },
@@ -152,8 +152,8 @@ It didn't seem to be doing anything at all.`,
 यह कुछ भी करता नहीं लग रहा था।`,
       },
       question: {
-        en: `The monster in his head keeps growing with every boom. But it hasn't moved. It hasn't come for him.\n... Is he brave enough to notice that — or does fear keep building the creature larger?`,
-        hi: `दिमाग का राक्षस हर धूम के साथ बड़ा होता जाता है। लेकिन वह हिला नहीं। उसके पास नहीं आया।\n... क्या वह यह नोटिस करने के लिए काफी साहसी है — या डर उस प्राणी को और बड़ा बनाता रहेगा?`,
+        en: 'Every boom makes the monster in your head bigger. But it hasn\'t moved. It hasn\'t come for you. What do you tell yourself right now?',
+        hi: 'हर धूम तुम्हारे दिमाग के राक्षस को बड़ा करती है। लेकिन वह हिला नहीं। तुम्हारे पास नहीं आया। अभी तुम खुद से क्या कहते हो?',
       },
       choices: [
         { text: { en: '😰 "Every time it booms, it gets bigger in my head. I don\'t know what\'s in there. But I\'m still not running."', hi: '😰 "हर बार जब यह बोलती है, मेरे दिमाग में बड़ी होती जाती है। नहीं जानता क्या है वहाँ। लेकिन मैं अभी भी भाग नहीं रहा।"' }, next: 'the_approach' },
@@ -215,8 +215,8 @@ He put one paw forward.`,
 उसने एक पंजा आगे रखा।`,
       },
       question: {
-        en: `One step. One look around that wall. That is all it takes to know what this really is.\n... Does he look — or does he pull back into the dark where it's familiar and safe?`,
-        hi: `एक कदम। उस दीवार के आसपास एक नज़र। बस इतना काफी है जानने के लिए कि यह सच में क्या है।\n... क्या वह देखता है — या वापस उस अँधेरे में लौट जाता है जो जाना-पहचाना और सुरक्षित है?`,
+        en: 'One step. One look. That is all it takes to know. Do you look — or do you go back into the dark?',
+        hi: 'एक कदम। एक नज़र। बस इतना काफी है जानने के लिए। क्या तुम देखते हो — या वापस अँधेरे में जाते हो?',
       },
       choices: [
         { text: { en: '🦊 "I\'m looking. Whatever it is — I need to know."',      hi: '🦊 "मैं देखूँगा। जो भी हो — मुझे जानना है।"' },          next: 'sees_the_drum' },
@@ -297,8 +297,8 @@ BOOM, said the drum.
 "हाँ," गोमाय ने कहा। "हाँ, मुझे पता है।"`,
       },
       question: {
-        en: `He found food. He found the truth. And he found it because he looked.\n... Does he go back to share what he knows — or does he keep this battlefield for himself alone?`,
-        hi: `उसे खाना मिला। सच मिला। और मिला क्योंकि उसने देखा।\n... क्या वह वापस जाकर जो जानता है वह साझा करता है — या इस युद्धभूमि को अकेले अपने लिए रखता है?`,
+        en: 'You found food. You found the truth. And you found it because you looked. Now — what do you do with what you know?',
+        hi: 'तुम्हें खाना मिला। सच मिला। और मिला क्योंकि तुमने देखा। अब — जो तुम जानते हो उसका क्या करते हो?',
       },
       choices: [
         { text: { en: '😂 "I\'m going back to tell every animal what\'s in here. No one should be afraid of this."', hi: '😂 "मैं वापस जाऊँगा और हर जानवर को बताऊँगा यहाँ क्या है। किसी को इससे नहीं डरना चाहिए।"' }, next: 'ending_proud' },
