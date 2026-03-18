@@ -1,29 +1,167 @@
-// AudioButton — pure display component.
-// useAudio lives in StoryEngine; this just renders the button.
-export default function AudioButton({ isPlaying, isSupported, onToggle, lang, accent }) {
-  if (!isSupported) return null;
+// ─────────────────────────────────────────────────────────────
+//  AudioButton.js
+//  Plays pre-generated audio from /audio/{storyId}/{nodeId}.{lang}.mp3
+// ─────────────────────────────────────────────────────────────
 
+import { useState, useRef, useEffect } from 'react';
+
+export default function AudioButton({ storyId, nodeId, lang, accent, audioReady, audioActive, setAudioActive }) {
+  const [isPlaying,   setIsPlaying]   = useState(false);
+  const [hasFile,     setHasFile]     = useState(null);
+  const [everHadFile, setEverHadFile] = useState(false);
+  const [isChecking,  setIsChecking]  = useState(false);
+  const audioRef    = useRef(null);
+  const loadTokenRef = useRef(null);
+
+  const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
+
+  // ── Load audio whenever the path or audioReady flag changes ──
+  useEffect(() => {
+    if (!audioReady) {
+      // Path changed but assets not ready yet — stop any current playback
+      // and mark state as loading, but don't clear everHadFile
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setIsPlaying(false);
+      setHasFile(null);
+      setIsChecking(false);
+      return;
+    }
+
+    // Invalidate any in-flight load from a previous render
+    const token = Symbol();
+    loadTokenRef.current = token;
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setIsPlaying(false);
+    setHasFile(null);
+    setIsChecking(true);
+
+    const audio = new window.Audio();
+
+    audio.addEventListener('canplaythrough', () => {
+      if (loadTokenRef.current !== token) return; // stale — a newer load is in flight
+      audioRef.current = audio;
+      setHasFile(true);
+      setEverHadFile(true);
+      setIsChecking(false);
+    }, { once: true });
+
+    audio.addEventListener('error', () => {
+      if (loadTokenRef.current !== token) return;
+      setHasFile(false);
+      setIsChecking(false);
+    }, { once: true });
+
+    audio.src = audioPath;
+    audio.load();
+
+    // Cleanup: invalidate token so in-flight callbacks become no-ops
+    // Do NOT pause the audio here — let it keep buffering silently
+    // so the canplaythrough event still fires and sets hasFile correctly.
+    return () => {
+      loadTokenRef.current = Symbol(); // new symbol ≠ token → stale
+    };
+  }, [audioReady, audioPath]); // eslint-disable-line
+
+  // ── Auto-play when file is ready if audioActive is set ───────
+  // audioActive = user turned on audio on a previous node and hasn't stopped it.
+  // hasFile flips null → true once the file finishes buffering,
+  // which reliably re-runs this effect.
+  useEffect(() => {
+    if (!audioActive || !audioRef.current || hasFile !== true) return;
+    const audio = audioRef.current;
+    audio.onended = () => setIsPlaying(false);
+    audio.play()
+      .then(() => setIsPlaying(true))
+      .catch(() => setIsPlaying(false));
+  }, [hasFile, audioActive]); // eslint-disable-line
+
+  // ── Clean up on unmount ───────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      loadTokenRef.current = Symbol(); // invalidate any in-flight loads
+      audioRef.current?.pause();
+    };
+  }, []);
+
+  // ── Toggle play / stop ────────────────────────────────────────
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying) {
+      audio.pause();
+      audio.currentTime = 0;
+      setIsPlaying(false);
+      setAudioActive(false); // user explicitly stopped — clear intent
+    } else {
+      audio.onended = () => setIsPlaying(false);
+      audio.play()
+        .then(() => { setIsPlaying(true); setAudioActive(true); })
+        .catch(() => setIsPlaying(false));
+    }
+  };
+
+  // ── Loading state ─────────────────────────────────────────────
+  if (!audioReady || isChecking || hasFile === null) {
+    if (!everHadFile) return null; // first load — stay invisible, no flash
+    return (
+      <button disabled style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 14px', borderRadius: 20,
+        border: '1px solid rgba(255,255,255,0.1)',
+        background: 'rgba(255,255,255,0.02)',
+        color: 'rgba(255,255,255,0.25)',
+        fontFamily: 'var(--mono)', fontSize: '0.72rem',
+        letterSpacing: '0.06em', cursor: 'not-allowed',
+      }}>
+        <span style={{ fontSize: '1rem' }}>🔊</span>
+        {lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}
+      </button>
+    );
+  }
+
+  // ── File missing ──────────────────────────────────────────────
+  if (hasFile === false) {
+    if (!everHadFile) return null;
+    return (
+      <button disabled style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 14px', borderRadius: 20,
+        border: '1px solid rgba(255,255,255,0.1)',
+        background: 'rgba(255,255,255,0.02)',
+        color: 'rgba(255,255,255,0.2)',
+        fontFamily: 'var(--mono)', fontSize: '0.72rem',
+        letterSpacing: '0.06em', cursor: 'not-allowed',
+      }}>
+        <span style={{ fontSize: '1rem' }}>🔊</span>
+        {lang === 'hi' ? 'उपलब्ध नहीं' : 'Not available'}
+      </button>
+    );
+  }
+
+  // ── Ready ─────────────────────────────────────────────────────
   const label = isPlaying
     ? (lang === 'hi' ? 'रोकें' : 'Stop')
     : (lang === 'hi' ? 'सुनें' : 'Listen');
 
   return (
     <button
-      onClick={onToggle}
+      onClick={toggle}
       title={label}
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '7px 14px',
-        borderRadius: 20,
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 14px', borderRadius: 20,
         border: `1px solid ${isPlaying ? accent : 'rgba(255,255,255,0.2)'}`,
         background: isPlaying ? `${accent}22` : 'rgba(255,255,255,0.04)',
         color: isPlaying ? accent : 'rgba(255,255,255,0.55)',
-        fontFamily: 'var(--mono)',
-        fontSize: '0.72rem',
-        letterSpacing: '0.06em',
-        cursor: 'pointer',
+        fontFamily: 'var(--mono)', fontSize: '0.72rem',
+        letterSpacing: '0.06em', cursor: 'pointer',
         transition: 'all 0.2s ease',
         fontWeight: isPlaying ? 700 : 400,
       }}
@@ -40,18 +178,13 @@ export default function AudioButton({ isPlaying, isSupported, onToggle, lang, ac
         }
       }}
     >
-      <span style={{ fontSize: '1rem' }}>
-        {isPlaying ? '⏹' : '🔊'}
-      </span>
+      <span style={{ fontSize: '1rem' }}>{isPlaying ? '⏹' : '🔊'}</span>
       {label}
-
       {isPlaying && (
         <span style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 2 }}>
           {[1, 2, 3].map(i => (
             <span key={i} style={{
-              display: 'inline-block',
-              width: 3,
-              borderRadius: 2,
+              display: 'inline-block', width: 3, borderRadius: 2,
               background: accent,
               animation: `soundbar 0.8s ease-in-out ${i * 0.15}s infinite alternate`,
               height: i === 2 ? 12 : 7,
