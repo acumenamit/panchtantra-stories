@@ -26,6 +26,7 @@ export default function StoryEngine({ story }) {
   const [history,   setHistory]  = useState([]);
   const [fading,    setFading]   = useState(false);
   const [pickedNext, setPicked]  = useState(null);
+  const [imgLoaded,  setImgLoaded] = useState(false);
 
   // Single audio instance for the whole story session.
   // Lives here so it survives node transitions without unmounting.
@@ -50,7 +51,7 @@ export default function StoryEngine({ story }) {
 
   const go = (nextId, choiceText) => {
     trackChoiceMade(story.id, nodeId, choiceText || nextId, lang);
-    stop(); // stop audio before transition — prevents unmount-cancel race
+    stop(); // stop audio before transition
     setPicked(nextId);
     setFading(true);
     setTimeout(() => {
@@ -58,6 +59,7 @@ export default function StoryEngine({ story }) {
       setNodeId(nextId);
       setTextDone(false);
       setPicked(null);
+      setImgLoaded(false);
       setFading(false);
     }, 370);
   };
@@ -71,6 +73,7 @@ export default function StoryEngine({ story }) {
       setHistory(h => h.slice(0, -1));
       setNodeId(prev);
       setTextDone(false);
+      setImgLoaded(false);
       setFading(false);
     }, 300);
   };
@@ -83,6 +86,7 @@ export default function StoryEngine({ story }) {
       setNodeId('start');
       setHistory([]);
       setTextDone(false);
+      setImgLoaded(false);
       setFading(false);
     }, 300);
   };
@@ -146,6 +150,39 @@ export default function StoryEngine({ story }) {
       {/* ── Card ── */}
       <div style={{ width:'100%', maxWidth:660, background:'rgba(8,6,10,0.96)', border:`1px solid ${accent}55`, borderRadius:24, overflow:'hidden', boxShadow:`0 0 80px rgba(0,0,0,0.9), 0 0 40px ${accent}18`, opacity:fading?0:1, transform:fading?'translateY(10px)':'translateY(0)', transition:'opacity 0.35s ease, transform 0.35s ease' }}>
         <div style={{ height:3, background:`linear-gradient(90deg,transparent,${accent},transparent)` }} />
+
+        {/* ── Story image ── */}
+        {node.image && (
+          <div style={{ position:'relative', overflow:'hidden', background:'rgba(0,0,0,0.4)', minHeight: imgLoaded ? 0 : 0 }}>
+            {/* Placeholder shown while image loads */}
+            {!imgLoaded && (
+              <div style={{ width:'100%', height:220, background:`linear-gradient(135deg,${accent}11,rgba(0,0,0,0.3))`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <div style={{ width:32, height:32, borderRadius:'50%', border:`2px solid ${accent}44`, borderTopColor:accent, animation:'spin 0.8s linear infinite' }} />
+              </div>
+            )}
+            <img
+              key={node.image}
+              src={node.image}
+              alt=""
+              style={{
+                width: '100%',
+                maxHeight: 320,
+                objectFit: 'cover',
+                display: 'block',
+                opacity: imgLoaded && !fading ? 1 : 0,
+                transition: 'opacity 0.5s ease',
+                position: imgLoaded ? 'relative' : 'absolute',
+                top: 0, left: 0,
+              }}
+              onLoad={() => setImgLoaded(true)}
+              onError={e => { e.currentTarget.style.display = 'none'; setImgLoaded(true); }}
+            />
+            {/* Gradient fade into card */}
+            {imgLoaded && (
+              <div style={{ position:'absolute', bottom:0, left:0, right:0, height:80, background:'linear-gradient(to bottom, transparent, rgba(8,6,10,0.96))' }} />
+            )}
+          </div>
+        )}
 
         <div style={{ padding:'32px 34px' }}>
           {node.isEnding ? (
