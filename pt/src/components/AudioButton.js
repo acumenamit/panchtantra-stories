@@ -11,15 +11,14 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
   const [everHadFile, setEverHadFile] = useState(false);
   const [isChecking,  setIsChecking]  = useState(false);
   const audioRef    = useRef(null);
-  const loadTokenRef = useRef(null);
+  const activeToken = useRef(null); // token of the currently-valid load
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
   // ── Load audio whenever the path or audioReady flag changes ──
   useEffect(() => {
     if (!audioReady) {
-      // Path changed but assets not ready yet — stop any current playback
-      // and mark state as loading, but don't clear everHadFile
+      // Not ready yet — stop current playback and reset display state
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -30,10 +29,11 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
       return;
     }
 
-    // Invalidate any in-flight load from a previous render
+    // Mint a token for this load. Only this token's callbacks will commit state.
     const token = Symbol();
-    loadTokenRef.current = token;
+    activeToken.current = token;
 
+    // Stop the previous audio immediately so it doesn't compete
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -45,7 +45,8 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     const audio = new window.Audio();
 
     audio.addEventListener('canplaythrough', () => {
-      if (loadTokenRef.current !== token) return; // stale — a newer load is in flight
+      // Discard if a newer load has already started
+      if (activeToken.current !== token) return;
       audioRef.current = audio;
       setHasFile(true);
       setEverHadFile(true);
@@ -53,7 +54,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     }, { once: true });
 
     audio.addEventListener('error', () => {
-      if (loadTokenRef.current !== token) return;
+      if (activeToken.current !== token) return;
       setHasFile(false);
       setIsChecking(false);
     }, { once: true });
@@ -61,18 +62,17 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     audio.src = audioPath;
     audio.load();
 
-    // Cleanup: invalidate token so in-flight callbacks become no-ops
-    // Do NOT pause the audio here — let it keep buffering silently
-    // so the canplaythrough event still fires and sets hasFile correctly.
+    // Cleanup: mark this token stale AND pause this audio object.
+    // The token is invalidated so its callbacks become no-ops.
+    // The audio is paused so it doesn't compete with the next load.
+    // These two operations are now correctly scoped to THIS effect run only.
     return () => {
-      loadTokenRef.current = Symbol(); // new symbol ≠ token → stale
+      activeToken.current = Symbol(); // any token that isn't `token`
+      audio.pause();
     };
   }, [audioReady, audioPath]); // eslint-disable-line
 
-  // ── Auto-play when file is ready if audioActive is set ───────
-  // audioActive = user turned on audio on a previous node and hasn't stopped it.
-  // hasFile flips null → true once the file finishes buffering,
-  // which reliably re-runs this effect.
+  // ── Auto-play when file loads if user had audio active ───────
   useEffect(() => {
     if (!audioActive || !audioRef.current || hasFile !== true) return;
     const audio = audioRef.current;
@@ -85,7 +85,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
   // ── Clean up on unmount ───────────────────────────────────────
   useEffect(() => {
     return () => {
-      loadTokenRef.current = Symbol(); // invalidate any in-flight loads
+      activeToken.current = Symbol();
       audioRef.current?.pause();
     };
   }, []);
@@ -98,7 +98,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
       audio.pause();
       audio.currentTime = 0;
       setIsPlaying(false);
-      setAudioActive(false); // user explicitly stopped — clear intent
+      setAudioActive(false);
     } else {
       audio.onended = () => setIsPlaying(false);
       audio.play()
@@ -109,7 +109,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
 
   // ── Loading state ─────────────────────────────────────────────
   if (!audioReady || isChecking || hasFile === null) {
-    if (!everHadFile) return null; // first load — stay invisible, no flash
+    if (!everHadFile) return null;
     return (
       <button disabled style={{
         display: 'flex', alignItems: 'center', gap: 6,
