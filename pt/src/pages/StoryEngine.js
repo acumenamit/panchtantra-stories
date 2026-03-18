@@ -40,17 +40,20 @@ export default function StoryEngine({ story }) {
   // ── Preloader ─────────────────────────────────────────────────
   const { getAssetState, preloadNode } = usePreloader(story, nodeId, lang);
 
-  // On every node transition, seed readiness from cache and poll until done
+  // On every node transition, seed readiness from cache and poll until done.
+  // audioReady is ONLY ever set to true here — never back to false.
+  // Resetting to false is handled explicitly in go/back/restart so that
+  // AudioButton's in-progress load is never interrupted by the polling effect.
   useEffect(() => {
     const state = getAssetState(nodeId);
     setImageReady(state.imageReady);
-    setAudioReady(state.audioReady);
+    if (state.audioReady) setAudioReady(true);
     preloadNode(nodeId);
 
     const interval = setInterval(() => {
       const latest = getAssetState(nodeId);
       setImageReady(latest.imageReady);
-      setAudioReady(latest.audioReady);
+      if (latest.audioReady) setAudioReady(true);
       if (latest.imageReady && latest.audioReady) clearInterval(interval);
     }, 300);
 
@@ -86,7 +89,6 @@ export default function StoryEngine({ story }) {
   }, [nodeId]); // eslint-disable-line
 
   const go = (nextId, choiceText) => {
-    // Track the choice made
     trackChoiceMade(story.id, nodeId, choiceText || nextId, lang);
 
     setPicked(nextId);
@@ -97,6 +99,7 @@ export default function StoryEngine({ story }) {
       setTextDone(false);
       setPicked(null);
       setImgLoaded(false);
+      setAudioReady(false); // explicit reset — polling effect will only set true
       setFading(false);
     }, 370);
   };
@@ -110,6 +113,7 @@ export default function StoryEngine({ story }) {
       setNodeId(prev);
       setTextDone(false);
       setImgLoaded(false);
+      setAudioReady(false); // explicit reset
       setFading(false);
     }, 300);
   };
@@ -122,6 +126,7 @@ export default function StoryEngine({ story }) {
       setHistory([]);
       setTextDone(false);
       setImgLoaded(false);
+      setAudioReady(false); // explicit reset
       setFading(false);
     }, 300);
   };
@@ -133,12 +138,8 @@ export default function StoryEngine({ story }) {
   };
 
   // ── Status line ───────────────────────────────────────────────
-  // Shows at top of card only when an asset is still loading.
-  // Image takes priority in the message; disappears when both ready.
   const hasImage = !!node.image;
-  // Audio exists by path convention — no field on node, so check audioReady
-  // from preloader which marks ready=true if file is missing (graceful degrade)
-  const hasAudio = !node.isEnding; // all non-ending nodes may have audio
+  const hasAudio = !node.isEnding;
   const showImageLoading = hasImage && !imageReady;
   const showAudioLoading = hasAudio && !audioReady && !showImageLoading;
   const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
@@ -154,16 +155,12 @@ export default function StoryEngine({ story }) {
   const yourChoice = lang === 'hi' ? '✦ आपका चुनाव' : '✦ YOUR CHOICE';
   const altLabel   = lang === 'hi' ? '↪ वैकल्पिक पथ' : '↪ alt path';
 
-  // When Hindi is active, override mono font to Noto Sans Devanagari
-  // so UI chrome text renders correctly — Space Mono has no Devanagari glyphs
   const monoFont = lang === 'hi'
     ? "'Noto Sans Devanagari', sans-serif"
     : 'var(--mono)';
 
-  // letterSpacing breaks Devanagari conjuncts — always 'normal' for Hindi
   const monoSpacing = lang === 'hi' ? 'normal' : undefined;
 
-  // scene.label is now a bilingual object
   const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
 
   return (
@@ -226,7 +223,6 @@ export default function StoryEngine({ story }) {
         {/* ── Story image ── */}
         {node.image && (
           <div style={{ position:'relative', overflow:'hidden', background:'rgba(0,0,0,0.4)', minHeight: imgLoaded ? 0 : 0 }}>
-            {/* Placeholder shown while image loads */}
             {!imgLoaded && (
               <div style={{ width:'100%', height:220, background:`linear-gradient(135deg,${accent}11,rgba(0,0,0,0.3))`, display:'flex', alignItems:'center', justifyContent:'center' }}>
                 <div style={{ width:32, height:32, borderRadius:'50%', border:`2px solid ${accent}44`, borderTopColor:accent, animation:'spin 0.8s linear infinite' }} />
@@ -249,7 +245,6 @@ export default function StoryEngine({ story }) {
               onLoad={() => setImgLoaded(true)}
               onError={e => { e.currentTarget.style.display = 'none'; setImgLoaded(true); }}
             />
-            {/* Gradient fade into card */}
             {imgLoaded && (
               <div style={{ position:'absolute', bottom:0, left:0, right:0, height:80, background:'linear-gradient(to bottom, transparent, rgba(8,6,10,0.96))' }} />
             )}
@@ -259,8 +254,6 @@ export default function StoryEngine({ story }) {
         <div style={{ padding:'32px 34px' }}>
 
           {/* ── Status line ── */}
-          {/* Single combined line at top of card. Appears only while  */}
-          {/* image or audio is still loading. Disappears once ready.  */}
           {showStatusLine && (
             <div style={{
               display: 'flex',
@@ -312,9 +305,6 @@ export default function StoryEngine({ story }) {
                     <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing:monoSpacing || '0.14em', marginBottom:8, fontWeight:700 }}>
                       {yourChoice}
                     </div>
-                    {/* Render question with Direction D fork styling.
-                        Lines starting with '...' are rendered dimmed as pause markers.
-                        Lines starting with '... Or' get accent colour as the pivot.  */}
                     <div style={{ fontFamily:'var(--serif)', fontSize:'1.05rem', color:'#fff7d6', lineHeight:1.9, fontWeight:600 }}>
                       {t(node.question, lang).split('\n').filter(l => l.trim()).map((line, i) => {
                         const isOr  = line.trim().startsWith('... Or') || line.trim().startsWith('... या');
@@ -326,9 +316,7 @@ export default function StoryEngine({ story }) {
                                     :           '#fff7d6',
                             fontSize: isPause ? '0.85rem' : '1.05rem',
                             marginTop: isPause ? 6 : isOr ? 4 : 0,
-                            // Never italicise Devanagari — breaks ligatures
                             fontStyle: isPause && lang !== 'hi' ? 'italic' : 'normal',
-                            // letterSpacing breaks Devanagari conjuncts — only apply for EN
                             letterSpacing: isPause && lang !== 'hi' ? '0.12em' : 'normal',
                           }}>
                             {line}
