@@ -4,6 +4,9 @@ import { t } from '../LangContext';
 export default function ChoiceButton({ choice, index, accent, onClick, dimmed, lang }) {
   const [hovered, setHovered] = useState(false);
   const label = lang === 'hi' ? `चुनाव ${index + 1}` : `Choice ${index + 1}`;
+  const monoFont = lang === 'hi'
+    ? "'Noto Sans Devanagari', sans-serif"
+    : 'var(--mono)';
 
   return (
     <button
@@ -23,7 +26,7 @@ export default function ChoiceButton({ choice, index, accent, onClick, dimmed, l
         boxShadow: hovered && !dimmed ? `0 0 20px ${accent}22` : 'none',
       }}
     >
-      <div style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:accent, letterSpacing:'0.12em', marginBottom:6, fontWeight:700 }}>
+      <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing: lang === 'hi' ? 'normal' : '0.12em', marginBottom:6, fontWeight:700 }}>
         {label}
       </div>
       <div style={{ fontFamily:'var(--serif)', fontSize:'1rem', color:'#ffffff', lineHeight:1.5 }}>

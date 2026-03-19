@@ -267,7 +267,7 @@ His feet touched the ground. His jaw unclenched. The stick dropped.
 
 He stood at the edge of the new lake and looked at it for a long time without speaking.
 
-Sankata and Vikata landed beside him quietly. They did not remind him of the warning. They did not say anything. They just stood with him at the water's edge.
+Sankata and Vikata landed beside him quietly. They did not say *we told you so.* They did not say anything. They just stood with him at the water's edge.
 
 After a while, Kambugriva walked in. The cold water rose around his shell. It was perfect.
 
@@ -296,7 +296,7 @@ He looked at the lake.
 
 वह नई झील के किनारे खड़ा हुआ और बिना बोले बहुत देर तक उसे देखता रहा।
 
-संकट और विकट चुपचाप उसके पास उतरे। उन्होंने चेतावनी याद नहीं दिलाई। उन्होंने कुछ नहीं कहा। वे बस पानी के किनारे उसके साथ खड़े रहे।
+संकट और विकट चुपचाप उसके पास उतरे। उन्होंने *हमने कहा था* नहीं कहा। उन्होंने कुछ नहीं कहा। वे बस पानी के किनारे उसके साथ खड़े रहे।
 
 थोड़ी देर बाद, कम्बुग्रीव अंदर चला गया। ठंडा पानी उसके कवच के चारों ओर उठा। एकदम सही था।
 
@@ -319,8 +319,7 @@ He looked at the lake.
         hi: 'तुम पहुँच गए। तुम उस सबसे सुंदर झील के किनारे बैठे हो जो तुमने कभी देखी। उन दो मिनटों ने तुम्हें क्या सिखाया?',
       },
       choices: [
-        { text: { en: '🌊 "The people who say you don\'t belong somewhere are never the ones who have to live with what you lose by listening to them."', hi: '🌊 "जो लोग कहते हैं कि तुम कहीं के नहीं हो, वे कभी वे नहीं होते जिन्हें उन्हें सुनने से होने वाले नुकसान के साथ जीना पड़े।"' }, next: 'ending_wise' },
-        { text: { en: '🐢 "Silence isn\'t losing. Sometimes silence is the only way to arrive."',                                                        hi: '🐢 "चुप रहना हारना नहीं है। कभी-कभी चुप्पी ही पहुँचने का एकमात्र तरीका है।"' },                                                              next: 'ending_wise' },
+        { text: { en: 'Silence isn\'t losing. Sometimes silence is the only way to arrive.', hi: 'चुप रहना हारना नहीं है। कभी-कभी चुप्पी ही पहुँचने का एकमात्र तरीका है।' }, next: 'ending_wise' },
       ],
     },
 

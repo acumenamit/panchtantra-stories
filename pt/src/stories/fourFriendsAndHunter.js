@@ -22,12 +22,12 @@ const fourFriendsAndHunter = {
         hi: `एक साफ जंगल की झील के पास चार अप्रत्याशित मित्र रहते थे: चित्रग्रीव नाम का कौआ, जो पेड़ की चोटी से सब कुछ देखता था; हिरण्यक नाम का चूहा, जो जड़ों के पास एक बिल में रहता था; मन्थरक नाम का कछुआ, जो पानी के किनारे चट्टानों पर धूप सेंकता था; और श्वेतांक नाम का हिरण, जो हर शाम पानी पीने आता था।\n\nवे बहुत अलग-अलग प्राणी थे। उनमें एक बात के अलावा कुछ भी समान नहीं था: जब उनमें से कोई एक मुसीबत में होता, तो बाकी आ जाते।\n\nएक सुनहरी दोपहर, श्वेतांक हिरण झील पर नहीं आया।\n\nचित्रग्रीव कौआ, हमेशा देखते रहते, जंगल के ऊपर चौड़े चक्कर लगाता उड़ा। हवा से, उसने हिरण को देखा — एक शिकारी के जाल में फँसा, झील से बहुत दूर।`,
       },
       question: {
-        en: 'The crow has spotted the deer in a trap. He is small — what should he do first?',
-        hi: 'कौए ने जाल में हिरण को देखा है। वह छोटा है — उसे पहले क्या करना चाहिए?',
+        en: 'Your friend is trapped and the hunter is coming back. You could fly there right now — but your beak can\'t cut rope. What do you do?',
+        hi: 'तुम्हारा दोस्त फँसा है और शिकारी वापस आ रहा है। तुम अभी वहाँ उड़ सकते हो — लेकिन तुम्हारी चोंच रस्सी नहीं काट सकती। तुम क्या करते हो?',
       },
       choices: [
-        { text: { en: '🐦 Fly to the deer immediately and try to peck through the net alone',  hi: '🐦 तुरंत हिरण के पास उड़ो और अकेले जाल को चोंच से काटने की कोशिश करो' }, next: 'crow_alone' },
-        { text: { en: '🤝 Alert all the friends first — this needs everyone working together', hi: '🤝 पहले सभी मित्रों को सूचित करो — इसके लिए सबको मिलकर काम करना होगा' }, next: 'deer_caught' },
+        { text: { en: 'Go. I have to try something. Now.',        hi: 'जाओ। कुछ तो करना होगा। अभी।' },          next: 'crow_alone' },
+        { text: { en: 'Get the others first. This needs all of us.', hi: 'पहले बाकियों को बुलाओ। इसके लिए सब चाहिए।' }, next: 'deer_caught' },
       ],
     },
 
@@ -40,12 +40,11 @@ const fourFriendsAndHunter = {
         hi: `चित्रग्रीव सीधे जाल के पास उड़ा और रस्सियों पर ज़ोर से चोंच मारने लगा।\n\nलेकिन उसकी चोंच छोटी थी। रस्सियाँ मोटी थीं। वह मुश्किल से कोई निशान बना सका।\n\nहिरण छटपटाया, शोर मचाया। दूरी में, शिकारी ने सुना और वापस चलने लगा।\n\nचित्रग्रीव ने अपनी छोटी चोंच को देखा। फिर उसने हिरण्यक चूहे के बारे में सोचा — जिसके दाँत मिनटों में रस्सी चबा सकते थे।\n\n"मुझे पहले मदद लेने जाना चाहिए था," उसने सोचा।\n\nवह पूरी गति से वापस उड़ा।`,
       },
       question: {
-        en: 'The crow realised he can\'t do it alone. What does this teach us about asking for help?',
-        hi: 'कौए को एहसास हुआ कि वह अकेले नहीं कर सकता। यह हमें मदद माँगने के बारे में क्या सिखाता है?',
+        en: 'Your beak is too small. The ropes barely dented. And now the hunter heard the noise and is coming. What do you feel right now?',
+        hi: 'तुम्हारी चोंच बहुत छोटी है। रस्सियों पर मुश्किल से निशान पड़ा। और अब शिकारी ने शोर सुना और आ रहा है। अभी क्या महसूस हो रहा है?',
       },
       choices: [
-        { text: { en: '🤝 Knowing when to ask for help is wisdom, not weakness', hi: '🤝 यह जानना कि कब मदद माँगनी है बुद्धिमानी है, कमज़ोरी नहीं' }, next: 'deer_caught' },
-        { text: { en: '⚡ Acting fast matters — but acting smart matters more',  hi: '⚡ तेज़ी से कार्य करना महत्वपूर्ण है — लेकिन समझदारी से कार्य करना अधिक महत्वपूर्ण है' }, next: 'deer_caught' },
+        { text: { en: 'I wasted time. Get the others. Go.', hi: 'वक्त बर्बाद किया। बाकियों को बुलाओ। जाओ।' }, next: 'deer_caught' },
       ],
     },
 
@@ -57,12 +56,48 @@ const fourFriendsAndHunter = {
         hi: `चित्रग्रीव झील के पास वापस उड़ा, चेतावनी देते हुए।\n\nहिरण्यक चूहा तुरंत उछल पड़ा। "कहाँ? दिखाओ!"\n\nमन्थरक कछुआ चलने लगा — धीरे-धीरे, स्थिरता से।\n\n"तुम यहाँ रहो," कौए ने धीरे से कहा। "तुम बहुत धीमे हो। हम खत्म करने से पहले शिकारी वापस आ सकता है। सुरक्षित रहो।"\n\n"मेरे मित्र खतरे में हैं," कछुए ने सरलता से कहा। "मैं आ रहा हूँ।"\n\nचित्रग्रीव ने चूहे को अपनी चोंच में उठाया — तेज़ उड़ते हुए, नीचे उड़ते हुए — जबकि कछुआ पीछे लुढ़कता चला।\n\nवे हिरण के पास पहुँचे। हिरण्यक अपने तेज़ दाँतों से रस्सियों पर काम करने लगा — कुतरना, कुतरना, कुतरना।`,
       },
       question: {
-        en: 'Each friend brings a different strength. Can you see why all four were needed?',
-        hi: 'हर मित्र एक अलग शक्ति लाता है। क्या आप देख सकते हैं कि चारों की ज़रूरत क्यों थी?',
+        en: 'The crow tells you to stay. "You\'re too slow — you\'ll get caught." Your friends are in danger. What do you feel?',
+        hi: 'कौआ तुम्हें रुकने के लिए कहता है। "तुम बहुत धीमे हो — पकड़े जाओगे।" तुम्हारे दोस्त खतरे में हैं। तुम क्या महसूस करते हो?',
       },
       choices: [
-        { text: { en: '👀 The crow\'s eyes spotted the danger — without him, no one would know', hi: '👀 कौए की आँखों ने खतरा देखा — उसके बिना, कोई नहीं जानता' }, next: 'friends_rescue' },
-        { text: { en: '🦷 The mouse\'s teeth could free them — the crow\'s beak never could',   hi: '🦷 चूहे के दाँत उन्हें आज़ाद कर सकते थे — कौए की चोंच कभी नहीं' },   next: 'friends_rescue' },
+        { text: { en: 'He\'s right. I\'ll only make things worse. I\'ll stay.',           hi: 'वह सही है। मैं सब बिगाड़ दूँगा। रुकता हूँ।' },                          next: 'tortoise_stays' },
+        { text: { en: 'I don\'t care. They came for me. I\'m going.', hi: 'परवाह नहीं। वे मेरे लिए आए थे। मैं जा रहा हूँ।' }, next: 'friends_rescue' },
+      ],
+    },
+
+    tortoise_stays: {
+      scene: 'forest_day',
+      isAlternate: true,
+      text: {
+        en: `You stayed at the lake.
+
+From the bank, you watched the treetops for movement. You heard nothing for a long time. Then — the sound of the deer running free, the crow's call from above, the mouse darting back through the grass.
+
+They were safe. All of them.
+
+They came back to the lake and found you waiting. No one said anything about your choice. But as the four of you sat together in the evening quiet, you felt something you couldn't quite name.
+
+You were glad your friends were safe.
+
+But there was a hollow place in your chest where the going should have been.`,
+        hi: `तुम झील पर रुके रहे।
+
+किनारे से, तुमने पेड़ों की चोटियों पर हलचल देखते रहे। काफी देर तक कुछ नहीं सुना। फिर — हिरण के भागने की आवाज़, ऊपर से कौए की पुकार, चूहा घास में से दौड़ता हुआ वापस।
+
+वे सुरक्षित थे। सभी।
+
+वे झील पर वापस आए और तुम्हें इंतज़ार करते पाया। किसी ने तुम्हारे चुनाव के बारे में कुछ नहीं कहा। लेकिन जैसे तुम चारों शाम की शांति में साथ बैठे, तुमने कुछ ऐसा महसूस किया जिसे ठीक से नाम नहीं दे सके।
+
+तुम खुश थे कि दोस्त सुरक्षित हैं।
+
+लेकिन तुम्हारे सीने में एक खालीपन था, जहाँ जाना होना चाहिए था।`,
+      },
+      question: {
+        en: 'Your friends are safe. You are safe. But something feels unfinished. What is that hollow place?',
+        hi: 'तुम्हारे दोस्त सुरक्षित हैं। तुम सुरक्षित हो। लेकिन कुछ अधूरा लगता है। वह खालीपन क्या है?',
+      },
+      choices: [
+        { text: { en: 'The place where I should have shown up, and didn\'t.', hi: 'वह जगह जहाँ मुझे होना चाहिए था, और नहीं था।' }, next: 'ending_friendship' },
       ],
     },
 
@@ -74,12 +109,11 @@ const fourFriendsAndHunter = {
         hi: `हिरण्यक ने आखिरी रस्सी तब चबाई जब जंगल में शिकारी के कदमों की आवाज़ तेज़ होती गई।\n\n"भागो!" कौए ने चिल्लाया।\n\nहिरण जंगल में कूदकर भाग गया। कौआ उड़ गया। चूहा एक खोखले लट्ठे में घुस गया।\n\nशिकारी पहुँचा — और केवल चबाई हुई रस्सियों का ढेर और एक खाली मैदान पाया।\n\nवह घबराकर इधर-उधर देखने लगा। फिर उसकी आँखें कुछ और पर पड़ीं:\n\nएक कछुआ। धीमा, लुढ़कता, अभी भी पेड़ों की सुरक्षा से बहुत दूर।\n\nशिकारी मुस्कुराया और अपने थैले की ओर हाथ बढ़ाया।`,
       },
       question: {
-        en: 'The tortoise who insisted on coming is now in danger because of his slowness. Was it right for him to come?',
-        hi: 'कछुआ जो आने पर ज़ोर देता था, अब अपनी धीमेपन की वजह से खतरे में है। क्या उसका आना सही था?',
+        en: 'You insisted on coming. Now you\'re in the hunter\'s bag because you were too slow. The crow told you this would happen. What do you feel?',
+        hi: 'तुम आने पर अड़े रहे। अब तुम शिकारी के थैले में हो क्योंकि तुम बहुत धीमे थे। कौए ने कहा था यही होगा। अब क्या महसूस हो रहा है?',
       },
       choices: [
-        { text: { en: '❤️ Yes — a friend who stays safe while others suffer is no friend at all', hi: '❤️ हाँ — जो मित्र दूसरों के दुख में सुरक्षित रहे वह मित्र ही नहीं' }, next: 'tortoise_danger' },
-        { text: { en: '🤔 Maybe — bravery without ability can create new problems',              hi: '🤔 शायद — बिना क्षमता का साहस नई समस्याएँ पैदा कर सकता है' },         next: 'tortoise_danger' },
+        { text: { en: 'I know. But I\'d do it again. They came for me.', hi: 'पता है। लेकिन फिर भी यही करता। वे मेरे लिए आए थे।' }, next: 'tortoise_danger' },
       ],
     },
 
@@ -91,12 +125,11 @@ const fourFriendsAndHunter = {
         hi: `शिकारी ने मन्थरक को उठाया और अपने थैले में बाँध दिया।\n\nपेड़ों से, तीन मित्रों ने भय से देखा।\n\n"यह मेरी गलती है," मन्थरक ने थैले के अंदर से कहा। "मुझे सुनना चाहिए था।"\n\n"नहीं," चित्रग्रीव ने दृढ़ता से कहा। "हम मित्रों को नहीं छोड़ते। हम रास्ता खोजते हैं।"\n\nचूहे ने जल्दी से सोचा। "चित्रग्रीव — रास्ते में शिकारी के आगे उड़ो। ज़मीन पर ऐसे उतरो जैसे तुम घायल हो। अपना पंख खींचो। उसे सोचने दो कि तुम आसान शिकार हो।"\n\n"और फिर?"\n\n"वह तुम्हें पकड़ने के लिए थैला रख देगा। जैसे ही वह रखे — हिरण्यक, तुम थैले को चबाओ। मैं शिकारी को व्यस्त रखूँगा। श्वेतांक — पेड़ों में साथ-साथ दौड़ो, शोर मचाओ, उसे भ्रमित करो।"`,
       },
       question: {
-        en: 'Each friend has a role in the rescue. This is a plan that uses everyone\'s strengths. What does this show?',
-        hi: 'हर मित्र की बचाव में एक भूमिका है। यह एक ऐसी योजना है जो सबकी शक्तियों का उपयोग करती है। यह क्या दर्शाता है?',
+        en: 'You\'re in the dark inside the bag. You can hear your friends outside, making a plan. You can\'t help. You can only wait. What is that like?',
+        hi: 'तुम थैले के अंदर अँधेरे में हो। बाहर अपने दोस्तों को योजना बनाते सुन सकते हो। मदद नहीं कर सकते। बस इंतज़ार कर सकते हो। यह कैसा लगता है?',
       },
       choices: [
-        { text: { en: '🌟 Together, small creatures can outsmart and outmanoeuvre the powerful', hi: '🌟 मिलकर, छोटे प्राणी शक्तिशाली को मात दे सकते हैं' },         next: 'plan_executes' },
-        { text: { en: '♟️ A good plan assigns each person what they do best',                  hi: '♟️ एक अच्छी योजना हर व्यक्ति को वह काम देती है जो वह सबसे अच्छा करता है' }, next: 'plan_executes' },
+        { text: { en: 'Like trusting something you can\'t see. Like knowing they\'ll come.', hi: 'जैसे किसी ऐसी चीज़ पर भरोसा करना जो दिखती नहीं। जैसे यह जानना कि वे आएँगे।' }, next: 'plan_executes' },
       ],
     },
 
@@ -108,12 +141,12 @@ const fourFriendsAndHunter = {
         hi: `योजना पूरी तरह से काम आई।\n\nचित्रग्रीव आगे रास्ते पर उतरा, पंख खींचते हुए, करुणापूर्वक चिल्लाते हुए। शिकारी की आँखें चमकीं — एक दिन में दो शिकार!\n\nउसने थैला रख दिया और आगे रेंगा।\n\nहिरण्यक दौड़ा, सेकंडों में थैले की गाँठ चबाई, और मन्थरक आज़ाद हो गया।\n\nहिरण बाईं तरफ झाड़ियों से ज़ोर से गुज़रा। शिकारी घूम गया।\n\nकौआ ऊपर उड़ा, पूरी तरह से बिना घाव के, और ऊँचाई से पुकारा।\n\nशिकारी ने बाईं ओर देखा। दाईं ओर देखा। ज़मीन पर अपना खाली थैला देखा।\n\nवह खाली हाथ घर गया।`,
       },
       question: {
-        en: 'Four very different creatures, working as one, defeated a human hunter. What is the deepest lesson?',
-        hi: 'चार बहुत अलग प्राणी, एक होकर, एक मानव शिकारी को हरा दिया। सबसे गहरी शिक्षा क्या है?',
+        en: 'You\'re free. The hunter left with nothing. Four very different creatures did this together. What do you want to carry with you from today?',
+        hi: 'तुम आज़ाद हो। शिकारी खाली हाथ गया। चार बहुत अलग प्राणियों ने यह मिलकर किया। आज से क्या साथ ले जाना चाहते हो?',
       },
       choices: [
-        { text: { en: '🤝 Unity multiplies strength — divided, each was prey; together, they were unbeatable', hi: '🤝 एकता शक्ति को गुणा करती है — अलग-अलग, हर कोई शिकार था; मिलकर, वे अजेय थे' }, next: 'ending_wisdom' },
-        { text: { en: '💙 True friendship shows up — even slowly, even at risk to itself',                    hi: '💙 सच्ची दोस्ती आती है — धीरे-धीरे भी, खुद को जोखिम में डालकर भी' },                    next: 'ending_friendship' },
+        { text: { en: 'That together, we\'re something none of us could be alone.', hi: 'कि मिलकर, हम कुछ ऐसे हैं जो अकेले कोई नहीं हो सकता।' }, next: 'ending_wisdom' },
+        { text: { en: 'That they came back. That they always come back.',           hi: 'कि वे वापस आए। कि वे हमेशा वापस आते हैं।' },              next: 'ending_friendship' },
       ],
     },
 
@@ -133,7 +166,7 @@ const fourFriendsAndHunter = {
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `The tortoise reached the lake long after the others.\n\nNo one had left. All three sat waiting.\n\n"You waited," said Mantharaka, surprised.\n\n"You came for us when you were slow," said Shvetanka. "We can wait for you when you are slower."\n\nMantharaka looked at each of his friends for a long moment.\n\nThen he said something the Panchatantra has remembered for two thousand years:\n\n"A friend who stays only when it is easy is no true friend. But a friend who stays when it is hard — that friend is family."\n\nNitishastra teaches: "Do not measure friends by what they have. Measure them by what they do when you need them most."`,
-        hi: `कछुआ दूसरों के बहुत बाद झील पर पहुँचा।\n\nकोई नहीं गया था। तीनों इंतज़ार करते बैठे थे।\n\n"तुम रुके," मन्थरक ने आश्चर्य से कहा।\n\n"जब तुम धीमे थे तो तुम हमारे लिए आए," श्वेतांक ने कहा। "जब तुम और धीमे हो तो हम तुम्हारे लिए इंतज़ार कर सकते हैं।"\n\nमन्थरक ने एक लंबे पल के लिए अपने हर मित्र को देखा।\n\nफिर उसने कुछ ऐसा कहा जिसे पञ्चतन्त्र ने दो हज़ार साल तक याद रखा:\n\n"जो मित्र केवल तब रहे जब आसान हो वह सच्चा मित्र नहीं। लेकिन जो मित्र तब रहे जब कठिन हो — वह मित्र परिवार है।"\n\nनीतिशास्त्र सिखाता है: "मित्रों को इससे मत नापो कि उनके पास क्या है। उन्हें इससे नापो कि जब तुम्हें सबसे ज़्यादा ज़रूरत हो तो वे क्या करते हैं।"`,
+        hi: `कछुआ दूसरों के बहुत बाद झील पर पहुँचा।\n\nकोई नहीं गया था। तीनों इंतज़ार करते बैठे थे।\n\n"तुम रुके," मन्थरक ने आश्चर्य से कहा।\n\n"जब तुम धीमे थे तो तुम हमारे लिए आए," श्वेतांक ने कहा। "जब तुम और धीमे हो तो हम तुम्हारे लिए इंतज़ार कर सकते हैं।"\n\nमन्थरक ने एक लंबे पल के लिए अपने हर मित्र को देखा।\n\nफिर उसने कुछ ऐसा कहा जिसे पञ्चतन्त्र ने दो हज़ार साल तक याद रखा:\n\n"जो मित्र केवल तब रहे जब आसान हो वह मौसमी मित्र है। लेकिन जो मित्र तब रहे जब कठिन हो — वह मित्र परिवार है।"\n\nनीतिशास्त्र सिखाता है: "मित्रों को इससे मत नापो कि उनके पास क्या है। उन्हें इससे नापो कि जब तुम्हें सबसे ज़्यादा ज़रूरत हो तो वे क्या करते हैं।"`,
       },
       lesson: { en: 'A friend who stays when it is hard is not a friend — they are family.', hi: 'जो मित्र कठिन समय में रहे वह मित्र नहीं — वह परिवार है।' },
       lessonIcon: '💙',
