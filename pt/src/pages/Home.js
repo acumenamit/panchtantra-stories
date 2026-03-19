@@ -33,7 +33,7 @@ function isNew(story) {
   const added = new Date(story.addedOn);
   const now   = new Date();
   const diffDays = (now - added) / (1000 * 60 * 60 * 24);
-  return diffDays <= 30;
+  return diffDays <= 7;
 }
 
 // Sort newest first
