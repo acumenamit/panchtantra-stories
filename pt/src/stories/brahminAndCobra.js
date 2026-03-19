@@ -15,6 +15,7 @@ const brahminAndCobra = {
 
   nodes: {
     start: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-start.jpg',
       scene: 'village',
       text: {
         en: `In a small village, there lived a Brahmin farmer named Haridatta. His fields were dry, his crops thin, and his purse empty. He worked hard every day, but fortune never smiled on him.\n\nOne scorching afternoon, exhausted under a tree, he saw a large cobra emerge from an anthill at the edge of his field. The cobra raised its hood and looked at him steadily.\n\nHaridatta's heart hammered with fear. But then a thought came to him:\n\n"Perhaps this serpent is the guardian deity of my field. All these years I have neglected to honour him."\n\nHe fetched a clay bowl, filled it with fresh milk, and placed it before the cobra with folded hands.`,
@@ -30,6 +31,7 @@ const brahminAndCobra = {
     },
 
     cobra_gifts: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-cobra-gifts.jpg',
       scene: 'village',
       text: {
         en: `The next morning, Haridatta returned to the anthill and found — inside the clay bowl — a gleaming gold coin.\n\nHe stared at it. Then he filled the bowl with milk again and went home.\n\nThe next morning, another gold coin.\n\nEvery day, without fail, the cobra left a gold coin in the bowl. Haridatta's fortunes changed. His fields prospered. His home grew warm and full.\n\nYears passed. Haridatta tended the cobra with quiet devotion — fresh milk every morning, a respectful bow, nothing more asked.\n\nThen one day, Haridatta had to travel to a distant village. He asked his young son to tend the cobra while he was away.`,
@@ -46,6 +48,7 @@ const brahminAndCobra = {
     },
 
     son_good: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-son-good.jpg',
       scene: 'village',
       isAlternate: true,
       text: {
@@ -62,6 +65,7 @@ const brahminAndCobra = {
     },
 
     son_arrives: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-son-arrives.jpg',
       scene: 'village',
       text: {
         en: `The son placed the milk dutifully — but his eyes kept drifting to the anthill.\n\n"One coin a day," he thought. "But if the cobra has been giving coins for years, the anthill must be full of gold. Why wait? Why beg coin by coin when I could take it all at once?"\n\nThe next morning, instead of milk, the son came with a stick.\n\nHe struck at the cobra as it emerged.\n\nThe cobra was fast. It struck back — a single bite on the boy's hand. The son collapsed.\n\nBy some miracle he survived, but his hand bore the scar forever.\n\nWhen Haridatta returned, the cobra was gone. The bowl was empty. And it was never filled with gold again.`,
@@ -78,6 +82,7 @@ const brahminAndCobra = {
     },
 
     son_acts: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-son-acts.jpg',
       scene: 'village',
       text: {
         en: `Haridatta sat by the empty anthill for a long time.\n\nHe had lost more than gold. He had lost something rarer — a relationship built on trust, on daily faithfulness, on the simple act of showing up with an open hand and asking nothing in return.\n\nEventually he returned to the anthill every morning — with milk, with a bow, with patience.\n\nThe cobra never came back.\n\nBut Haridatta came anyway. Every morning.\n\nHis neighbours thought him foolish. But Haridatta understood something they did not:\n\nSome things, once broken by greed, cannot be repaired. You can only tend the empty space where they used to be, and hope your children learn what your own child did not.`,
@@ -93,6 +98,7 @@ const brahminAndCobra = {
     },
 
     ending_contentment: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-ending-contentment.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `The fields of Haridatta flourished for many more years.\n\nAnd the story of his son — the one who chose contentment over a grasping hand — spread through the village as a different kind of treasure.\n\n"There are two kinds of wealth," Haridatta told his grandchildren.\n\n"The wealth that sits in your purse — which can be lost, stolen, or spent. And the wealth that sits in your character — which no one can take from you.\n\nChoose the second kind first, and the first will follow."`,
@@ -103,6 +109,7 @@ const brahminAndCobra = {
     },
 
     ending_wisdom: {
+      image: '/images/the-brahmin-and-the-cobra/the-brahmin-and-the-cobra-ending-wisdom.jpg',
       scene: 'forest_dawn', isEnding: true,
       text: {
         en: `The empty anthill stood at the edge of the field for many years.\n\nSome said it was a sad sight. Haridatta never thought so.\n\n"It reminds me," he said, "that every blessing carries a lesson inside it. The cobra gave gold — but the real gift was never the gold. It was the daily practice of showing up, of gratitude, of asking nothing beyond what is freely given."\n\nThe Panchatantra teaches:\n"What greed grasps at, it destroys.\nWhat gratitude tends, it multiplies.\nThe open hand receives more than the clenched fist ever will."`,
