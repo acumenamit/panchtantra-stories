@@ -1,114 +1,123 @@
 // ─────────────────────────────────────────────────────────────
 //  AudioButton.js
 //  Plays pre-generated audio from /audio/{storyId}/{nodeId}.{lang}.mp3
+//
+//  Safari iOS fix: uses HEAD fetch to check file existence
+//  (doesn't require user gesture), then creates Audio object
+//  only on user tap. Avoids relying on canplaythrough which
+//  Safari iOS never fires without prior user interaction.
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useRef, useEffect } from 'react';
 
 export default function AudioButton({ storyId, nodeId, lang, accent, audioReady, audioActive, setAudioActive }) {
   const [isPlaying,   setIsPlaying]   = useState(false);
-  const [hasFile,     setHasFile]     = useState(null);
+  const [hasFile,     setHasFile]     = useState(null); // null=checking, true=exists, false=missing
   const [everHadFile, setEverHadFile] = useState(false);
-  const [isChecking,  setIsChecking]  = useState(false);
-  const audioRef    = useRef(null);
-  const activeToken = useRef(null); // token of the currently-valid load
+  const audioRef     = useRef(null);
+  const fetchTokenRef = useRef(null);
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
-  // ── Load audio whenever the path or audioReady flag changes ──
+  // ── Check file existence via HEAD fetch ───────────────────
+  // Works on all browsers without user gesture.
+  // No Audio object created here — Safari iOS safe.
   useEffect(() => {
     if (!audioReady) {
-      // Not ready yet — stop current playback and reset display state
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
       }
       setIsPlaying(false);
       setHasFile(null);
-      setIsChecking(false);
       return;
     }
 
-    // Mint a token for this load. Only this token's callbacks will commit state.
     const token = Symbol();
-    activeToken.current = token;
+    fetchTokenRef.current = token;
 
-    // Stop the previous audio immediately so it doesn't compete
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
     setIsPlaying(false);
     setHasFile(null);
-    setIsChecking(true);
 
-    const audio = new window.Audio();
+    fetch(audioPath, { method: 'HEAD' })
+      .then(res => {
+        if (fetchTokenRef.current !== token) return;
+        if (res.ok) {
+          setHasFile(true);
+          setEverHadFile(true);
+        } else {
+          setHasFile(false);
+        }
+      })
+      .catch(() => {
+        if (fetchTokenRef.current !== token) return;
+        setHasFile(false);
+      });
 
-    audio.addEventListener('canplaythrough', () => {
-      // Discard if a newer load has already started
-      if (activeToken.current !== token) return;
-      audioRef.current = audio;
-      setHasFile(true);
-      setEverHadFile(true);
-      setIsChecking(false);
-    }, { once: true });
-
-    audio.addEventListener('error', () => {
-      if (activeToken.current !== token) return;
-      setHasFile(false);
-      setIsChecking(false);
-    }, { once: true });
-
-    audio.src = audioPath;
-    audio.load();
-
-    // Cleanup: mark this token stale AND pause this audio object.
-    // The token is invalidated so its callbacks become no-ops.
-    // The audio is paused so it doesn't compete with the next load.
-    // These two operations are now correctly scoped to THIS effect run only.
     return () => {
-      activeToken.current = Symbol(); // any token that isn't `token`
-      audio.pause();
+      fetchTokenRef.current = Symbol();
+      audioRef.current?.pause();
     };
   }, [audioReady, audioPath]); // eslint-disable-line
 
-  // ── Auto-play when file loads if user had audio active ───────
+  // ── Auto-play: only if audioActive and we know file exists ─
+  // Creates Audio object here — but this effect only runs after
+  // hasFile=true, which means the HEAD check passed.
+  // On Safari iOS, auto-play will be blocked silently (no gesture),
+  // but the button will at least be VISIBLE for the user to tap.
   useEffect(() => {
-    if (!audioActive || !audioRef.current || hasFile !== true) return;
-    const audio = audioRef.current;
-    audio.onended = () => setIsPlaying(false);
-    audio.play()
-      .then(() => setIsPlaying(true))
-      .catch(() => setIsPlaying(false));
+    if (!audioActive || hasFile !== true) return;
+    playAudio();
   }, [hasFile, audioActive]); // eslint-disable-line
 
-  // ── Clean up on unmount ───────────────────────────────────────
+  // ── Clean up on unmount ────────────────────────────────────
   useEffect(() => {
     return () => {
-      activeToken.current = Symbol();
+      fetchTokenRef.current = Symbol();
       audioRef.current?.pause();
     };
   }, []);
 
-  // ── Toggle play / stop ────────────────────────────────────────
+  // ── Create and play audio (called on user tap or auto-play) ─
+  const playAudio = () => {
+    // Reuse existing audio object if available and not ended
+    if (audioRef.current && !audioRef.current.ended) {
+      audioRef.current.onended = () => setIsPlaying(false);
+      audioRef.current.play()
+        .then(() => { setIsPlaying(true); setAudioActive(true); })
+        .catch(() => setIsPlaying(false));
+      return;
+    }
+
+    // Create fresh Audio object — on Safari iOS this must happen
+    // inside a user gesture handler to actually play
+    const audio = new window.Audio(audioPath);
+    audio.onended = () => setIsPlaying(false);
+    audioRef.current = audio;
+
+    audio.play()
+      .then(() => { setIsPlaying(true); setAudioActive(true); })
+      .catch(() => setIsPlaying(false));
+  };
+
+  // ── Toggle ─────────────────────────────────────────────────
   const toggle = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (isPlaying) {
-      audio.pause();
-      audio.currentTime = 0;
+    if (isPlaying && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
       setIsPlaying(false);
       setAudioActive(false);
     } else {
-      audio.onended = () => setIsPlaying(false);
-      audio.play()
-        .then(() => { setIsPlaying(true); setAudioActive(true); })
-        .catch(() => setIsPlaying(false));
+      playAudio();
     }
   };
 
-  // ── Loading state ─────────────────────────────────────────────
-  if (!audioReady || isChecking || hasFile === null) {
+  // ── Loading state ──────────────────────────────────────────
+  if (hasFile === null) {
     if (!everHadFile) return null;
     return (
       <button disabled style={{
@@ -126,7 +135,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     );
   }
 
-  // ── File missing ──────────────────────────────────────────────
+  // ── File missing ───────────────────────────────────────────
   if (hasFile === false) {
     if (!everHadFile) return null;
     return (
@@ -145,7 +154,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     );
   }
 
-  // ── Ready ─────────────────────────────────────────────────────
+  // ── Ready ──────────────────────────────────────────────────
   const label = isPlaying
     ? (lang === 'hi' ? 'रोकें' : 'Stop')
     : (lang === 'hi' ? 'सुनें' : 'Listen');
