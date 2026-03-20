@@ -40,8 +40,8 @@ export default function LangToggle({ accent }) {
       background: 'rgba(0,0,0,0.3)',
       border: '1px solid rgba(255,255,255,0.1)',
     }}>
-      {btn('en', 'English', '🇬🇧')}
-      {btn('hi', 'हिन्दी', '🇮🇳')}
+      {btn('en', 'English')}
+      {btn('hi', 'हिन्दी')}
     </div>
   );
 }

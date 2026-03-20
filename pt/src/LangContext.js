@@ -1,9 +1,16 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 
 const LangContext = createContext();
 
 export function LangProvider({ children }) {
   const [lang, setLang] = useState('en'); // 'en' | 'hi'
+
+  // Keep <html lang="..."> in sync — lets CSS :lang(hi) selector
+  // apply Noto Sans Devanagari globally to every component at once
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
+
   return (
     <LangContext.Provider value={{ lang, setLang }}>
       {children}
