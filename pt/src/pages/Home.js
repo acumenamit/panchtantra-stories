@@ -194,7 +194,7 @@ export default function Home() {
   const { getStoryStatus, getAllHistory } = useHistory();
   // eslint-disable-next-line
   const _history = getAllHistory();
-  const { canPrompt, isIOSDevice, isInstalled, trigger } = useInstallPrompt();
+  const { canShowFooter, platform, isInstalled, triggerInstall, dismissFooter, hasDeferredPrompt } = useInstallPrompt();
 
   const [loading,      setLoading]      = useState(true);
   const [activeFilter, setActiveFilter] = useState('all');
@@ -290,28 +290,30 @@ export default function Home() {
       <div style={{ marginTop:64, textAlign:'center' }}>
 
         {/* Install button — only shown if not already installed */}
-        {!isInstalled && canPrompt && !isIOSDevice && (
+        {!isInstalled && canShowFooter && platform === 'chromium' && (
           <div style={{ marginBottom:24 }}>
-            <button onClick={trigger}
+            <button onClick={hasDeferredPrompt ? triggerInstall : undefined}
               style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
               onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
             >
               📲 {lang==='hi' ? 'ऐप इंस्टॉल करें' : 'Install App'}
             </button>
+            <button onClick={dismissFooter} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', fontFamily:'var(--mono)', fontSize:'0.65rem', cursor:'pointer', marginLeft:8 }} title="Hide">✕</button>
           </div>
         )}
 
         {/* iOS — show instructions on tap */}
-        {!isInstalled && isIOSDevice && (
+        {!isInstalled && canShowFooter && platform !== 'chromium' && platform !== 'unknown' && (
           <div style={{ marginBottom:24 }}>
             <button onClick={() => setShowIOSHint(h => !h)}
               style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
               onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
             >
-              📲 {lang==='hi' ? 'होम स्क्रीन पर जोड़ें' : 'Add to Home Screen'}
+              📲 {platform === 'mac-safari-17' ? (lang==='hi' ? 'Dock में जोड़ें' : 'Add to Dock') : platform === 'ios-other' ? (lang==='hi' ? 'Safari में खोलें' : 'Open in Safari') : (lang==='hi' ? 'होम स्क्रीन पर जोड़ें' : 'Add to Home Screen')}
             </button>
+            <button onClick={dismissFooter} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', fontFamily:'var(--mono)', fontSize:'0.65rem', cursor:'pointer', marginLeft:8 }} title="Hide">✕</button>
             {showIOSHint && (
               <div style={{ marginTop:12, padding:'14px 16px', borderRadius:14, background:'rgba(217,119,6,0.08)', border:'1px solid rgba(217,119,6,0.25)', maxWidth:340, margin:'12px auto 0', textAlign:'left' }}>
                 <div style={{ fontFamily:'var(--serif)', fontSize:'0.82rem', color:'#c4b090', lineHeight:1.9 }}>

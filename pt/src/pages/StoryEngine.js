@@ -105,8 +105,7 @@ export default function StoryEngine({ story }) {
       recordCompleted(story.id, nodeId, lang);
       trackStoryCompleted(story.id, nodeId, !!node.isAlternate, lang);
       // Show install prompt after first story completion
-      // Small delay so it doesn't clash with the ending card animation
-      if (!localStorage.getItem('pt_installed') && !localStorage.getItem('pt_install_dismissed')) {
+      if (!localStorage.getItem('pt_installed') && !localStorage.getItem('pt_prompt_dismissed')) {
         setTimeout(() => setShowInstall(true), 1500);
       }
     }
