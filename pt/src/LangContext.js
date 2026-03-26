@@ -3,11 +3,15 @@ import { createContext, useContext, useState, useEffect } from 'react';
 const LangContext = createContext();
 
 export function LangProvider({ children }) {
-  const [lang, setLang] = useState('en'); // 'en' | 'hi'
+  // Initialise from localStorage so language persists across sessions
+  const [lang, setLang] = useState(() => {
+    try { return localStorage.getItem('pt_lang') || 'en'; }
+    catch { return 'en'; }
+  });
 
-  // Keep <html lang="..."> in sync — lets CSS :lang(hi) selector
-  // apply Noto Sans Devanagari globally to every component at once
+  // Persist language + keep <html lang> in sync
   useEffect(() => {
+    try { localStorage.setItem('pt_lang', lang); } catch {}
     document.documentElement.lang = lang;
   }, [lang]);
 
