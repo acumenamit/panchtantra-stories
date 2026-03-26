@@ -1,32 +1,29 @@
 // ─────────────────────────────────────────────────────────────
 //  useInstallPrompt.js
-//  Handles PWA install prompt for both Android and iOS.
-//
-//  Android Chrome: intercepts beforeinstallprompt, defers it,
-//  exposes trigger() to show the native prompt on demand.
-//
-//  iOS Safari: no beforeinstallprompt support — detects iOS
-//  and returns isIOS:true so the UI can show manual instructions.
-//
-//  Storage key: 'pt_install_dismissed'
-//  Once dismissed, never shows again.
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react';
 
-const DISMISSED_KEY    = 'pt_install_dismissed';   // timestamp of last dismiss
-const INSTALLED_KEY    = 'pt_installed';
+const DISMISSED_KEY     = 'pt_install_dismissed';
+const INSTALLED_KEY     = 'pt_installed';
 const DISMISS_COUNT_KEY = 'pt_install_dismiss_count';
-const RETRY_DAYS        = 3; // show again after this many days if dismissed once
-
-function isIOS() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-}
+const RETRY_DAYS        = 3;
 
 function isInStandaloneMode() {
   return window.matchMedia('(display-mode: standalone)').matches ||
     window.navigator.standalone === true;
+}
+
+// Only true Safari on iOS — NOT Chrome or other browsers on iOS
+function isIOSSafariOnly() {
+  const ua = navigator.userAgent;
+  const isIOS = /iphone|ipad|ipod/i.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // Chrome on iOS includes 'CriOS', Firefox includes 'FxiOS'
+  // Pure Safari has neither
+  const isSafari = isIOS && !ua.includes('CriOS') && !ua.includes('FxiOS')
+    && !ua.includes('EdgiOS') && ua.includes('Safari');
+  return isSafari;
 }
 
 export default function useInstallPrompt() {
@@ -36,30 +33,30 @@ export default function useInstallPrompt() {
   const [isInstalled,    setIsInstalled]    = useState(false);
 
   useEffect(() => {
-    // Already installed — don't show
+    // Already running as installed PWA
     if (isInStandaloneMode()) {
       setIsInstalled(true);
       localStorage.setItem(INSTALLED_KEY, '1');
       return;
     }
 
-    // Check dismissal — allow retry after RETRY_DAYS, suppress after 2 dismissals
-    const dismissedAt    = localStorage.getItem(DISMISSED_KEY);
-    const dismissCount   = parseInt(localStorage.getItem(DISMISS_COUNT_KEY) || '0', 10);
+    // Check dismissal history
+    const dismissedAt  = localStorage.getItem(DISMISSED_KEY);
+    const dismissCount = parseInt(localStorage.getItem(DISMISS_COUNT_KEY) || '0', 10);
+    if (dismissedAt && dismissCount >= 2) return; // permanently suppressed
     if (dismissedAt) {
-      if (dismissCount >= 2) return; // permanently suppressed
       const daysSince = (Date.now() - parseInt(dismissedAt, 10)) / 86400000;
       if (daysSince < RETRY_DAYS) return; // too soon to retry
     }
 
-    // iOS — no beforeinstallprompt, show manual instructions
-    if (isIOS()) {
+    // iOS Safari — must show manual instructions
+    if (isIOSSafariOnly()) {
       setIsIOSDevice(true);
       setCanPrompt(true);
       return;
     }
 
-    // Android / Desktop Chrome — intercept native prompt
+    // Chrome / Edge / other — wait for beforeinstallprompt
     const handler = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -67,11 +64,10 @@ export default function useInstallPrompt() {
     };
 
     window.addEventListener('beforeinstallprompt', handler);
-
-    // Listen for successful install
     window.addEventListener('appinstalled', () => {
       setIsInstalled(true);
       setCanPrompt(false);
+      setDeferredPrompt(null);
       localStorage.setItem(INSTALLED_KEY, '1');
     });
 
@@ -79,16 +75,17 @@ export default function useInstallPrompt() {
   }, []);
 
   const trigger = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setIsInstalled(true);
-        setCanPrompt(false);
-        localStorage.setItem(INSTALLED_KEY, '1');
-      }
-      setDeferredPrompt(null);
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setIsInstalled(true);
+      setCanPrompt(false);
+      localStorage.setItem(INSTALLED_KEY, '1');
     }
+    // Whether accepted or rejected, clear the prompt
+    setDeferredPrompt(null);
+    setCanPrompt(false);
   };
 
   const dismiss = () => {
