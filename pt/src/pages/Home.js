@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLang, t } from '../LangContext';
 import LangToggle from '../components/LangToggle';
@@ -17,6 +17,8 @@ const UI = {
     coming: 'MORE STORIES COMING SOON',
     newBadge: 'NEW',
     readNow: 'Read now →',
+    filterAll: 'All',
+    filterAge: 'Age',
   },
   hi: {
     heading: 'प्राचीन ज्ञान,', heading2: 'संवादात्मक कहानियाँ',
@@ -26,6 +28,8 @@ const UI = {
     coming: 'और कहानियाँ जल्द आ रही हैं',
     newBadge: 'नया',
     readNow: 'पढ़ें →',
+    filterAll: 'सभी',
+    filterAge: 'आयु',
   },
 };
 
@@ -191,11 +195,18 @@ export default function Home() {
   const _history      = getAllHistory(); // read once to trigger re-render awareness
 
   // Sort newest first, separate featured from grid
+  const [activeFilter, setActiveFilter] = useState('all');
   const sorted        = sortedStories(STORIES);
   const featured      = sorted.find(s => s.id === FEATURED_STORY_ID) || sorted[0];
-  const gridStories   = sorted.filter(s => s.id !== featured.id);
+  const allGrid       = sorted.filter(s => s.id !== featured.id);
+  const gridStories   = activeFilter === 'all'
+    ? allGrid
+    : allGrid.filter(s => s.age === activeFilter);
   const remainder     = gridStories.length % 3;
   const placeholders  = remainder === 0 ? 0 : 3 - remainder;
+
+  // Derive available age groups from actual stories
+  const ageGroups = [...new Set(sorted.map(s => s.age))].sort();
 
   const prevLang = lang;
 
@@ -235,6 +246,53 @@ export default function Home() {
         status={getStoryStatus(featured.id)}
         onClick={() => navigate(`/story/${featured.id}`)}
       />
+
+      {/* ── Filter bar ── */}
+      <div style={{ width:'100%', maxWidth:960, marginBottom:28 }}>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+          {/* All button */}
+          <button
+            onClick={() => setActiveFilter('all')}
+            style={{
+              padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem',
+              fontWeight: activeFilter === 'all' ? 700 : 400,
+              background: activeFilter === 'all' ? '#d97706' : 'rgba(255,255,255,0.04)',
+              border: activeFilter === 'all' ? '1px solid #d97706' : '1px solid rgba(255,255,255,0.12)',
+              color: activeFilter === 'all' ? '#fff' : 'rgba(255,255,255,0.5)',
+              cursor:'pointer', transition:'all 0.2s',
+            }}
+            onMouseEnter={e => { if(activeFilter !== 'all') { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}}
+            onMouseLeave={e => { if(activeFilter !== 'all') { e.currentTarget.style.borderColor='rgba(255,255,255,0.12)'; e.currentTarget.style.color='rgba(255,255,255,0.5)'; }}}
+          >
+            {ui.filterAll}
+          </button>
+
+          {/* Age group buttons */}
+          {ageGroups.map(age => (
+            <button
+              key={age}
+              onClick={() => setActiveFilter(age)}
+              style={{
+                padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem',
+                fontWeight: activeFilter === age ? 700 : 400,
+                background: activeFilter === age ? '#d97706' : 'rgba(255,255,255,0.04)',
+                border: activeFilter === age ? '1px solid #d97706' : '1px solid rgba(255,255,255,0.12)',
+                color: activeFilter === age ? '#fff' : 'rgba(255,255,255,0.5)',
+                cursor:'pointer', transition:'all 0.2s',
+              }}
+              onMouseEnter={e => { if(activeFilter !== age) { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}}
+              onMouseLeave={e => { if(activeFilter !== age) { e.currentTarget.style.borderColor='rgba(255,255,255,0.12)'; e.currentTarget.style.color='rgba(255,255,255,0.5)'; }}}
+            >
+              {ui.filterAge} {age}
+            </button>
+          ))}
+
+          {/* Story count */}
+          <span style={{ marginLeft:'auto', fontFamily:'var(--mono)', fontSize:'0.62rem', color:'rgba(255,255,255,0.25)' }}>
+            {gridStories.length} {lang === 'hi' ? 'कहानियाँ' : gridStories.length === 1 ? 'story' : 'stories'}
+          </span>
+        </div>
+      </div>
 
       {/* ── All stories grid ── */}
       <div style={{ width:'100%', maxWidth:960 }}>
