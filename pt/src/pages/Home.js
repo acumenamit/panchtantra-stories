@@ -6,6 +6,7 @@ import ShareButton from '../components/ShareButton';
 import STORIES, { FEATURED_STORY_ID } from '../stories';
 import { trackPageView, trackLanguageSwitched } from '../analytics';
 import useHistory from '../components/useHistory';
+import WelcomeOverlay from '../components/WelcomeOverlay';
 
 const UI = {
   en: {
@@ -261,6 +262,9 @@ export default function Home() {
           ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦ सभी उम्र के लिए ज्ञान ✦'
           : '✦ PANCHATANTRA ✦ NITISHASTRA ✦ WISDOM FOR ALL AGES ✦'}
       </div>
+
+      {/* First-visit onboarding overlay */}
+      <WelcomeOverlay lang={lang} />
     </div>
   );
 }
