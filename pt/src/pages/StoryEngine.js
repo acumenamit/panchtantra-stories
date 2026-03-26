@@ -8,6 +8,7 @@ import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
 import AudioButton from '../components/AudioButton';
 import usePreloader from '../components/usePreloader';
+import useHistory from '../components/useHistory';
 import {
   trackPageView,
   trackStoryStarted,
@@ -32,6 +33,15 @@ export default function StoryEngine({ story }) {
   // audioActive: user's intent — stays true across nodes so audio
   // auto-plays on each new node once the file is ready
   const [audioActive, setAudioActive] = useState(false);
+
+  const {
+    getResumeNode,
+    recordStart,
+    recordNodeReached,
+    recordChoice: historyRecordChoice,
+    recordCompleted,
+    recordRestart: historyRecordRestart,
+  } = useHistory();
 
   const node  = story.nodes[nodeId];
   const scene = SCENES[node.scene] || SCENES.forest_day;
@@ -75,21 +85,29 @@ export default function StoryEngine({ story }) {
     return () => clearInterval(interval);
   }, [lang]); // eslint-disable-line
 
-  // Track story start + page view on mount
+  // On mount: resume in-progress node, record start
   useEffect(() => {
+    const resumeNode = getResumeNode(story.id);
+    if (resumeNode && resumeNode !== 'start') {
+      setNodeId(resumeNode);
+    }
+    recordStart(story.id, lang);
     trackPageView('story', { story_id: story.id, lang });
     trackStoryStarted(story.id, lang);
   }, []); // eslint-disable-line
 
-  // Track when an ending node is reached
+  // Record node reached + track ending
   useEffect(() => {
+    recordNodeReached(story.id, nodeId, lang);
     if (node.isEnding) {
+      recordCompleted(story.id, nodeId, lang);
       trackStoryCompleted(story.id, nodeId, !!node.isAlternate, lang);
     }
   }, [nodeId]); // eslint-disable-line
 
   const go = (nextId, choiceText) => {
     trackChoiceMade(story.id, nodeId, choiceText || nextId, lang);
+    historyRecordChoice(story.id, nodeId, choiceText || nextId, lang);
 
     setPicked(nextId);
     setFading(true);
@@ -120,6 +138,7 @@ export default function StoryEngine({ story }) {
 
   const restart = () => {
     trackStoryRestarted(story.id, lang);
+    historyRecordRestart(story.id, lang);
     setFading(true);
     setTimeout(() => {
       setNodeId('start');

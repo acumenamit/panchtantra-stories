@@ -5,6 +5,7 @@ import LangToggle from '../components/LangToggle';
 import ShareButton from '../components/ShareButton';
 import STORIES, { FEATURED_STORY_ID } from '../stories';
 import { trackPageView, trackLanguageSwitched } from '../analytics';
+import useHistory from '../components/useHistory';
 
 const UI = {
   en: {
@@ -46,7 +47,7 @@ function sortedStories(stories) {
 }
 
 // ── Featured hero card ────────────────────────────────────────
-function FeaturedCard({ story, lang, onClick }) {
+function FeaturedCard({ story, lang, onClick, status }) {
   const color = story.color;
   const ui    = UI[lang];
   return (
@@ -71,6 +72,16 @@ function FeaturedCard({ story, lang, onClick }) {
             {isNew(story) && (
               <span style={{ padding:'3px 10px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700, letterSpacing:'0.1em' }}>
                 {ui.newBadge}
+              </span>
+            )}
+            {status === 'completed' && !isNew(story) && (
+              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
+                ✓ {lang === 'hi' ? 'पढ़ी' : 'Read'}
+              </span>
+            )}
+            {status === 'in_progress' && !isNew(story) && (
+              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
+                {lang === 'hi' ? '… पढ़ रहे हैं' : '… Reading'}
               </span>
             )}
           </div>
@@ -107,21 +118,32 @@ function FeaturedCard({ story, lang, onClick }) {
 }
 
 // ── Regular story card ────────────────────────────────────────
-function StoryCard({ story, lang, onClick }) {
+function StoryCard({ story, lang, onClick, status }) {
   const color   = story.color;
   const ui      = UI[lang];
   const _isNew  = isNew(story);
 
   return (
     <button onClick={onClick}
-      style={{ display:'flex', flexDirection:'column', textAlign:'left', padding:'24px', borderRadius:20, background:'rgba(255,255,255,0.03)', border:`1px solid ${color}33`, cursor:'pointer', transition:'all 0.25s ease', position:'relative', overflow:'hidden' }}
+      style={{ display:'flex', flexDirection:'column', textAlign:'left', padding:'24px', borderRadius:20, background: status==='completed' ? `${color}08` : 'rgba(255,255,255,0.03)', border:`1px solid ${status==='completed' ? color+'55' : color+'33'}`, cursor:'pointer', transition:'all 0.25s ease', position:'relative', overflow:'hidden' }}
       onMouseEnter={e => { e.currentTarget.style.background=`${color}0f`; e.currentTarget.style.border=`1px solid ${color}77`; e.currentTarget.style.transform='translateY(-4px)'; e.currentTarget.style.boxShadow=`0 12px 40px ${color}22`; }}
       onMouseLeave={e => { e.currentTarget.style.background='rgba(255,255,255,0.03)'; e.currentTarget.style.border=`1px solid ${color}33`; e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}>
 
       {/* Top shimmer */}
       <div style={{ position:'absolute', top:0, left:0, right:0, height:2, background:`linear-gradient(90deg,transparent,${color},transparent)` }} />
 
-      {/* NEW badge — top right corner */}
+      {/* Status badge — top right corner */}
+      {status === 'completed' && !_isNew && (
+        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>
+          ✓
+        </div>
+      )}
+      {status === 'in_progress' && !_isNew && (
+        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:`rgba(251,191,36,0.12)`, border:`1px solid rgba(251,191,36,0.4)`, color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>
+          …
+        </div>
+      )}
+      {/* NEW badge — top right, takes priority over status */}
       {_isNew && (
         <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.1em' }}>
           {ui.newBadge}
@@ -163,6 +185,9 @@ export default function Home() {
   const navigate      = useNavigate();
   const { lang }      = useLang();
   const ui            = UI[lang];
+  const { getStoryStatus, getAllHistory } = useHistory();
+  // eslint-disable-next-line
+  const _history      = getAllHistory(); // read once to trigger re-render awareness
 
   // Sort newest first, separate featured from grid
   const sorted        = sortedStories(STORIES);
@@ -206,6 +231,7 @@ export default function Home() {
       <FeaturedCard
         story={featured}
         lang={lang}
+        status={getStoryStatus(featured.id)}
         onClick={() => navigate(`/story/${featured.id}`)}
       />
 
@@ -220,6 +246,7 @@ export default function Home() {
               key={story.id}
               story={story}
               lang={lang}
+              status={getStoryStatus(story.id)}
               onClick={() => navigate(`/story/${story.id}`)}
             />
           ))}
