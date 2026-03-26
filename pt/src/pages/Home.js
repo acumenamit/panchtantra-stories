@@ -264,7 +264,7 @@ export default function Home() {
       </div>
 
       {/* First-visit onboarding overlay */}
-      <WelcomeOverlay lang={lang} />
+      <WelcomeOverlay />
     </div>
   );
 }
