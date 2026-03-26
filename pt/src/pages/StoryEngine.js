@@ -8,6 +8,7 @@ import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
 import AudioButton from '../components/AudioButton';
 import usePreloader from '../components/usePreloader';
+import InstallPrompt from '../components/InstallPrompt';
 import useHistory from '../components/useHistory';
 import {
   trackPageView,
@@ -28,6 +29,7 @@ export default function StoryEngine({ story }) {
   const [fading,      setFading]     = useState(false);
   const [pickedNext,  setPicked]     = useState(null);
   const [imgLoaded,   setImgLoaded]  = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
   const [imageReady,  setImageReady] = useState(false);
   const [audioReady,  setAudioReady] = useState(false);
   // audioActive: user's intent — stays true across nodes so audio
@@ -102,6 +104,11 @@ export default function StoryEngine({ story }) {
     if (node.isEnding) {
       recordCompleted(story.id, nodeId, lang);
       trackStoryCompleted(story.id, nodeId, !!node.isAlternate, lang);
+      // Show install prompt after first story completion
+      // Small delay so it doesn't clash with the ending card animation
+      if (!localStorage.getItem('pt_installed') && !localStorage.getItem('pt_install_dismissed')) {
+        setTimeout(() => setShowInstall(true), 1500);
+      }
     }
   }, [nodeId]); // eslint-disable-line
 
@@ -387,6 +394,9 @@ export default function StoryEngine({ story }) {
       <div style={{ marginTop:8, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing||'0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
         {lang === 'hi' ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦' : '✦ PANCHATANTRA ✦ NITISHASTRA ✦'}
       </div>
+
+      {/* Install prompt — shown after first story completion */}
+      {showInstall && <InstallPrompt lang={lang} accent={accent} />}
     </div>
   );
 }

@@ -7,6 +7,8 @@ import STORIES, { FEATURED_STORY_ID } from '../stories';
 import { trackPageView, trackLanguageSwitched } from '../analytics';
 import useHistory from '../components/useHistory';
 import WelcomeOverlay from '../components/WelcomeOverlay';
+import InstallPrompt from '../components/InstallPrompt';
+import useInstallPrompt from '../components/useInstallPrompt';
 
 const UI = {
   en: {
@@ -233,6 +235,7 @@ export default function Home() {
   const { lang }      = useLang();
   const ui            = UI[lang];
   const { getStoryStatus, getAllHistory } = useHistory();
+  const { canPrompt, isIOSDevice, isInstalled, trigger, dismiss } = useInstallPrompt();
   // eslint-disable-next-line
   const _history      = getAllHistory(); // read once to trigger re-render awareness
 
@@ -369,10 +372,54 @@ export default function Home() {
         </div>
       </div>
 
-      <div style={{ marginTop:64, fontFamily:'var(--mono)', fontSize:'0.62rem', color:'rgba(255,255,255,0.12)', letterSpacing:'0.18em', textAlign:'center' }}>
-        {lang === 'hi'
-          ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦ सभी उम्र के लिए ज्ञान ✦'
-          : '✦ PANCHATANTRA ✦ NITISHASTRA ✦ WISDOM FOR ALL AGES ✦'}
+      {/* ── Footer ── */}
+      <div style={{ marginTop:64, textAlign:'center' }}>
+
+        {/* Install app link — always visible if not installed and not permanently dismissed */}
+        {!isInstalled && (
+          <div style={{ marginBottom: 24 }}>
+            {/* Android/Desktop — tappable install button */}
+            {canPrompt && !isIOSDevice && (
+              <button
+                onClick={trigger}
+                style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
+              >
+                📲 {lang === 'hi' ? 'ऐप इंस्टॉल करें' : 'Install App'}
+              </button>
+            )}
+            {/* iOS — show instructions inline on tap */}
+            {isIOSDevice && (
+              <button
+                onClick={() => document.getElementById('ios-install-hint').style.display = 'block'}
+                style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
+              >
+                📲 {lang === 'hi' ? 'होम स्क्रीन पर जोड़ें' : 'Add to Home Screen'}
+              </button>
+            )}
+            {/* iOS inline hint — hidden until button tapped */}
+            <div id="ios-install-hint" style={{ display:'none', marginTop:12, padding:'14px 16px', borderRadius:14, background:'rgba(217,119,6,0.08)', border:'1px solid rgba(217,119,6,0.25)', maxWidth:340, margin:'12px auto 0' }}>
+              <div style={{ fontFamily:'var(--serif)', fontSize:'0.82rem', color:'#c4b090', lineHeight:1.7 }}>
+                {lang === 'hi'
+                  ? '१. Safari में शेयर बटन टैप करें ↑
+२. "Add to Home Screen" टैप करें
+३. Add टैप करें'
+                  : '1. Tap the Share button in Safari ↑
+2. Tap "Add to Home Screen"
+3. Tap Add'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'rgba(255,255,255,0.12)', letterSpacing:'0.18em' }}>
+          {lang === 'hi'
+            ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦ सभी उम्र के लिए ज्ञान ✦'
+            : '✦ PANCHATANTRA ✦ NITISHASTRA ✦ WISDOM FOR ALL AGES ✦'}
+        </div>
       </div>
 
       {/* First-visit onboarding overlay */}
