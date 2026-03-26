@@ -403,13 +403,11 @@ export default function Home() {
             {/* iOS inline hint — hidden until button tapped */}
             <div id="ios-install-hint" style={{ display:'none', marginTop:12, padding:'14px 16px', borderRadius:14, background:'rgba(217,119,6,0.08)', border:'1px solid rgba(217,119,6,0.25)', maxWidth:340, margin:'12px auto 0' }}>
               <div style={{ fontFamily:'var(--serif)', fontSize:'0.82rem', color:'#c4b090', lineHeight:1.7 }}>
-                {lang === 'hi'
-                  ? '१. Safari में शेयर बटन टैप करें ↑
-२. "Add to Home Screen" टैप करें
-३. Add टैप करें'
-                  : '1. Tap the Share button in Safari ↑
-2. Tap "Add to Home Screen"
-3. Tap Add'}
+                {lang === 'hi' ? (
+                  <><div>१. Safari में शेयर बटन टैप करें ↑</div><div>२. &quot;Add to Home Screen&quot; टैप करें</div><div>३. Add टैप करें</div></>
+                ) : (
+                  <><div>1. Tap the Share button in Safari ↑</div><div>2. Tap &quot;Add to Home Screen&quot;</div><div>3. Tap Add</div></>
+                )}
               </div>
             </div>
           </div>
