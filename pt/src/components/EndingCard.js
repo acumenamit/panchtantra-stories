@@ -1,7 +1,8 @@
 import { t } from '../LangContext';
 import ShareButton from './ShareButton';
+import RecommendationCards from './RecommendationCards';
 
-export default function EndingCard({ node, accent, onRestart, onHome, lang, story }) {
+export default function EndingCard({ node, accent, onRestart, onHome, lang, story, onNavigate }) {
   const isHi      = lang === 'hi';
   const altLabel  = isHi ? '⚠ वैकल्पिक मार्ग — नीतिशास्त्र ज्ञान' : '⚠ ALTERNATE PATH — Nitishastra Wisdom';
   const lessonLabel = isHi ? '✦ शिक्षा'              : '✦ THE LESSON';
@@ -56,6 +57,14 @@ export default function EndingCard({ node, accent, onRestart, onHome, lang, stor
         </div>
         <ShareButton story={story} lang={lang} accent={accent} variant="pill" />
       </div>
+
+      {/* What to read next */}
+      <RecommendationCards
+        currentStoryId={story.id}
+        lang={lang}
+        accent={accent}
+        onNavigate={onNavigate}
+      />
     </div>
   );
 }

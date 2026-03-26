@@ -8,6 +8,8 @@ import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
 import AudioButton from '../components/AudioButton';
 import usePreloader from '../components/usePreloader';
+import InstallPrompt from '../components/InstallPrompt';
+import useHistory from '../components/useHistory';
 import {
   trackPageView,
   trackStoryStarted,
@@ -27,11 +29,21 @@ export default function StoryEngine({ story }) {
   const [fading,      setFading]     = useState(false);
   const [pickedNext,  setPicked]     = useState(null);
   const [imgLoaded,   setImgLoaded]  = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
   const [imageReady,  setImageReady] = useState(false);
   const [audioReady,  setAudioReady] = useState(false);
   // audioActive: user's intent — stays true across nodes so audio
   // auto-plays on each new node once the file is ready
   const [audioActive, setAudioActive] = useState(false);
+
+  const {
+    getResumeNode,
+    recordStart,
+    recordNodeReached,
+    recordChoice: historyRecordChoice,
+    recordCompleted,
+    recordRestart: historyRecordRestart,
+  } = useHistory();
 
   const node  = story.nodes[nodeId];
   const scene = SCENES[node.scene] || SCENES.forest_day;
@@ -75,21 +87,33 @@ export default function StoryEngine({ story }) {
     return () => clearInterval(interval);
   }, [lang]); // eslint-disable-line
 
-  // Track story start + page view on mount
+  // On mount: resume in-progress node, record start
   useEffect(() => {
+    const resumeNode = getResumeNode(story.id);
+    if (resumeNode && resumeNode !== 'start') {
+      setNodeId(resumeNode);
+    }
+    recordStart(story.id, lang);
     trackPageView('story', { story_id: story.id, lang });
     trackStoryStarted(story.id, lang);
   }, []); // eslint-disable-line
 
-  // Track when an ending node is reached
+  // Record node reached + track ending
   useEffect(() => {
+    recordNodeReached(story.id, nodeId, lang);
     if (node.isEnding) {
+      recordCompleted(story.id, nodeId, lang);
       trackStoryCompleted(story.id, nodeId, !!node.isAlternate, lang);
+      // Show install prompt after first story completion
+      if (!localStorage.getItem('pt_installed') && !localStorage.getItem('pt_prompt_dismissed')) {
+        setTimeout(() => setShowInstall(true), 1500);
+      }
     }
   }, [nodeId]); // eslint-disable-line
 
   const go = (nextId, choiceText) => {
     trackChoiceMade(story.id, nodeId, choiceText || nextId, lang);
+    historyRecordChoice(story.id, nodeId, choiceText || nextId, lang);
 
     setPicked(nextId);
     setFading(true);
@@ -120,6 +144,7 @@ export default function StoryEngine({ story }) {
 
   const restart = () => {
     trackStoryRestarted(story.id, lang);
+    historyRecordRestart(story.id, lang);
     setFading(true);
     setTimeout(() => {
       setNodeId('start');
@@ -164,7 +189,7 @@ export default function StoryEngine({ story }) {
   const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
 
   return (
-    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 48px', transition:'background 1.2s ease' }}>
+    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 80px', transition:'background 1.2s ease' }}>
 
       {/* ── Header ── */}
       <div style={{ width:'100%', maxWidth:660, marginBottom:20 }}>
@@ -294,6 +319,7 @@ export default function StoryEngine({ story }) {
               story={story}
               onRestart={restart}
               onHome={() => navigate('/')}
+              onNavigate={(storyId) => navigate(`/story/${storyId}`)}
             />
           ) : (
             <>
@@ -343,29 +369,33 @@ export default function StoryEngine({ story }) {
           )}
         </div>
 
-        {/* ── Footer ── */}
-        <div style={{ padding:'14px 34px', borderTop:'1px solid rgba(255,255,255,0.15)', display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(0,0,0,0.3)' }}>
-          <button onClick={back} disabled={!history.length}
-            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:monoFont, transition:'color 0.2s', color:history.length?'#ffffff':'rgba(255,255,255,0.25)', cursor:history.length?'pointer':'default', fontWeight:history.length?600:400 }}
-            onMouseEnter={e => history.length && (e.currentTarget.style.color = accent)}
-            onMouseLeave={e => (e.currentTarget.style.color = history.length?'#ffffff':'rgba(255,255,255,0.25)')}>
-            {navBack}
-          </button>
-          <span style={{ fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.55)', letterSpacing:monoSpacing || '0.08em', textAlign:'center' }}>
-            {t(story.theme, lang)}
-          </span>
-          <button onClick={restart}
-            style={{ background:'none', border:'none', padding:0, fontSize:'0.78rem', fontFamily:monoFont, color:'#ffffff', transition:'color 0.2s', fontWeight:600 }}
-            onMouseEnter={e => e.currentTarget.style.color = accent}
-            onMouseLeave={e => e.currentTarget.style.color = '#ffffff'}>
-            {navRst}
-          </button>
-        </div>
       </div>
 
-      <div style={{ marginTop:28, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing || '0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
+      {/* ── Footer — sticky bottom, never moves ── */}
+      <div style={{ position:'fixed', bottom:0, left:0, right:0, zIndex:100, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 24px', background:'linear-gradient(to top, rgba(8,6,10,0.98) 70%, transparent)', backdropFilter:'blur(8px)' }}>
+        <button onClick={back} disabled={!history.length}
+          style={{ background:'none', border:`1px solid ${history.length?'rgba(255,255,255,0.18)':'rgba(255,255,255,0.06)'}`, padding:'10px 20px', borderRadius:24, fontSize:'0.78rem', fontFamily:monoFont, transition:'all 0.2s', color:history.length?'#ffffff':'rgba(255,255,255,0.2)', cursor:history.length?'pointer':'default', fontWeight:history.length?600:400 }}
+          onMouseEnter={e => { if(history.length){ e.currentTarget.style.color=accent; e.currentTarget.style.borderColor=accent; }}}
+          onMouseLeave={e => { e.currentTarget.style.color=history.length?'#ffffff':'rgba(255,255,255,0.2)'; e.currentTarget.style.borderColor=history.length?'rgba(255,255,255,0.18)':'rgba(255,255,255,0.06)'; }}>
+          {navBack}
+        </button>
+        <span style={{ fontFamily:monoFont, fontSize:'0.62rem', color:'rgba(255,255,255,0.25)', letterSpacing:monoSpacing||'0.08em', textAlign:'center' }}>
+          {t(story.theme, lang)}
+        </span>
+        <button onClick={restart}
+          style={{ background:'none', border:'1px solid rgba(255,255,255,0.18)', padding:'10px 20px', borderRadius:24, fontSize:'0.78rem', fontFamily:monoFont, color:'#ffffff', transition:'all 0.2s', fontWeight:600 }}
+          onMouseEnter={e => { e.currentTarget.style.color=accent; e.currentTarget.style.borderColor=accent; }}
+          onMouseLeave={e => { e.currentTarget.style.color='#ffffff'; e.currentTarget.style.borderColor='rgba(255,255,255,0.18)'; }}>
+          {navRst}
+        </button>
+      </div>
+
+      <div style={{ marginTop:8, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing||'0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
         {lang === 'hi' ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦' : '✦ PANCHATANTRA ✦ NITISHASTRA ✦'}
       </div>
+
+      {/* Install prompt — shown after first story completion */}
+      {showInstall && <InstallPrompt lang={lang} accent={accent} />}
     </div>
   );
 }
