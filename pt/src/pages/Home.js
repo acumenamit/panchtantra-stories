@@ -173,6 +173,48 @@ function StoryCard({ story, lang, onClick, status }) {
   );
 }
 
+// ── Skeleton card — shown while home screen first loads ──────
+function SkeletonCard() {
+  return (
+    <div style={{ padding:'24px', borderRadius:20, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.06)', overflow:'hidden' }}>
+      <div className="skeleton" style={{ width:40, height:40, borderRadius:10, marginBottom:14 }} />
+      <div className="skeleton" style={{ width:'55%', height:10, marginBottom:10 }} />
+      <div className="skeleton" style={{ width:'85%', height:16, marginBottom:8 }} />
+      <div className="skeleton" style={{ width:'70%', height:16, marginBottom:20 }} />
+      <div className="skeleton" style={{ width:'90%', height:12, marginBottom:8 }} />
+      <div className="skeleton" style={{ width:'80%', height:12, marginBottom:20 }} />
+      <div style={{ display:'flex', gap:8 }}>
+        <div className="skeleton" style={{ width:60, height:22, borderRadius:20 }} />
+        <div className="skeleton" style={{ width:80, height:22, borderRadius:20 }} />
+      </div>
+    </div>
+  );
+}
+
+function SkeletonFeatured() {
+  return (
+    <div style={{ width:'100%', maxWidth:960, marginBottom:48 }}>
+      <div className="skeleton" style={{ width:140, height:10, marginBottom:16, borderRadius:4 }} />
+      <div style={{ width:'100%', borderRadius:24, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.06)', padding:'32px 36px', display:'flex', gap:32, alignItems:'center' }}>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12 }}>
+          <div className="skeleton" style={{ width:64, height:64, borderRadius:14 }} />
+          <div className="skeleton" style={{ width:44, height:18, borderRadius:20 }} />
+        </div>
+        <div style={{ flex:1 }}>
+          <div className="skeleton" style={{ width:'40%', height:10, marginBottom:12 }} />
+          <div className="skeleton" style={{ width:'75%', height:28, marginBottom:14 }} />
+          <div className="skeleton" style={{ width:'90%', height:14, marginBottom:8 }} />
+          <div className="skeleton" style={{ width:'70%', height:14, marginBottom:24 }} />
+          <div style={{ display:'flex', gap:10 }}>
+            <div className="skeleton" style={{ width:70, height:26, borderRadius:20 }} />
+            <div className="skeleton" style={{ width:90, height:26, borderRadius:20 }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Coming soon placeholder ───────────────────────────────────
 function ComingSoonCard({ lang }) {
   return (
@@ -195,6 +237,7 @@ export default function Home() {
   const _history      = getAllHistory(); // read once to trigger re-render awareness
 
   // Sort newest first, separate featured from grid
+  const [loading, setLoading]           = useState(true);
   const [activeFilter, setActiveFilter] = useState('all');
   const sorted        = sortedStories(STORIES);
   const featured      = sorted.find(s => s.id === FEATURED_STORY_ID) || sorted[0];
@@ -212,6 +255,9 @@ export default function Home() {
 
   useEffect(() => {
     trackPageView('home', { lang });
+    // Show skeletons briefly on first paint, then reveal real content
+    const t = setTimeout(() => setLoading(false), 600);
+    return () => clearTimeout(t);
   }, []); // eslint-disable-line
 
   const handleLangChange = (newLang) => {
@@ -240,12 +286,15 @@ export default function Home() {
       </div>
 
       {/* ── Featured story ── */}
-      <FeaturedCard
-        story={featured}
-        lang={lang}
-        status={getStoryStatus(featured.id)}
-        onClick={() => navigate(`/story/${featured.id}`)}
-      />
+      {loading
+        ? <SkeletonFeatured />
+        : <FeaturedCard
+            story={featured}
+            lang={lang}
+            status={getStoryStatus(featured.id)}
+            onClick={() => navigate(`/story/${featured.id}`)}
+          />
+      }
 
       {/* ── Filter bar ── */}
       <div style={{ width:'100%', maxWidth:960, marginBottom:28 }}>
@@ -300,18 +349,23 @@ export default function Home() {
           {ui.allStories}
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:20 }}>
-          {gridStories.map(story => (
-            <StoryCard
-              key={story.id}
-              story={story}
-              lang={lang}
-              status={getStoryStatus(story.id)}
-              onClick={() => navigate(`/story/${story.id}`)}
-            />
-          ))}
-          {Array.from({ length: placeholders }).map((_, i) => (
-            <ComingSoonCard key={i} lang={lang} />
-          ))}
+          {loading
+            ? Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)
+            : <>
+                {gridStories.map(story => (
+                  <StoryCard
+                    key={story.id}
+                    story={story}
+                    lang={lang}
+                    status={getStoryStatus(story.id)}
+                    onClick={() => navigate(`/story/${story.id}`)}
+                  />
+                ))}
+                {Array.from({ length: placeholders }).map((_, i) => (
+                  <ComingSoonCard key={i} lang={lang} />
+                ))}
+              </>
+          }
         </div>
       </div>
 
