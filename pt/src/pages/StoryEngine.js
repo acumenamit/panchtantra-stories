@@ -313,6 +313,7 @@ export default function StoryEngine({ story }) {
               story={story}
               onRestart={restart}
               onHome={() => navigate('/')}
+              onNavigate={(storyId) => navigate(`/story/${storyId}`)}
             />
           ) : (
             <>
