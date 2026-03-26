@@ -52,7 +52,6 @@ function LangStep({ onPick }) {
           onMouseEnter={e => { e.currentTarget.style.background = 'rgba(217,119,6,0.12)'; e.currentTarget.style.borderColor = '#d97706'; }}
           onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; }}
         >
-          <div style={{ fontSize: '2rem', marginBottom: 8 }}>🇬🇧</div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', color: '#fef3c7', fontWeight: 700, marginBottom: 4 }}>English</div>
           <div style={{ fontFamily: 'var(--serif)', fontSize: '0.8rem', color: '#a89880' }}>Continue in English</div>
         </button>
@@ -64,7 +63,6 @@ function LangStep({ onPick }) {
           onMouseEnter={e => { e.currentTarget.style.background = 'rgba(217,119,6,0.12)'; e.currentTarget.style.borderColor = '#d97706'; }}
           onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; }}
         >
-          <div style={{ fontSize: '2rem', marginBottom: 8 }}>🇮🇳</div>
           <div style={{ fontFamily: "'Noto Sans Devanagari', sans-serif", fontSize: '0.95rem', color: '#fef3c7', fontWeight: 700, marginBottom: 4 }}>हिन्दी</div>
           <div style={{ fontFamily: "'Noto Sans Devanagari', sans-serif", fontSize: '0.8rem', color: '#a89880' }}>हिन्दी में जारी रखें</div>
         </button>
