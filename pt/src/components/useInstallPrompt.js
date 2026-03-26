@@ -1,99 +1,154 @@
 // ─────────────────────────────────────────────────────────────
 //  useInstallPrompt.js
+//
+//  Platform coverage:
+//  iOS/iPadOS Safari          → 3-step Add to Home Screen
+//  iOS/iPadOS other browsers  → "Open in Safari" guidance
+//  Mac Safari 17+             → "File → Add to Dock" guidance
+//  Mac/Win Chrome/Edge        → native beforeinstallprompt
+//  Android Chrome/Samsung     → native beforeinstallprompt
+//  Firefox (all platforms)    → nothing (no PWA support)
+//
+//  Two independent dismiss states:
+//  pt_prompt_dismissed → hides post-story popup (retries after 3 days)
+//  pt_footer_dismissed → hides footer button permanently (user taps ✕)
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react';
 
-const DISMISSED_KEY     = 'pt_install_dismissed';
-const INSTALLED_KEY     = 'pt_installed';
-const DISMISS_COUNT_KEY = 'pt_install_dismiss_count';
-const RETRY_DAYS        = 3;
+const PROMPT_DISMISSED_KEY = 'pt_prompt_dismissed';
+const FOOTER_DISMISSED_KEY = 'pt_footer_dismissed';
+const INSTALLED_KEY        = 'pt_installed';
+const RETRY_DAYS           = 3;
 
 function isInStandaloneMode() {
   return window.matchMedia('(display-mode: standalone)').matches ||
     window.navigator.standalone === true;
 }
 
-// Only true Safari on iOS — NOT Chrome or other browsers on iOS
-function isIOSSafariOnly() {
-  const ua = navigator.userAgent;
-  const isIOS = /iphone|ipad|ipod/i.test(ua) ||
+function getPlatform() {
+  const ua  = navigator.userAgent;
+  const ios = /iphone|ipad|ipod/i.test(ua) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  // Chrome on iOS includes 'CriOS', Firefox includes 'FxiOS'
-  // Pure Safari has neither
-  const isSafari = isIOS && !ua.includes('CriOS') && !ua.includes('FxiOS')
-    && !ua.includes('EdgiOS') && ua.includes('Safari');
-  return isSafari;
+  const mac = !ios && /macintosh|mac os x/i.test(ua);
+
+  if (ios) {
+    // Pure Safari on iOS: has Safari, no CriOS/FxiOS/EdgiOS
+    const iosSafari = ua.includes('Safari') &&
+      !ua.includes('CriOS') && !ua.includes('FxiOS') && !ua.includes('EdgiOS');
+    return iosSafari ? 'ios-safari' : 'ios-other';
+  }
+
+  if (mac) {
+    // Safari on Mac: has Safari but not Chrome string
+    const macSafari = ua.includes('Safari') && !ua.includes('Chrome');
+    if (macSafari) {
+      // Safari 17+ supports PWA install (version string: Version/17.x)
+      const match = ua.match(/Version\/(\d+)/);
+      const ver   = match ? parseInt(match[1], 10) : 0;
+      return ver >= 17 ? 'mac-safari-17' : 'mac-safari-old';
+    }
+    // Chrome or Edge on Mac
+    if (ua.includes('Chrome') || ua.includes('Edg')) return 'chromium';
+    return 'unsupported';
+  }
+
+  // Android or Windows
+  const android = /android/i.test(ua);
+  if (android) {
+    if (ua.includes('Firefox')) return 'unsupported';
+    return 'chromium'; // Chrome, Samsung Internet, Edge etc
+  }
+
+  // Windows / Linux
+  if (ua.includes('Firefox')) return 'unsupported';
+  if (ua.includes('Chrome') || ua.includes('Edg')) return 'chromium';
+  return 'unsupported';
 }
 
 export default function useInstallPrompt() {
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [canPrompt,      setCanPrompt]      = useState(false);
-  const [isIOSDevice,    setIsIOSDevice]    = useState(false);
-  const [isInstalled,    setIsInstalled]    = useState(false);
+  const [deferredPrompt,  setDeferredPrompt]  = useState(null);
+  const [canShowPopup,    setCanShowPopup]    = useState(false);
+  const [canShowFooter,   setCanShowFooter]   = useState(false);
+  const [platform,        setPlatform]        = useState('unknown');
+  const [isInstalled,     setIsInstalled]     = useState(false);
 
   useEffect(() => {
-    // Already running as installed PWA
     if (isInStandaloneMode()) {
       setIsInstalled(true);
       localStorage.setItem(INSTALLED_KEY, '1');
       return;
     }
 
-    // Check dismissal history
-    const dismissedAt  = localStorage.getItem(DISMISSED_KEY);
-    const dismissCount = parseInt(localStorage.getItem(DISMISS_COUNT_KEY) || '0', 10);
-    if (dismissedAt && dismissCount >= 2) return; // permanently suppressed
-    if (dismissedAt) {
-      const daysSince = (Date.now() - parseInt(dismissedAt, 10)) / 86400000;
-      if (daysSince < RETRY_DAYS) return; // too soon to retry
-    }
+    const p = getPlatform();
+    setPlatform(p);
 
-    // iOS Safari — must show manual instructions
-    if (isIOSSafariOnly()) {
-      setIsIOSDevice(true);
-      setCanPrompt(true);
+    const promptDismissed = localStorage.getItem(PROMPT_DISMISSED_KEY);
+    const footerDismissed = localStorage.getItem(FOOTER_DISMISSED_KEY);
+
+    const promptAllowed = !promptDismissed || (() => {
+      const daysSince = (Date.now() - parseInt(promptDismissed, 10)) / 86400000;
+      return daysSince >= RETRY_DAYS;
+    })();
+
+    if (p === 'unsupported' || p === 'mac-safari-old') return;
+
+    // Platforms with static instructions (no JS event needed)
+    if (['ios-safari', 'ios-other', 'mac-safari-17'].includes(p)) {
+      if (!footerDismissed) setCanShowFooter(true);
+      if (promptAllowed)    setCanShowPopup(true);
       return;
     }
 
-    // Chrome / Edge / other — wait for beforeinstallprompt
-    const handler = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setCanPrompt(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handler);
-    window.addEventListener('appinstalled', () => {
-      setIsInstalled(true);
-      setCanPrompt(false);
-      setDeferredPrompt(null);
-      localStorage.setItem(INSTALLED_KEY, '1');
-    });
-
-    return () => window.removeEventListener('beforeinstallprompt', handler);
+    // Chromium — wait for beforeinstallprompt
+    if (p === 'chromium') {
+      if (!footerDismissed) setCanShowFooter(true);
+      const handler = (e) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+        if (promptAllowed) setCanShowPopup(true);
+      };
+      window.addEventListener('beforeinstallprompt', handler);
+      window.addEventListener('appinstalled', () => {
+        setIsInstalled(true);
+        setCanShowPopup(false);
+        setCanShowFooter(false);
+        localStorage.setItem(INSTALLED_KEY, '1');
+      });
+      return () => window.removeEventListener('beforeinstallprompt', handler);
+    }
   }, []);
 
-  const trigger = async () => {
+  const triggerInstall = async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
       setIsInstalled(true);
-      setCanPrompt(false);
       localStorage.setItem(INSTALLED_KEY, '1');
     }
-    // Whether accepted or rejected, clear the prompt
     setDeferredPrompt(null);
-    setCanPrompt(false);
+    setCanShowPopup(false);
   };
 
-  const dismiss = () => {
-    const count = parseInt(localStorage.getItem(DISMISS_COUNT_KEY) || '0', 10);
-    localStorage.setItem(DISMISSED_KEY, Date.now().toString());
-    localStorage.setItem(DISMISS_COUNT_KEY, (count + 1).toString());
-    setCanPrompt(false);
+  const dismissPopup = () => {
+    localStorage.setItem(PROMPT_DISMISSED_KEY, Date.now().toString());
+    setCanShowPopup(false);
   };
 
-  return { canPrompt, isIOSDevice, isInstalled, trigger, dismiss };
+  const dismissFooter = () => {
+    localStorage.setItem(FOOTER_DISMISSED_KEY, '1');
+    setCanShowFooter(false);
+  };
+
+  return {
+    canShowPopup,
+    canShowFooter,
+    platform,
+    isInstalled,
+    triggerInstall,
+    dismissPopup,
+    dismissFooter,
+    hasDeferredPrompt: !!deferredPrompt,
+  };
 }
