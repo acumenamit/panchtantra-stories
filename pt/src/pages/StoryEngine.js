@@ -164,7 +164,7 @@ export default function StoryEngine({ story }) {
 
   // ── Status line ───────────────────────────────────────────────
   const hasImage = !!node.image;
-  const hasAudio = !node.isEnding && !!story.hasAudio;
+  const hasAudio = !node.isEnding;
   const showImageLoading = hasImage && !imageReady;
   const showAudioLoading = hasAudio && !audioReady && !showImageLoading;
   const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
