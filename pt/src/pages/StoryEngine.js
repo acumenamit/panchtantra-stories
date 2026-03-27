@@ -105,7 +105,7 @@ export default function StoryEngine({ story }) {
       recordCompleted(story.id, nodeId, lang);
       trackStoryCompleted(story.id, nodeId, !!node.isAlternate, lang);
       // Show install prompt after first story completion
-      if (!localStorage.getItem('pt_installed') && !localStorage.getItem('pt_prompt_dismissed')) {
+      if (!localStorage.getItem('hk_installed') && !localStorage.getItem('hk_prompt_dismissed')) {
         setTimeout(() => setShowInstall(true), 1500);
       }
     }
