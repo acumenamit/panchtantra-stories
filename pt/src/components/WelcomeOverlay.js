@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLang } from '../LangContext';
 
-const STORAGE_KEY = 'pt_welcomed';
+const STORAGE_KEY = 'hk_welcomed';
 
 const CONTENT = {
   en: {
@@ -26,6 +26,17 @@ const CONTENT = {
     cta:  'पढ़ना शुरू करें →',
     skip: 'छोड़ें',
   },
+  ar: {
+    badge:   '✦ أهلاً بك في حكايات ✦',
+    heading: 'قصص تجعل الأطفال يفكرون',
+    points: [
+      { icon: '🌿', title: 'حكمة قديمة',      body: 'حكايات كُتبت منذ آلاف السنين — لا تزال أعمق دروس الحياة الحكيمة.' },
+      { icon: '🤔', title: 'طفلك يختار',       body: 'كل قصة تتفرّع. الأطفال يتخذون القرارات ويشعرون بالنتائج.' },
+      { icon: '🌙', title: 'عربي وإنجليزي',   body: 'بدّل اللغة في منتصف القصة. اقرأ معاً أو دعهم يقرأون وحدهم.' },
+    ],
+    cta:  'ابدأ القراءة ←',
+    skip: 'تخطّ',
+  },
 };
 
 // ── Language picker step ──────────────────────────────────────
@@ -40,7 +51,7 @@ function LangStep({ onPick }) {
         Choose your language
       </h2>
       <p style={{ fontFamily: 'var(--serif)', fontSize: '1rem', color: '#a89880', marginBottom: 8 }}>
-        अपनी भाषा चुनें
+        اختر لغتك
       </p>
       <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '20px 0' }} />
 
@@ -56,15 +67,15 @@ function LangStep({ onPick }) {
           <div style={{ fontFamily: 'var(--serif)', fontSize: '0.8rem', color: '#a89880' }}>Continue in English</div>
         </button>
 
-        {/* Hindi */}
+        {/* Arabic */}
         <button
-          onClick={() => onPick('hi')}
+          onClick={() => onPick('ar')}
           style={{ flex: 1, minWidth: 140, padding: '18px 20px', borderRadius: 20, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.15)', cursor: 'pointer', transition: 'all 0.2s', textAlign: 'center' }}
           onMouseEnter={e => { e.currentTarget.style.background = 'rgba(217,119,6,0.12)'; e.currentTarget.style.borderColor = '#d97706'; }}
           onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; }}
         >
-          <div style={{ fontFamily: "'Noto Sans Devanagari', sans-serif", fontSize: '0.95rem', color: '#fef3c7', fontWeight: 700, marginBottom: 4 }}>हिन्दी</div>
-          <div style={{ fontFamily: "'Noto Sans Devanagari', sans-serif", fontSize: '0.8rem', color: '#a89880' }}>हिन्दी में जारी रखें</div>
+          <div style={{ fontFamily: "'Noto Naskh Arabic', serif", fontSize: '1.1rem', color: '#fef3c7', fontWeight: 700, marginBottom: 4 }}>عربي</div>
+          <div style={{ fontFamily: "'Noto Naskh Arabic', serif", fontSize: '0.85rem', color: '#a89880' }}>تابع بالعربية</div>
         </button>
       </div>
     </div>
