@@ -10,21 +10,21 @@ export default function ShareButton({ story, lang, accent, variant = 'default' }
       const title = t(story.title, lang);
       const desc  = t(story.description, lang);
       return {
-        title: lang === 'hi'
-          ? `पञ्चतन्त्र — ${title}`
-          : `Panchatantra — ${title}`,
-        text: lang === 'hi'
-          ? `${desc}\n\nनीतिशास्त्र की इंटरैक्टिव कहानियाँ 🌿`
-          : `${desc}\n\nInteractive stories with ancient wisdom 🌿`,
+        title: lang === 'ar'
+          ? `حكايات — ${title}`
+          : `Hikayat — ${title}`,
+        text: lang === 'ar'
+          ? `${desc}\n\nقصص تفاعلية بحكمة قديمة 🌙`
+          : `${desc}\n\nInteractive folk tales with timeless wisdom 🌙`,
         url: window.location.href,
       };
     }
     // Home screen share
     return {
-      title: lang === 'hi' ? 'पञ्चतन्त्र — बच्चों के लिए कहानियाँ' : 'Panchatantra — Interactive Stories for Kids',
-      text:  lang === 'hi'
-        ? 'पञ्चतन्त्र की इंटरैक्टिव कहानियाँ — हिन्दी और अंग्रेज़ी में। बच्चों के लिए प्राचीन ज्ञान 🌿'
-        : 'Interactive Panchatantra stories in English & Hindi — ancient wisdom for children 🌿',
+      title: lang === 'ar' ? 'حكايات — قصص تفاعلية للأطفال' : 'Hikayat — Interactive Stories for Kids',
+      text:  lang === 'ar'
+        ? 'قصص تفاعلية بالعربية والإنجليزية — حكمة قديمة للأطفال 🌙'
+        : 'Interactive folk tales in English & Arabic — timeless wisdom for children 🌙',
       url: window.location.origin,
     };
   };
@@ -73,9 +73,9 @@ export default function ShareButton({ story, lang, accent, variant = 'default' }
 
   // Labels
   const labels = {
-    idle:   { en: '🔗 Share',      hi: '🔗 शेयर करें' },
-    copied: { en: '✓ Link copied', hi: '✓ लिंक कॉपी हुआ' },
-    error:  { en: '✗ Try again',   hi: '✗ फिर कोशिश करें' },
+    idle:   { en: '🔗 Share', ar: '🔗 مشاركة' },
+    copied: { en: '✓ Link copied', ar: '✓ تم نسخ الرابط' },
+    error:  { en: '✗ Try again', ar: '✗ حاول مجدداً' },
   };
   const label = labels[state][lang] || labels[state]['en'];
 
