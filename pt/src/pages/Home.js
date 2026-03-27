@@ -78,15 +78,15 @@ function FeaturedCard({ story, lang, onClick, status }) {
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, minWidth:80 }}>
             <div style={{ fontSize:'4rem' }}>{story.emoji}</div>
             {isNew(story) && (
-              <span style={{ padding:'3px 10px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700, letterSpacing:'0.1em' }}>{ui.newBadge}</span>
+              <span style={{ padding:'3px 10px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.62rem', fontWeight:700, letterSpacing:0 }}>{ui.newBadge}</span>
             )}
             {status === 'completed' && !isNew(story) && (
-              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
+              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.62rem', fontWeight:700, letterSpacing:0 }}>
                 ✓ {lang === 'ar' ? 'قُرئت' : 'Read'}
               </span>
             )}
             {status === 'in_progress' && !isNew(story) && (
-              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
+              <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.62rem', fontWeight:700, letterSpacing:0 }}>
                 {lang === 'ar' ? '… جارٍ القراءة' : '… Reading'}
               </span>
             )}
@@ -122,13 +122,13 @@ function StoryCard({ story, lang, onClick, status }) {
       onMouseLeave={e => { e.currentTarget.style.background='rgba(255,255,255,0.03)'; e.currentTarget.style.border=`1px solid ${color}33`; e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}>
       <div style={{ position:'absolute', top:0, left:0, right:0, height:2, background:`linear-gradient(90deg,transparent,${color},transparent)` }} />
       {status === 'completed' && !_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>✓</div>
+        <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>✓</div>
       )}
       {status === 'in_progress' && !_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>…</div>
+        <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>…</div>
       )}
       {_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.1em' }}>{ui.newBadge}</div>
+        <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>{ui.newBadge}</div>
       )}
       <div style={{ fontSize:'2.2rem', marginBottom:12 }}>{story.emoji}</div>
       <div style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color, letterSpacing:'0.15em', marginBottom:6 }}>{t(story.book, lang)}</div>
