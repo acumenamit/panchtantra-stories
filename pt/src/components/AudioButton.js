@@ -22,19 +22,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
   // Works on all browsers without user gesture.
   // No Audio object created here — Safari iOS safe.
   useEffect(() => {
-    if (!audioReady) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-      setIsPlaying(false);
-      setHasFile(null);
-      return;
-    }
-
-    const token = Symbol();
-    fetchTokenRef.current = token;
-
+    // Reset playing state and pause any active audio on node/lang change
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -42,14 +30,18 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     setIsPlaying(false);
     setHasFile(null);
 
+    // Check file existence independently of audioReady —
+    // audioReady is driven by the preloader which only resolves
+    // when files exist. For stories with no audio, it never
+    // becomes true, leaving hasFile stuck at null (Loading...).
+    const token = Symbol();
+    fetchTokenRef.current = token;
+
     fetch(audioPath, { method: 'HEAD' })
       .then(res => {
         if (fetchTokenRef.current !== token) return;
-        if (res.ok) {
-          setHasFile(true);
-        } else {
-          setHasFile(false);
-        }
+        const ct = res.headers.get("content-type") || "";
+        setHasFile(res.ok && ct.includes("audio") ? true : false);
       })
       .catch(() => {
         if (fetchTokenRef.current !== token) return;
@@ -60,7 +52,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
       fetchTokenRef.current = Symbol();
       audioRef.current?.pause();
     };
-  }, [audioReady, audioPath]); // eslint-disable-line
+  }, [audioPath]); // eslint-disable-line
 
   // ── Auto-play: only if audioActive and we know file exists ─
   // Creates Audio object here — but this effect only runs after
