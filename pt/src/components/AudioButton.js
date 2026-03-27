@@ -106,41 +106,8 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     }
   };
 
-  // ── Loading state ──────────────────────────────────────────
-  if (hasFile === null) {
-    return (
-      <button disabled style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '7px 14px', borderRadius: 20,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.02)',
-        color: 'rgba(255,255,255,0.25)',
-        fontFamily: 'var(--mono)', fontSize: '0.72rem',
-        letterSpacing: '0.06em', cursor: 'not-allowed',
-      }}>
-        <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}
-      </button>
-    );
-  }
-
-  // ── File missing ───────────────────────────────────────────
-  if (hasFile === false) {
-    return (
-      <button disabled style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '7px 14px', borderRadius: 20,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.02)',
-        color: 'rgba(255,255,255,0.2)',
-        fontFamily: 'var(--mono)', fontSize: '0.72rem',
-        letterSpacing: '0.06em', cursor: 'not-allowed',
-      }}>
-        <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'ar' ? 'غير متاح' : 'Not available'}
-      </button>
-    );
-  }
+  // ── Hide button until a real audio file is confirmed ─────
+  if (hasFile !== true) return null;
 
   // ── Ready ──────────────────────────────────────────────────
   const label = isPlaying
