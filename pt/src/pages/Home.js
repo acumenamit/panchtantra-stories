@@ -32,6 +32,17 @@ const UI = {
     filterAll: 'सभी',
     filterAge: 'आयु',
   },
+  ar: {
+    heading: 'حكمة قديمة،', heading2: 'قصص تفاعلية',
+    sub: 'حكايات شعبية — تعلّم الأطفال فن الحياة الحكيمة من خلال المغامرة والاختيار.',
+    featured: '✦ القصة المميزة',
+    allStories: '✦ جميع القصص',
+    coming: 'قصص جديدة قادمة قريباً',
+    newBadge: 'جديد',
+    readNow: 'اقرأ الآن ←',
+    filterAll: 'الكل',
+    filterAge: 'العمر',
+  },
 };
 
 function isNew(story) {
@@ -52,7 +63,7 @@ function sortedStories(stories) {
 
 function FeaturedCard({ story, lang, onClick, status }) {
   const color = story.color;
-  const ui    = UI[lang];
+  const ui = UI[lang] || UI.en;
   return (
     <div style={{ width:'100%', maxWidth:960, marginBottom:48 }}>
       <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'#d97706', letterSpacing:'0.18em', marginBottom:16 }}>
@@ -102,7 +113,7 @@ function FeaturedCard({ story, lang, onClick, status }) {
 
 function StoryCard({ story, lang, onClick, status }) {
   const color  = story.color;
-  const ui     = UI[lang];
+  const ui = UI[lang] || UI.en;
   const _isNew = isNew(story);
   return (
     <button onClick={onClick}
@@ -181,7 +192,7 @@ function ComingSoonCard({ lang }) {
     <div style={{ padding:'24px', borderRadius:20, background:'rgba(255,255,255,0.01)', border:'1px dashed rgba(255,255,255,0.1)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:220, gap:12 }}>
       <div style={{ fontSize:'1.5rem', opacity:0.3 }}>📖</div>
       <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.2)', letterSpacing:'0.1em', textAlign:'center' }}>
-        {UI[lang].coming}
+        {(UI[lang] || UI.en).coming}
       </div>
     </div>
   );
@@ -190,7 +201,7 @@ function ComingSoonCard({ lang }) {
 export default function Home() {
   const navigate = useNavigate();
   const { lang } = useLang();
-  const ui       = UI[lang];
+  const ui = UI[lang] || UI.en;
   const { getStoryStatus, getAllHistory } = useHistory();
   // eslint-disable-next-line
   const _history = getAllHistory();
