@@ -164,27 +164,27 @@ export default function StoryEngine({ story }) {
 
   // ── Status line ───────────────────────────────────────────────
   const hasImage = !!node.image;
-  const hasAudio = !node.isEnding;
+  const hasAudio = !node.isEnding && !!story.hasAudio;
   const showImageLoading = hasImage && !imageReady;
   const showAudioLoading = hasAudio && !audioReady && !showImageLoading;
   const showStatusLine   = (showImageLoading || showAudioLoading) && !node.isEnding;
 
   const statusText = showImageLoading
-    ? (lang === 'hi' ? 'कहानी का चित्र लोड हो रहा है...' : 'Loading story visual...')
-    : (lang === 'hi' ? 'ऑडियो लोड हो रहा है...'          : 'Loading audio...');
+    ? (lang === 'ar' ? 'جارٍ تحميل الصورة...' : 'Loading story visual...')
+    : (lang === 'ar' ? 'جارٍ تحميل الصوت...' : 'Loading audio...');
 
   const steps   = story.progressSteps || [];
-  const navBack = lang === 'hi' ? '← वापस'         : '← back';
-  const navRst  = lang === 'hi' ? 'फिर से ↺'       : 'restart ↺';
-  const navHome = lang === 'hi' ? '← सभी कहानियाँ' : '← All Stories';
-  const yourChoice = lang === 'hi' ? '✦ आपका चुनाव' : '✦ YOUR CHOICE';
-  const altLabel   = lang === 'hi' ? '↪ वैकल्पिक पथ' : '↪ alt path';
+  const navBack = lang === 'ar' ? 'رجوع ←' : '← back';
+  const navRst  = lang === 'ar' ? 'من البداية ↺' : 'restart ↺';
+  const navHome = lang === 'ar' ? 'جميع القصص ←' : '← All Stories';
+  const yourChoice = lang === 'ar' ? '✦ اختيارك' : '✦ YOUR CHOICE';
+  const altLabel   = lang === 'ar' ? '↪ مسار بديل' : '↪ alt path';
 
-  const monoFont = lang === 'hi'
-    ? "'Noto Sans Devanagari', sans-serif"
+  const monoFont = (lang === 'hi' || lang === 'ar')
+    ? "'Noto Naskh Arabic', 'Noto Sans Devanagari', sans-serif"
     : 'var(--mono)';
 
-  const monoSpacing = lang === 'hi' ? 'normal' : undefined;
+  const monoSpacing = (lang === 'hi' || lang === 'ar') ? 'normal' : undefined;
 
   const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
 
@@ -203,7 +203,7 @@ export default function StoryEngine({ story }) {
               {navHome}
             </button>
             <div style={{ fontFamily:monoFont, fontSize:'0.68rem', color:accent, letterSpacing:monoSpacing || '0.18em', marginBottom:5 }}>
-              {lang === 'hi' ? '✦ पञ्चतन्त्र ✦' : '✦ PANCHATANTRA ✦'}
+              {lang === 'ar' ? '✦ حكايات ✦' : '✦ HIKAYAT ✦'}
             </div>
             <h1 style={{ color:'#ffffff', fontSize:'1.6rem', fontFamily:'var(--serif)', fontWeight:700, textShadow:`0 2px 24px ${accent}66` }}>
               {t(story.title, lang)}
@@ -342,8 +342,8 @@ export default function StoryEngine({ story }) {
                                     :           '#fff7d6',
                             fontSize: isPause ? '0.85rem' : '1.05rem',
                             marginTop: isPause ? 6 : isOr ? 4 : 0,
-                            fontStyle: isPause && lang !== 'hi' ? 'italic' : 'normal',
-                            letterSpacing: isPause && lang !== 'hi' ? '0.12em' : 'normal',
+                            fontStyle: isPause && lang !== 'hi' && lang !== 'ar' ? 'italic' : 'normal',
+                            letterSpacing: isPause && lang !== 'hi' && lang !== 'ar' ? '0.12em' : 'normal',
                           }}>
                             {line}
                           </div>
@@ -391,7 +391,7 @@ export default function StoryEngine({ story }) {
       </div>
 
       <div style={{ marginTop:8, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing||'0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
-        {lang === 'hi' ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦' : '✦ PANCHATANTRA ✦ NITISHASTRA ✦'}
+        {lang === 'ar' ? '✦ حكايات ✦ قصص عربية ✦' : '✦ HIKAYAT ✦ ARABIC TALES ✦'}
       </div>
 
       {/* Install prompt — shown after first story completion */}
