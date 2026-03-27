@@ -130,7 +130,7 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
         letterSpacing: '0.06em', cursor: 'not-allowed',
       }}>
         <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}
+        {lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}
       </button>
     );
   }
@@ -149,15 +149,15 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
         letterSpacing: '0.06em', cursor: 'not-allowed',
       }}>
         <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'hi' ? 'उपलब्ध नहीं' : 'Not available'}
+        {lang === 'ar' ? 'غير متاح' : 'Not available'}
       </button>
     );
   }
 
   // ── Ready ──────────────────────────────────────────────────
   const label = isPlaying
-    ? (lang === 'hi' ? 'रोकें' : 'Stop')
-    : (lang === 'hi' ? 'सुनें' : 'Listen');
+    ? (lang === 'ar' ? 'إيقاف' : 'Stop')
+    : (lang === 'ar' ? 'استمع' : 'Listen');
 
   return (
     <button
