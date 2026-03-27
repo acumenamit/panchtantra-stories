@@ -118,7 +118,6 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
 
   // ── Loading state ──────────────────────────────────────────
   if (hasFile === null) {
-    if (!everHadFile) return null;
     return (
       <button disabled style={{
         display: 'flex', alignItems: 'center', gap: 6,
@@ -137,7 +136,6 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
 
   // ── File missing ───────────────────────────────────────────
   if (hasFile === false) {
-    if (!everHadFile) return null;
     return (
       <button disabled style={{
         display: 'flex', alignItems: 'center', gap: 6,
