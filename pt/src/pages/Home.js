@@ -110,15 +110,20 @@ function StoryCard({ story, lang, onClick, status }) {
       onMouseEnter={e => { e.currentTarget.style.background=`${color}0f`; e.currentTarget.style.border=`1px solid ${color}77`; e.currentTarget.style.transform='translateY(-4px)'; e.currentTarget.style.boxShadow=`0 12px 40px ${color}22`; }}
       onMouseLeave={e => { e.currentTarget.style.background='rgba(255,255,255,0.03)'; e.currentTarget.style.border=`1px solid ${color}33`; e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}>
       <div style={{ position:'absolute', top:0, left:0, right:0, height:2, background:`linear-gradient(90deg,transparent,${color},transparent)` }} />
-      {status === 'completed' && !_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>✓</div>
-      )}
-      {status === 'in_progress' && !_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>…</div>
-      )}
-      {_isNew && (
-        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.1em' }}>{ui.newBadge}</div>
-      )}
+      {/* Status takes priority over NEW badge — fix for issues 3 & 4 */}
+      {status === 'completed' ? (
+        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>
+          ✓ {lang === 'hi' ? 'पढ़ी' : 'Read'}
+        </div>
+      ) : status === 'in_progress' ? (
+        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.08em' }}>
+          {lang === 'hi' ? 'पढ़ रहे हैं' : 'Reading'}
+        </div>
+      ) : _isNew ? (
+        <div style={{ position:'absolute', top:14, right:14, padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.58rem', fontWeight:700, letterSpacing:'0.1em' }}>
+          {ui.newBadge}
+        </div>
+      ) : null}
       <div style={{ fontSize:'2.2rem', marginBottom:12 }}>{story.emoji}</div>
       <div style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color, letterSpacing:'0.15em', marginBottom:6 }}>{t(story.book, lang)}</div>
       <h2 style={{ fontFamily:'var(--serif)', fontSize:'1.15rem', color:'#fef3c7', fontWeight:700, marginBottom:8, lineHeight:1.3 }}>{t(story.title, lang)}</h2>
