@@ -13,7 +13,6 @@ import { useState, useRef, useEffect } from 'react';
 export default function AudioButton({ storyId, nodeId, lang, accent, audioReady, audioActive, setAudioActive }) {
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [hasFile,     setHasFile]     = useState(null); // null=checking, true=exists, false=missing
-  const [everHadFile, setEverHadFile] = useState(false);
   const audioRef     = useRef(null);
   const fetchTokenRef = useRef(null);
 
@@ -48,7 +47,6 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
         if (fetchTokenRef.current !== token) return;
         if (res.ok) {
           setHasFile(true);
-          setEverHadFile(true);
         } else {
           setHasFile(false);
         }
