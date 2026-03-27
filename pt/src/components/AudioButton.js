@@ -13,7 +13,6 @@ import { useState, useRef, useEffect } from 'react';
 export default function AudioButton({ storyId, nodeId, lang, accent, audioReady, audioActive, setAudioActive }) {
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [hasFile,     setHasFile]     = useState(null); // null=checking, true=exists, false=missing
-  const [everHadFile, setEverHadFile] = useState(false);
   const audioRef     = useRef(null);
   const fetchTokenRef = useRef(null);
 
@@ -46,12 +45,11 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     fetch(audioPath, { method: 'HEAD' })
       .then(res => {
         if (fetchTokenRef.current !== token) return;
-        if (res.ok) {
-          setHasFile(true);
-          setEverHadFile(true);
-        } else {
-          setHasFile(false);
-        }
+        // Vercel returns 200 + text/html for missing files (SPA fallback)
+        // A real MP3 returns Content-Type: audio/mpeg or audio/*
+        const ct = res.headers.get('content-type') || '';
+        const isAudio = res.ok && ct.startsWith('audio/');
+        setHasFile(isAudio);
       })
       .catch(() => {
         if (fetchTokenRef.current !== token) return;
@@ -116,43 +114,11 @@ export default function AudioButton({ storyId, nodeId, lang, accent, audioReady,
     }
   };
 
-  // ── Loading state ──────────────────────────────────────────
-  if (hasFile === null) {
-    if (!everHadFile) return null;
-    return (
-      <button disabled style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '7px 14px', borderRadius: 20,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.02)',
-        color: 'rgba(255,255,255,0.25)',
-        fontFamily: 'var(--mono)', fontSize: '0.72rem',
-        letterSpacing: '0.06em', cursor: 'not-allowed',
-      }}>
-        <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}
-      </button>
-    );
-  }
-
-  // ── File missing ───────────────────────────────────────────
-  if (hasFile === false) {
-    if (!everHadFile) return null;
-    return (
-      <button disabled style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '7px 14px', borderRadius: 20,
-        border: '1px solid rgba(255,255,255,0.1)',
-        background: 'rgba(255,255,255,0.02)',
-        color: 'rgba(255,255,255,0.2)',
-        fontFamily: 'var(--mono)', fontSize: '0.72rem',
-        letterSpacing: '0.06em', cursor: 'not-allowed',
-      }}>
-        <span style={{ fontSize: '1rem' }}>🔊</span>
-        {lang === 'hi' ? 'उपलब्ध नहीं' : 'Not available'}
-      </button>
-    );
-  }
+  // ── Only render when file is confirmed to exist ─────────────
+  // null=checking, false=missing — both return nothing
+  // This fixes: button showing as active with no file (issue 1)
+  // and button always visible regardless of file (issue 2)
+  if (hasFile !== true) return null;
 
   // ── Ready ──────────────────────────────────────────────────
   const label = isPlaying
