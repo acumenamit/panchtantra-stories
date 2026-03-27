@@ -66,7 +66,7 @@ function FeaturedCard({ story, lang, onClick, status }) {
   const ui = UI[lang] || UI.en;
   return (
     <div style={{ width:'100%', maxWidth:960, marginBottom:48 }}>
-      <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'#d97706', letterSpacing:'0.18em', marginBottom:16 }}>
+      <div style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'#c8922a', letterSpacing:'0.18em', marginBottom:16 }}>
         {ui.featured}
       </div>
       <button onClick={onClick}
@@ -82,12 +82,12 @@ function FeaturedCard({ story, lang, onClick, status }) {
             )}
             {status === 'completed' && !isNew(story) && (
               <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
-                ✓ {lang === 'hi' ? 'पढ़ी' : 'Read'}
+                ✓ {lang === 'ar' ? 'قُرئت' : 'Read'}
               </span>
             )}
             {status === 'in_progress' && !isNew(story) && (
               <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700 }}>
-                {lang === 'hi' ? '… पढ़ रहे हैं' : '… Reading'}
+                {lang === 'ar' ? '… جارٍ القراءة' : '… Reading'}
               </span>
             )}
           </div>
@@ -97,7 +97,7 @@ function FeaturedCard({ story, lang, onClick, status }) {
             <p style={{ fontFamily:'var(--serif)', fontSize:'1rem', color:'#c4b090', lineHeight:1.7, marginBottom:20, maxWidth:520 }}>{t(story.description, lang)}</p>
             <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
               <span style={{ padding:'4px 12px', borderRadius:20, background:`${color}22`, border:`1px solid ${color}44`, color, fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
-                {lang === 'hi' ? 'आयु' : 'Age'} {story.age}
+                {lang === 'ar' ? 'العمر' : 'Age'} {story.age}
               </span>
               <span style={{ padding:'4px 12px', borderRadius:20, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.12)', color:'rgba(255,255,255,0.5)', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
                 ⏱ {t(story.duration, lang)}
@@ -136,7 +136,7 @@ function StoryCard({ story, lang, onClick, status }) {
       <p style={{ fontFamily:'var(--serif)', fontSize:'0.9rem', color:'#a89880', lineHeight:1.6, marginBottom:16, flex:1 }}>{t(story.description, lang)}</p>
       <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
         <span style={{ padding:'3px 10px', borderRadius:20, background:`${color}18`, border:`1px solid ${color}33`, color, fontFamily:'var(--mono)', fontSize:'0.62rem' }}>
-          {lang === 'hi' ? 'आयु' : 'Age'} {story.age}
+          {lang === 'ar' ? 'العمر' : 'Age'} {story.age}
         </span>
         <span style={{ padding:'3px 10px', borderRadius:20, background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', fontFamily:'var(--mono)', fontSize:'0.62rem' }}>
           ⏱ {t(story.duration, lang)}
@@ -232,16 +232,16 @@ export default function Home() {
   };
 
   return (
-    <div style={{ minHeight:'100vh', background:'linear-gradient(160deg,#0d0a05,#080608)', display:'flex', flexDirection:'column', alignItems:'center', padding:'48px 16px 64px' }}>
+    <div style={{ minHeight:'100vh', background:'linear-gradient(160deg,#09090f,#06060c)', display:'flex', flexDirection:'column', alignItems:'center', padding:'48px 16px 64px' }}>
 
       {/* ── Hero header ── */}
       <div style={{ textAlign:'center', marginBottom:48, maxWidth:580 }}>
-        <div style={{ fontSize:'3rem', marginBottom:16 }}>📚</div>
+        <div style={{ fontSize:'3rem', marginBottom:16 }}>🌙</div>
         <div style={{ display:'flex', justifyContent:'center', marginBottom:24 }}>
-          <LangToggle accent="#d97706" onChange={handleLangChange} />
+          <LangToggle accent="#c8922a" onChange={handleLangChange} />
         </div>
-        <div style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', color:'#d97706', letterSpacing:'0.22em', marginBottom:12 }}>
-          {lang === 'hi' ? '✦ पञ्चतन्त्र ✦' : '✦ PANCHATANTRA ✦'}
+        <div style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', color:'#c8922a', letterSpacing:'0.22em', marginBottom:12 }}>
+          {lang === 'ar' ? '✦ حكايات ✦' : '✦ HIKAYAT ✦'}
         </div>
         <h1 style={{ fontFamily:'var(--serif)', fontSize:'clamp(1.8rem,5vw,2.8rem)', color:'#fef3c7', fontWeight:700, lineHeight:1.25, marginBottom:16, textShadow:'0 2px 30px rgba(251,191,36,0.2)' }}>
           {ui.heading}<br />{ui.heading2}
@@ -249,7 +249,7 @@ export default function Home() {
         <p style={{ fontFamily:'var(--serif)', fontSize:'1rem', color:'#8a7a5a', lineHeight:1.75, marginBottom:28 }}>
           {ui.sub}
         </p>
-        <ShareButton lang={lang} accent="#d97706" variant="default" />
+        <ShareButton lang={lang} accent="#c8922a" variant="default" />
       </div>
 
       {/* ── Featured story ── */}
@@ -262,19 +262,19 @@ export default function Home() {
       <div style={{ width:'100%', maxWidth:960, marginBottom:28 }}>
         <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
           <button onClick={() => setActiveFilter('all')}
-            style={{ padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight: activeFilter==='all'?700:400, background: activeFilter==='all'?'#d97706':'rgba(255,255,255,0.04)', border: activeFilter==='all'?'1px solid #d97706':'1px solid rgba(255,255,255,0.12)', color: activeFilter==='all'?'#fff':'rgba(255,255,255,0.5)', cursor:'pointer', transition:'all 0.2s' }}
-            onMouseEnter={e => { if(activeFilter!=='all'){e.currentTarget.style.borderColor='#d97706';e.currentTarget.style.color='#d97706';}}}
+            style={{ padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight: activeFilter==='all'?700:400, background: activeFilter==='all'?'#c8922a':'rgba(255,255,255,0.04)', border: activeFilter==='all'?'1px solid #c8922a':'1px solid rgba(255,255,255,0.12)', color: activeFilter==='all'?'#fff':'rgba(255,255,255,0.5)', cursor:'pointer', transition:'all 0.2s' }}
+            onMouseEnter={e => { if(activeFilter!=='all'){e.currentTarget.style.borderColor='#c8922a';e.currentTarget.style.color='#c8922a';}}}
             onMouseLeave={e => { if(activeFilter!=='all'){e.currentTarget.style.borderColor='rgba(255,255,255,0.12)';e.currentTarget.style.color='rgba(255,255,255,0.5)';}}}
           >{ui.filterAll}</button>
           {ageGroups.map(age => (
             <button key={age} onClick={() => setActiveFilter(age)}
-              style={{ padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight: activeFilter===age?700:400, background: activeFilter===age?'#d97706':'rgba(255,255,255,0.04)', border: activeFilter===age?'1px solid #d97706':'1px solid rgba(255,255,255,0.12)', color: activeFilter===age?'#fff':'rgba(255,255,255,0.5)', cursor:'pointer', transition:'all 0.2s' }}
-              onMouseEnter={e => { if(activeFilter!==age){e.currentTarget.style.borderColor='#d97706';e.currentTarget.style.color='#d97706';}}}
+              style={{ padding:'7px 18px', borderRadius:20, fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight: activeFilter===age?700:400, background: activeFilter===age?'#c8922a':'rgba(255,255,255,0.04)', border: activeFilter===age?'1px solid #c8922a':'1px solid rgba(255,255,255,0.12)', color: activeFilter===age?'#fff':'rgba(255,255,255,0.5)', cursor:'pointer', transition:'all 0.2s' }}
+              onMouseEnter={e => { if(activeFilter!==age){e.currentTarget.style.borderColor='#c8922a';e.currentTarget.style.color='#c8922a';}}}
               onMouseLeave={e => { if(activeFilter!==age){e.currentTarget.style.borderColor='rgba(255,255,255,0.12)';e.currentTarget.style.color='rgba(255,255,255,0.5)';}}}
             >{ui.filterAge} {age}</button>
           ))}
           <span style={{ marginLeft:'auto', fontFamily:'var(--mono)', fontSize:'0.62rem', color:'rgba(255,255,255,0.25)' }}>
-            {gridStories.length} {lang==='hi'?'कहानियाँ':gridStories.length===1?'story':'stories'}
+            {gridStories.length} {lang==='ar'?'قصص':gridStories.length===1?'story':'stories'}
           </span>
         </div>
       </div>
@@ -305,10 +305,10 @@ export default function Home() {
           <div style={{ marginBottom:24 }}>
             <button onClick={hasDeferredPrompt ? triggerInstall : undefined}
               style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor='#c8922a'; e.currentTarget.style.color='#c8922a'; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
             >
-              📲 {lang==='hi' ? 'ऐप इंस्टॉल करें' : 'Install App'}
+              📲 {lang==='ar' ? 'تثبيت التطبيق' : 'Install App'}
             </button>
             <button onClick={dismissFooter} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', fontFamily:'var(--mono)', fontSize:'0.65rem', cursor:'pointer', marginLeft:8 }} title="Hide">✕</button>
           </div>
@@ -319,17 +319,17 @@ export default function Home() {
           <div style={{ marginBottom:24 }}>
             <button onClick={() => setShowIOSHint(h => !h)}
               style={{ background:'none', border:'1px solid rgba(217,119,6,0.3)', borderRadius:20, padding:'7px 18px', fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(217,119,6,0.7)', cursor:'pointer', letterSpacing:'0.08em', transition:'all 0.2s' }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor='#d97706'; e.currentTarget.style.color='#d97706'; }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor='#c8922a'; e.currentTarget.style.color='#c8922a'; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(217,119,6,0.3)'; e.currentTarget.style.color='rgba(217,119,6,0.7)'; }}
             >
-              📲 {platform === 'mac-safari-17' ? (lang==='hi' ? 'Dock में जोड़ें' : 'Add to Dock') : platform === 'ios-other' ? (lang==='hi' ? 'Safari में खोलें' : 'Open in Safari') : (lang==='hi' ? 'होम स्क्रीन पर जोड़ें' : 'Add to Home Screen')}
+              📲 {platform === 'mac-safari-17' ? (lang==='ar' ? 'أضف إلى Dock' : 'Add to Dock') : platform === 'ios-other' ? (lang==='ar' ? 'افتح في Safari' : 'Open in Safari') : (lang==='ar' ? 'أضف إلى الشاشة الرئيسية' : 'Add to Home Screen')}
             </button>
             <button onClick={dismissFooter} style={{ background:'none', border:'none', color:'rgba(255,255,255,0.2)', fontFamily:'var(--mono)', fontSize:'0.65rem', cursor:'pointer', marginLeft:8 }} title="Hide">✕</button>
             {showIOSHint && (
               <div style={{ marginTop:12, padding:'14px 16px', borderRadius:14, background:'rgba(217,119,6,0.08)', border:'1px solid rgba(217,119,6,0.25)', maxWidth:340, margin:'12px auto 0', textAlign:'left' }}>
                 <div style={{ fontFamily:'var(--serif)', fontSize:'0.82rem', color:'#c4b090', lineHeight:1.9 }}>
-                  {lang==='hi' ? (
-                    <><div>१. Safari में शेयर बटन टैप करें ↑</div><div>२. &quot;Add to Home Screen&quot; टैप करें</div><div>३. Add टैप करें</div></>
+                  {lang==='ar' ? (
+                    <><div>١. اضغط زر المشاركة في Safari ↑</div><div>٢. اضغط &quot;Add to Home Screen&quot;</div><div>٣. اضغط Add</div></>
                   ) : (
                     <><div>1. Tap the Share button in Safari ↑</div><div>2. Tap &quot;Add to Home Screen&quot;</div><div>3. Tap Add</div></>
                   )}
@@ -340,9 +340,9 @@ export default function Home() {
         )}
 
         <div style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'rgba(255,255,255,0.12)', letterSpacing:'0.18em' }}>
-          {lang==='hi'
-            ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦ सभी उम्र के लिए ज्ञान ✦'
-            : '✦ PANCHATANTRA ✦ NITISHASTRA ✦ WISDOM FOR ALL AGES ✦'}
+          {lang==='ar'
+            ? '✦ حكايات ✦ قصص تفاعلية ✦ حكمة لكل الأعمار ✦'
+            : '✦ HIKAYAT ✦ INTERACTIVE TALES ✦ WISDOM FOR ALL AGES ✦'}
         </div>
       </div>
 
