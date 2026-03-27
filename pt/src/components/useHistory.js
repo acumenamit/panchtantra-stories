@@ -5,7 +5,7 @@
 //  in Phase 3 — only the internals change, nothing else in the
 //  app needs to change.
 //
-//  localStorage key: 'pt_history'
+//  localStorage key: 'hk_history'
 //  Shape:
 //  {
 //    "lion-and-hare": {
@@ -20,7 +20,7 @@
 //  }
 // ─────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'pt_history';
+const STORAGE_KEY = 'hk_history';
 
 function load() {
   try {
