@@ -24,6 +24,39 @@ body {
   font-style: normal !important;
 }
 
+/* ── Arabic font + RTL override ────────────────────────────────────────────
+   When <html lang="ar"> is set (via LangContext), override ALL elements
+   to use Noto Naskh Arabic and flip the document to RTL. The dir="auto"
+   on individual text containers handles inline bidirectionality (e.g.
+   English story titles inside Arabic UI). letter-spacing must be reset
+   to 0 — Arabic script does not use letter-spacing and positive values
+   break glyph joining, making text unreadable.
+────────────────────────────────────────────────────────────────────────── */
+:lang(ar), :lang(ar) * {
+  font-family: 'Noto Naskh Arabic', serif !important;
+  letter-spacing: 0 !important;
+  font-style: normal !important;
+}
+
+/* RTL layout flip — applies to the whole page when lang=ar */
+html[lang="ar"] {
+  direction: rtl;
+}
+
+/* Flex rows reverse naturally under RTL direction, but any component
+   using explicit margin-left / padding-left needs a logical-property
+   counterpart. We patch the most common cases here globally so individual
+   components don't need touching for the POC. */
+html[lang="ar"] button {
+  font-family: 'Noto Naskh Arabic', serif !important;
+}
+
+/* Typewriter cursor stays on the correct (left in LTR, right in RTL) side */
+html[lang="ar"] .typewriter-cursor {
+  margin-right: 0;
+  margin-left: 2px;
+}
+
 button { cursor: pointer; font-family: var(--mono); }
 
 @keyframes blink    { 0%,100%{opacity:1} 50%{opacity:0} }
