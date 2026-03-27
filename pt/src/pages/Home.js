@@ -125,7 +125,7 @@ function StoryCard({ story, lang, onClick, status }) {
         <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'rgba(74,222,128,0.12)', border:'1px solid rgba(74,222,128,0.4)', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>✓</div>
       )}
       {status === 'in_progress' && (
-        <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>…</div>
+        <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'rgba(251,191,36,0.12)', border:'1px solid rgba(251,191,36,0.4)', color:'#fbbf24', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>{lang === 'ar' ? '…يُقرأ' : '…Reading'}</div>
       )}
       {_isNew && status === 'not_started' && (
         <div style={{ position:'absolute', top:14, ...(lang === 'ar' ? { left:14 } : { right:14 }), padding:'2px 8px', borderRadius:20, background:'#16a34a33', border:'1px solid #16a34a88', color:'#4ade80', fontFamily:"'Noto Naskh Arabic','Space Mono',monospace", fontSize:'0.58rem', fontWeight:700, letterSpacing:0 }}>{ui.newBadge}</div>
