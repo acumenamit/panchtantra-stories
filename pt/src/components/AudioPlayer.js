@@ -193,14 +193,15 @@ export default function AudioPlayer({
   return (
     <div style={{
       position: 'fixed',
-      bottom: 56,          // sits directly above the footer bar
+      bottom: 60,          // footer bar height
       left: 0,
       right: 0,
       zIndex: 99,
-      background: 'rgba(8,6,10,0.97)',
+      background: 'rgba(8,6,10,0.98)',
       borderTop: `1px solid ${color}33`,
+      borderBottom: '1px solid rgba(255,255,255,0.06)',
       backdropFilter: 'blur(12px)',
-      padding: '8px 16px 6px',
+      padding: '8px 16px 10px',
     }}>
 
       {/* ── Seek bar ── */}
