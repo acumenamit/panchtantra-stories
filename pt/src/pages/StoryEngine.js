@@ -189,7 +189,7 @@ export default function StoryEngine({ story }) {
   const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
 
   return (
-    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 136px', transition:'background 1.2s ease' }}>
+    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 160px', transition:'background 1.2s ease' }}>
 
       {/* ── Header ── */}
       <div style={{ width:'100%', maxWidth:660, marginBottom:20 }}>
