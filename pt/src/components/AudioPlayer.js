@@ -107,6 +107,26 @@ export default function AudioPlayer({
     };
   }, [stopRAF]);
 
+  // ── Global drag listeners — keep seek working outside the bar ──
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e) => applySeek(e.clientX ?? e.touches?.[0]?.clientX);
+    const onUp   = (e) => {
+      setIsDragging(false);
+      applySeek(e.clientX ?? e.changedTouches?.[0]?.clientX);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend',  onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend',  onUp);
+    };
+  }, [isDragging]); // eslint-disable-line
+
   // ── Create audio object ───────────────────────────────────
   const getAudio = () => {
     if (audioRef.current) return audioRef.current;
@@ -158,15 +178,53 @@ export default function AudioPlayer({
   };
 
   // ── Seek bar interaction ──────────────────────────────────
-  const seek = (e) => {
-    if (!audioRef.current || !duration) return;
-    const bar   = e.currentTarget;
-    const rect  = bar.getBoundingClientRect();
-    const x     = (e.touches?.[0]?.clientX ?? e.clientX) - rect.left;
+  // Uses a ref to the bar element so getBoundingClientRect()
+  // works correctly during drag — e.currentTarget is unreliable
+  // on touch events when the finger moves outside the element.
+  const barRef = useRef(null);
+
+  const getSeekTime = (clientX) => {
+    if (!barRef.current || !duration) return null;
+    const rect  = barRef.current.getBoundingClientRect();
+    const x     = clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const t     = ratio * duration;
-    audioRef.current.currentTime = t;
+    return ratio * duration;
+  };
+
+  const applySeek = (clientX) => {
+    const t = getSeekTime(clientX);
+    if (t === null) return;
+    if (audioRef.current) audioRef.current.currentTime = t;
     setCurrentTime(t);
+  };
+
+  // Mouse events
+  const onBarMouseDown = (e) => {
+    setIsDragging(true);
+    applySeek(e.clientX);
+  };
+  const onBarMouseMove = (e) => {
+    if (!isDragging) return;
+    applySeek(e.clientX);
+  };
+  const onBarMouseUp = (e) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    applySeek(e.clientX);
+  };
+
+  // Touch events — use changedTouches for end, touches for move
+  const onBarTouchStart = (e) => {
+    setIsDragging(true);
+    applySeek(e.touches[0].clientX);
+  };
+  const onBarTouchMove = (e) => {
+    e.preventDefault(); // prevent page scroll while seeking
+    applySeek(e.touches[0].clientX);
+  };
+  const onBarTouchEnd = (e) => {
+    setIsDragging(false);
+    applySeek(e.changedTouches[0].clientX);
   };
 
   if (!hasFile) return null;
@@ -206,14 +264,14 @@ export default function AudioPlayer({
 
       {/* ── Seek bar ── */}
       <div
-        onClick={seek}
-        onMouseDown={() => setIsDragging(true)}
-        onMouseUp={e => { setIsDragging(false); seek(e); }}
-        onMouseMove={e => { if (isDragging) seek(e); }}
+        ref={barRef}
+        onMouseDown={onBarMouseDown}
+        onMouseMove={onBarMouseMove}
+        onMouseUp={onBarMouseUp}
         onMouseLeave={() => setIsDragging(false)}
-        onTouchStart={() => setIsDragging(true)}
-        onTouchEnd={e => { setIsDragging(false); seek(e); }}
-        onTouchMove={e => { if (isDragging) seek(e); }}
+        onTouchStart={onBarTouchStart}
+        onTouchMove={onBarTouchMove}
+        onTouchEnd={onBarTouchEnd}
         style={{
           width: '100%',
           height: 28,
@@ -221,6 +279,9 @@ export default function AudioPlayer({
           alignItems: 'center',
           cursor: 'pointer',
           marginBottom: 4,
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          touchAction: 'none',
         }}
       >
         {/* Track */}
