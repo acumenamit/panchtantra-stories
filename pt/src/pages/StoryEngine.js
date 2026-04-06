@@ -30,6 +30,7 @@ export default function StoryEngine({ story }) {
   const [pickedNext,  setPicked]     = useState(null);
   const [imgLoaded,   setImgLoaded]  = useState(false);
   const [showInstall, setShowInstall] = useState(false);
+  const [resetKey,    setResetKey]    = useState(0); // incremented to force preloader re-fire
   const [imageReady,  setImageReady] = useState(false);
   const [audioReady,  setAudioReady] = useState(false);
   // audioActive: user's intent — stays true across nodes so audio
@@ -70,7 +71,7 @@ export default function StoryEngine({ story }) {
     }, 300);
 
     return () => clearInterval(interval);
-  }, [nodeId]); // eslint-disable-line
+  }, [nodeId, resetKey]); // eslint-disable-line
 
   // Re-check audio when language switches — restart polling until ready
   // Also reset textDone so choices stay hidden until typewriter replays
@@ -147,11 +148,17 @@ export default function StoryEngine({ story }) {
     historyRecordRestart(story.id, lang);
     setFading(true);
     setTimeout(() => {
-      setNodeId('start');
       setHistory([]);
       setTextDone(false);
       setImgLoaded(false);
-      setAudioReady(false); // explicit reset
+      if (nodeId === 'start') {
+        // nodeId won't change so preloader effect won't re-fire
+        // increment resetKey to force it
+        setResetKey(k => k + 1);
+      } else {
+        setAudioReady(false); // changing node — normal reset
+      }
+      setNodeId('start');
       setFading(false);
     }, 300);
   };
