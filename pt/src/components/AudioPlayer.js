@@ -1,16 +1,10 @@
 // ─────────────────────────────────────────────────────────────
-//  AudioPlayer.js
-//  Fixed-position mini audio player — sits above the footer bar.
-//  Never moves with story content so kids can always reach it.
+//  AudioPlayer.js — Fixed-position mini audio player
 //
-//  Controls:
-//  - Play / Pause
-//  - Rewind 10 seconds
-//  - Seek bar (scrub to any position)
-//  - Current time / total duration
-//  - Replay from start
-//
-//  Only renders when a real audio file exists (Content-Type check).
+//  Key design decision: component stays MOUNTED at all times
+//  and is hidden via CSS when no audio file exists.
+//  This preserves the audio context across node transitions
+//  and prevents iOS Safari auto-play blocking on remount.
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -25,60 +19,57 @@ export default function AudioPlayer({
   const [duration,    setDuration]    = useState(0);
   const [isDragging,  setIsDragging]  = useState(false);
 
-  const audioRef        = useRef(null);
-  const rafRef          = useRef(null);
-  const fetchTokenRef   = useRef(null);
-  const audioActiveRef  = useRef(audioActive);
+  const audioRef       = useRef(null);
+  const rafRef         = useRef(null);
+  const fetchTokenRef  = useRef(null);
+  const audioActiveRef = useRef(audioActive);
+  const barRef         = useRef(null);
 
-  // Keep ref in sync with prop so fetch callbacks always see latest value
+  // Keep ref in sync — fetch callbacks read this to avoid stale closure
   useEffect(() => { audioActiveRef.current = audioActive; }, [audioActive]);
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
   // ── Format mm:ss ─────────────────────────────────────────
   const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
     const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
+    return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   };
 
-  // ── Progress RAF loop ─────────────────────────────────────
+  // ── RAF progress loop ─────────────────────────────────────
+  const stopRAF = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }, []);
+
   const startRAF = useCallback(() => {
+    stopRAF();
     const tick = () => {
-      if (audioRef.current && !isDragging) {
-        setCurrentTime(audioRef.current.currentTime);
-      }
+      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-  }, [isDragging]);
+  }, [stopRAF]);
 
-  const stopRAF = useCallback(() => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }, []);
-
-  // ── Check file existence ──────────────────────────────────
+  // ── Core: check file + auto-play on node/lang change ─────
   useEffect(() => {
-    if (!audioReady) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setHasFile(false);
-      setIsPlaying(false);
-      setCurrentTime(0);
-      setDuration(0);
-      stopRAF();
-      return;
-    }
-
+    // Cancel any in-flight fetch
     const token = Symbol();
     fetchTokenRef.current = token;
-    audioRef.current?.pause();
-    audioRef.current = null;
-    setHasFile(false);
+
+    // Stop current audio immediately
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    stopRAF();
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
-    stopRAF();
+    setHasFile(false);
+
+    if (!audioReady) return;
 
     fetch(audioPath, { method: 'HEAD' })
       .then(res => {
@@ -86,21 +77,31 @@ export default function AudioPlayer({
         const ct = res.headers.get('content-type') || '';
         const isAudio = res.ok && ct.startsWith('audio/');
         setHasFile(isAudio);
-        // Auto-play directly here if user had audio active on previous node
-        // More reliable than relying on the useEffect dependency chain
-        if (isAudio && audioActiveRef.current) {
-          const a = new window.Audio(audioPath);
-          a.onloadedmetadata = () => setDuration(a.duration);
-          a.onended = () => {
-            setIsPlaying(false);
-            setAudioActive(false);
-            setCurrentTime(0);
-            stopRAF();
-          };
-          audioRef.current = a;
+
+        if (!isAudio) return;
+
+        // Create audio object now — reuse across play/pause
+        const a = new window.Audio(audioPath);
+        a.onloadedmetadata = () => {
+          if (fetchTokenRef.current !== token) return;
+          setDuration(a.duration);
+        };
+        a.onended = () => {
+          setIsPlaying(false);
+          setAudioActive(false);
+          setCurrentTime(0);
+          stopRAF();
+        };
+        audioRef.current = a;
+
+        // Auto-play if user had audio running on previous node
+        if (audioActiveRef.current) {
           a.play()
             .then(() => { setIsPlaying(true); startRAF(); })
-            .catch(() => setIsPlaying(false));
+            .catch(() => {
+              // iOS Safari blocked auto-play — that's ok, user can tap Play
+              setIsPlaying(false);
+            });
         }
       })
       .catch(() => {
@@ -110,32 +111,31 @@ export default function AudioPlayer({
 
     return () => {
       fetchTokenRef.current = Symbol();
-      audioRef.current?.pause();
-      stopRAF();
     };
-  }, [audioReady, audioPath, stopRAF]); // eslint-disable-line
-
-  // ── Auto-play when active ─────────────────────────────────
-  useEffect(() => {
-    if (audioActive && hasFile) play();
-  }, [hasFile, audioActive]); // eslint-disable-line
+  }, [audioReady, audioPath]); // eslint-disable-line
 
   // ── Cleanup on unmount ────────────────────────────────────
   useEffect(() => {
     return () => {
-      audioRef.current?.pause();
+      if (audioRef.current) audioRef.current.pause();
       stopRAF();
     };
   }, [stopRAF]);
 
-  // ── Global drag listeners — keep seek working outside the bar ──
+  // ── Global drag listeners ─────────────────────────────────
   useEffect(() => {
     if (!isDragging) return;
-    const onMove = (e) => applySeek(e.clientX ?? e.touches?.[0]?.clientX);
-    const onUp   = (e) => {
-      setIsDragging(false);
-      applySeek(e.clientX ?? e.changedTouches?.[0]?.clientX);
+    const getX  = (e) => e.clientX ?? e.touches?.[0]?.clientX ?? e.changedTouches?.[0]?.clientX;
+    const seek  = (clientX) => {
+      if (!barRef.current || !duration || clientX == null) return;
+      const rect  = barRef.current.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const t     = ratio * duration;
+      if (audioRef.current) audioRef.current.currentTime = t;
+      setCurrentTime(t);
     };
+    const onMove = (e) => seek(getX(e));
+    const onUp   = (e) => { setIsDragging(false); seek(getX(e)); };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup',   onUp);
     window.addEventListener('touchmove', onMove, { passive: false });
@@ -146,36 +146,16 @@ export default function AudioPlayer({
       window.removeEventListener('touchmove', onMove);
       window.removeEventListener('touchend',  onUp);
     };
-  }, [isDragging]); // eslint-disable-line
+  }, [isDragging, duration]); // eslint-disable-line
 
-  // ── Create audio object ───────────────────────────────────
-  const getAudio = () => {
-    if (audioRef.current) return audioRef.current;
-    const a = new window.Audio(audioPath);
-    a.onloadedmetadata = () => setDuration(a.duration);
-    a.onended = () => {
-      setIsPlaying(false);
-      setAudioActive(false);
-      setCurrentTime(0);
-      stopRAF();
-    };
-    audioRef.current = a;
-    return a;
-  };
-
-  // ── Play ──────────────────────────────────────────────────
+  // ── Play / Pause / Rewind / Replay ───────────────────────
   const play = () => {
-    const a = getAudio();
-    a.play()
-      .then(() => {
-        setIsPlaying(true);
-        setAudioActive(true);
-        startRAF();
-      })
+    if (!audioRef.current) return;
+    audioRef.current.play()
+      .then(() => { setIsPlaying(true); setAudioActive(true); startRAF(); })
       .catch(() => setIsPlaying(false));
   };
 
-  // ── Pause ─────────────────────────────────────────────────
   const pause = () => {
     audioRef.current?.pause();
     setIsPlaying(false);
@@ -183,75 +163,31 @@ export default function AudioPlayer({
     stopRAF();
   };
 
-  // ── Rewind 10s ────────────────────────────────────────────
   const rewind = () => {
-    const a = getAudio();
-    a.currentTime = Math.max(0, a.currentTime - 10);
-    setCurrentTime(a.currentTime);
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
+    setCurrentTime(audioRef.current.currentTime);
   };
 
-  // ── Replay from start ─────────────────────────────────────
   const replay = () => {
-    const a = getAudio();
-    a.currentTime = 0;
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = 0;
     setCurrentTime(0);
     play();
   };
 
-  // ── Seek bar interaction ──────────────────────────────────
-  // Uses a ref to the bar element so getBoundingClientRect()
-  // works correctly during drag — e.currentTarget is unreliable
-  // on touch events when the finger moves outside the element.
-  const barRef = useRef(null);
-
-  const getSeekTime = (clientX) => {
-    if (!barRef.current || !duration) return null;
-    const rect  = barRef.current.getBoundingClientRect();
-    const x     = clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    return ratio * duration;
-  };
-
+  // ── Seek bar handlers ─────────────────────────────────────
   const applySeek = (clientX) => {
-    const t = getSeekTime(clientX);
-    if (t === null) return;
+    if (!barRef.current || !duration || clientX == null) return;
+    const rect  = barRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const t     = ratio * duration;
     if (audioRef.current) audioRef.current.currentTime = t;
     setCurrentTime(t);
   };
 
-  // Mouse events
-  const onBarMouseDown = (e) => {
-    setIsDragging(true);
-    applySeek(e.clientX);
-  };
-  const onBarMouseMove = (e) => {
-    if (!isDragging) return;
-    applySeek(e.clientX);
-  };
-  const onBarMouseUp = (e) => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    applySeek(e.clientX);
-  };
-
-  // Touch events — use changedTouches for end, touches for move
-  const onBarTouchStart = (e) => {
-    setIsDragging(true);
-    applySeek(e.touches[0].clientX);
-  };
-  const onBarTouchMove = (e) => {
-    e.preventDefault(); // prevent page scroll while seeking
-    applySeek(e.touches[0].clientX);
-  };
-  const onBarTouchEnd = (e) => {
-    setIsDragging(false);
-    applySeek(e.changedTouches[0].clientX);
-  };
-
-  if (!hasFile) return null;
-
-  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const color    = accent || '#d97706';
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   const btnStyle = (active = false) => ({
     background: 'none',
@@ -269,10 +205,12 @@ export default function AudioPlayer({
     gap: 4,
   });
 
+  // ── Render — always mounted, hidden when no file ──────────
+  // Staying mounted preserves audio context across node changes
   return (
     <div style={{
       position: 'fixed',
-      bottom: 60,          // footer bar height
+      bottom: 60,
       left: 0,
       right: 0,
       zIndex: 99,
@@ -281,113 +219,52 @@ export default function AudioPlayer({
       borderBottom: '1px solid rgba(255,255,255,0.06)',
       backdropFilter: 'blur(12px)',
       padding: '8px 16px 10px',
+      // Hide instead of unmount — preserves audio context
+      opacity: hasFile ? 1 : 0,
+      pointerEvents: hasFile ? 'auto' : 'none',
+      transition: 'opacity 0.3s ease',
     }}>
 
-      {/* ── Seek bar ── */}
+      {/* Seek bar */}
       <div
         ref={barRef}
-        onMouseDown={onBarMouseDown}
-        onMouseMove={onBarMouseMove}
-        onMouseUp={onBarMouseUp}
+        onMouseDown={e => { setIsDragging(true); applySeek(e.clientX); }}
+        onMouseMove={e => { if (isDragging) applySeek(e.clientX); }}
+        onMouseUp={e => { setIsDragging(false); applySeek(e.clientX); }}
         onMouseLeave={() => setIsDragging(false)}
-        onTouchStart={onBarTouchStart}
-        onTouchMove={onBarTouchMove}
-        onTouchEnd={onBarTouchEnd}
-        style={{
-          width: '100%',
-          height: 28,
-          display: 'flex',
-          alignItems: 'center',
-          cursor: 'pointer',
-          marginBottom: 4,
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          touchAction: 'none',
-        }}
+        onTouchStart={e => { setIsDragging(true); applySeek(e.touches[0].clientX); }}
+        onTouchMove={e => { e.preventDefault(); applySeek(e.touches[0].clientX); }}
+        onTouchEnd={e => { setIsDragging(false); applySeek(e.changedTouches[0].clientX); }}
+        style={{ width:'100%', height:28, display:'flex', alignItems:'center', cursor:'pointer', marginBottom:4, userSelect:'none', WebkitUserSelect:'none', touchAction:'none' }}
       >
-        {/* Track */}
-        <div style={{
-          width: '100%',
-          height: 4,
-          borderRadius: 4,
-          background: 'rgba(255,255,255,0.12)',
-          position: 'relative',
-        }}>
-          {/* Fill */}
-          <div style={{
-            position: 'absolute',
-            left: 0, top: 0, bottom: 0,
-            width: `${progress}%`,
-            borderRadius: 4,
-            background: color,
-            transition: isDragging ? 'none' : 'width 0.1s linear',
-          }} />
-          {/* Thumb */}
-          <div style={{
-            position: 'absolute',
-            top: '50%',
-            left: `${progress}%`,
-            transform: 'translate(-50%, -50%)',
-            width: 14,
-            height: 14,
-            borderRadius: '50%',
-            background: color,
-            boxShadow: `0 0 6px ${color}88`,
-          }} />
+        <div style={{ width:'100%', height:4, borderRadius:4, background:'rgba(255,255,255,0.12)', position:'relative' }}>
+          <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${progress}%`, borderRadius:4, background:color, transition: isDragging ? 'none' : 'width 0.1s linear' }} />
+          <div style={{ position:'absolute', top:'50%', left:`${progress}%`, transform:'translate(-50%,-50%)', width:14, height:14, borderRadius:'50%', background:color, boxShadow:`0 0 6px ${color}88` }} />
         </div>
       </div>
 
-      {/* ── Controls row ── */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-      }}>
-        {/* Rewind 10s */}
-        <button
-          onClick={rewind}
-          style={btnStyle()}
-          title={lang === 'hi' ? '१० सेकंड पीछे' : '10s back'}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.color = color; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}
+      {/* Controls */}
+      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+        <button onClick={rewind} style={btnStyle()}
+          onMouseEnter={e => { e.currentTarget.style.borderColor=color; e.currentTarget.style.color=color; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}
+        >⏮ 10s</button>
+
+        <button onClick={isPlaying ? pause : play} style={{ ...btnStyle(isPlaying), padding:'5px 16px', fontWeight:700 }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor=color; e.currentTarget.style.color=color; }}
+          onMouseLeave={e => { if(!isPlaying){ e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}}
         >
-          ⏮ 10s
+          {isPlaying ? '⏸' : '▶'} {isPlaying ? (lang==='hi'?'रोकें':'Pause') : (lang==='hi'?'सुनें':'Play')}
         </button>
 
-        {/* Play / Pause */}
-        <button
-          onClick={isPlaying ? pause : play}
-          style={{ ...btnStyle(isPlaying), padding: '5px 16px', fontWeight: 700 }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.color = color; }}
-          onMouseLeave={e => { if (!isPlaying) { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; } }}
-        >
-          {isPlaying ? '⏸' : '▶'} {isPlaying
-            ? (lang === 'hi' ? 'रोकें' : 'Pause')
-            : (lang === 'hi' ? 'सुनें' : 'Play')}
-        </button>
-
-        {/* Time */}
-        <span style={{
-          fontFamily: 'var(--mono)',
-          fontSize: '0.65rem',
-          color: 'rgba(255,255,255,0.35)',
-          whiteSpace: 'nowrap',
-          flex: 1,
-          textAlign: 'center',
-        }}>
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', color:'rgba(255,255,255,0.35)', whiteSpace:'nowrap', flex:1, textAlign:'center' }}>
           {fmt(currentTime)} / {fmt(duration)}
         </span>
 
-        {/* Replay from start */}
-        <button
-          onClick={replay}
-          style={btnStyle()}
-          title={lang === 'hi' ? 'फिर से सुनें' : 'Replay'}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.color = color; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}
-        >
-          ↺ {lang === 'hi' ? 'फिर से' : 'Replay'}
-        </button>
+        <button onClick={replay} style={btnStyle()}
+          onMouseEnter={e => { e.currentTarget.style.borderColor=color; e.currentTarget.style.color=color; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}
+        >↺ {lang==='hi'?'फिर से':'Replay'}</button>
       </div>
     </div>
   );
