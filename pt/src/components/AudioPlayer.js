@@ -69,6 +69,7 @@ export default function AudioPlayer({
     setDuration(0);
     setHasFile(false);
 
+    console.log('[AudioPlayer] effect fired | audioReady:', audioReady, '| path:', audioPath, '| audioActive:', audioActiveRef.current);
     if (!audioReady) return;
 
     fetch(audioPath, { method: 'HEAD' })
@@ -76,6 +77,7 @@ export default function AudioPlayer({
         if (fetchTokenRef.current !== token) return;
         const ct = res.headers.get('content-type') || '';
         const isAudio = res.ok && ct.startsWith('audio/');
+        console.log('[AudioPlayer] HEAD check:', audioPath, '| isAudio:', isAudio, '| ct:', ct);
         setHasFile(isAudio);
 
         if (!isAudio) return;
@@ -94,14 +96,18 @@ export default function AudioPlayer({
         };
         audioRef.current = a;
 
+        console.log('[AudioPlayer] audioActiveRef.current:', audioActiveRef.current);
         // Auto-play if user had audio running on previous node
         if (audioActiveRef.current) {
+          console.log('[AudioPlayer] attempting auto-play...');
           a.play()
-            .then(() => { setIsPlaying(true); startRAF(); })
-            .catch(() => {
-              // iOS Safari blocked auto-play — that's ok, user can tap Play
+            .then(() => { console.log('[AudioPlayer] auto-play SUCCESS'); setIsPlaying(true); startRAF(); })
+            .catch((err) => {
+              console.log('[AudioPlayer] auto-play BLOCKED:', err.message);
               setIsPlaying(false);
             });
+        } else {
+          console.log('[AudioPlayer] audioActive is false — not auto-playing');
         }
       })
       .catch(() => {
