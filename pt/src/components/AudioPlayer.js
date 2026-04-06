@@ -69,7 +69,6 @@ export default function AudioPlayer({
     setDuration(0);
     setHasFile(false);
 
-    console.log('[AudioPlayer] effect fired | audioReady:', audioReady, '| path:', audioPath, '| audioActive:', audioActiveRef.current);
     if (!audioReady) return;
 
     fetch(audioPath, { method: 'HEAD' })
@@ -77,7 +76,6 @@ export default function AudioPlayer({
         if (fetchTokenRef.current !== token) return;
         const ct = res.headers.get('content-type') || '';
         const isAudio = res.ok && ct.startsWith('audio/');
-        console.log('[AudioPlayer] HEAD check:', audioPath, '| isAudio:', isAudio, '| ct:', ct);
         setHasFile(isAudio);
 
         if (!isAudio) return;
@@ -89,25 +87,19 @@ export default function AudioPlayer({
           setDuration(a.duration);
         };
         a.onended = () => {
+          // Don't reset audioActive — user still wants audio on next node
+          // Only pause() resets audioActive (explicit user action)
           setIsPlaying(false);
-          setAudioActive(false);
           setCurrentTime(0);
           stopRAF();
         };
         audioRef.current = a;
 
-        console.log('[AudioPlayer] audioActiveRef.current:', audioActiveRef.current);
         // Auto-play if user had audio running on previous node
         if (audioActiveRef.current) {
-          console.log('[AudioPlayer] attempting auto-play...');
           a.play()
-            .then(() => { console.log('[AudioPlayer] auto-play SUCCESS'); setIsPlaying(true); startRAF(); })
-            .catch((err) => {
-              console.log('[AudioPlayer] auto-play BLOCKED:', err.message);
-              setIsPlaying(false);
-            });
-        } else {
-          console.log('[AudioPlayer] audioActive is false — not auto-playing');
+            .then(() => { setIsPlaying(true); startRAF(); })
+            .catch(() => { setIsPlaying(false); });
         }
       })
       .catch(() => {
