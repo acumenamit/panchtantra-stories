@@ -25,9 +25,13 @@ export default function AudioPlayer({
   const [duration,    setDuration]    = useState(0);
   const [isDragging,  setIsDragging]  = useState(false);
 
-  const audioRef      = useRef(null);
-  const rafRef        = useRef(null);
-  const fetchTokenRef = useRef(null);
+  const audioRef        = useRef(null);
+  const rafRef          = useRef(null);
+  const fetchTokenRef   = useRef(null);
+  const audioActiveRef  = useRef(audioActive);
+
+  // Keep ref in sync with prop so fetch callbacks always see latest value
+  useEffect(() => { audioActiveRef.current = audioActive; }, [audioActive]);
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
@@ -80,7 +84,24 @@ export default function AudioPlayer({
       .then(res => {
         if (fetchTokenRef.current !== token) return;
         const ct = res.headers.get('content-type') || '';
-        setHasFile(res.ok && ct.startsWith('audio/'));
+        const isAudio = res.ok && ct.startsWith('audio/');
+        setHasFile(isAudio);
+        // Auto-play directly here if user had audio active on previous node
+        // More reliable than relying on the useEffect dependency chain
+        if (isAudio && audioActiveRef.current) {
+          const a = new window.Audio(audioPath);
+          a.onloadedmetadata = () => setDuration(a.duration);
+          a.onended = () => {
+            setIsPlaying(false);
+            setAudioActive(false);
+            setCurrentTime(0);
+            stopRAF();
+          };
+          audioRef.current = a;
+          a.play()
+            .then(() => { setIsPlaying(true); startRAF(); })
+            .catch(() => setIsPlaying(false));
+        }
       })
       .catch(() => {
         if (fetchTokenRef.current !== token) return;
