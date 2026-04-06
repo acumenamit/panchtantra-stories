@@ -13,6 +13,8 @@ export default function AudioPlayer({
   storyId, nodeId, lang, accent,
   audioReady, audioActive, setAudioActive,
 }) {
+  // Track previous lang so we know when it actually changed
+  const prevLangRef = useRef(lang);
   const [hasFile,     setHasFile]     = useState(false);
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -23,10 +25,12 @@ export default function AudioPlayer({
   const rafRef         = useRef(null);
   const fetchTokenRef  = useRef(null);
   const audioActiveRef = useRef(audioActive);
+  const isPlayingRef   = useRef(false);
   const barRef         = useRef(null);
 
-  // Keep ref in sync — fetch callbacks read this to avoid stale closure
+  // Keep refs in sync — fetch callbacks read these to avoid stale closure
   useEffect(() => { audioActiveRef.current = audioActive; }, [audioActive]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   const audioPath = `/audio/${storyId}/${nodeId}.${lang}.mp3`;
 
@@ -59,6 +63,8 @@ export default function AudioPlayer({
     fetchTokenRef.current = token;
 
     // Stop current audio immediately
+    // Preserve audioActive intent — stopping current audio doesn't mean
+    // the user wants to stop audio on the new node/language
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -69,13 +75,34 @@ export default function AudioPlayer({
     setDuration(0);
     setHasFile(false);
 
+    // On language change, audioReady briefly goes false then true.
+    // We need to wait for audioReady=true with the new lang path.
+    // Track if this is a lang change so we know to auto-play.
+    const langChanged = prevLangRef.current !== lang;
+    prevLangRef.current = lang;
+
+    console.log('[AudioPlayer] effect | langChanged:', langChanged,
+      '| audioReady:', audioReady,
+      '| isPlayingRef:', isPlayingRef.current,
+      '| audioActiveRef:', audioActiveRef.current,
+      '| path:', audioPath);
+
     if (!audioReady) return;
+
+    // If lang just changed and audio was playing, ensure audioActiveRef is true
+    if (langChanged && isPlayingRef.current) {
+      console.log('[AudioPlayer] lang changed mid-play — forcing audioActiveRef true');
+      audioActiveRef.current = true;
+    }
 
     fetch(audioPath, { method: 'HEAD' })
       .then(res => {
         if (fetchTokenRef.current !== token) return;
         const ct = res.headers.get('content-type') || '';
         const isAudio = res.ok && ct.startsWith('audio/');
+        console.log('[AudioPlayer] HEAD result | isAudio:', isAudio,
+          '| audioActiveRef:', audioActiveRef.current,
+          '| path:', audioPath);
         setHasFile(isAudio);
 
         if (!isAudio) return;
@@ -97,9 +124,12 @@ export default function AudioPlayer({
 
         // Auto-play if user had audio running on previous node
         if (audioActiveRef.current) {
+          console.log('[AudioPlayer] attempting auto-play on new lang...');
           a.play()
-            .then(() => { setIsPlaying(true); startRAF(); })
-            .catch(() => { setIsPlaying(false); });
+            .then(() => { console.log('[AudioPlayer] auto-play SUCCESS'); setIsPlaying(true); startRAF(); })
+            .catch((err) => { console.log('[AudioPlayer] auto-play BLOCKED:', err.message); setIsPlaying(false); });
+        } else {
+          console.log('[AudioPlayer] audioActiveRef false — not auto-playing');
         }
       })
       .catch(() => {
@@ -110,7 +140,7 @@ export default function AudioPlayer({
     return () => {
       fetchTokenRef.current = Symbol();
     };
-  }, [audioReady, audioPath]); // eslint-disable-line
+  }, [audioReady, audioPath, lang]); // eslint-disable-line
 
   // ── Cleanup on unmount ────────────────────────────────────
   useEffect(() => {
