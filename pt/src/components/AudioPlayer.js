@@ -20,6 +20,7 @@ export default function AudioPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration,    setDuration]    = useState(0);
   const [isDragging,  setIsDragging]  = useState(false);
+  const [pendingPlay, setPendingPlay] = useState(false); // true when auto-play blocked — pulses play button
 
   const audioRef       = useRef(null);
   const rafRef         = useRef(null);
@@ -81,17 +82,10 @@ export default function AudioPlayer({
     const langChanged = prevLangRef.current !== lang;
     prevLangRef.current = lang;
 
-    console.log('[AudioPlayer] effect | langChanged:', langChanged,
-      '| audioReady:', audioReady,
-      '| isPlayingRef:', isPlayingRef.current,
-      '| audioActiveRef:', audioActiveRef.current,
-      '| path:', audioPath);
-
     if (!audioReady) return;
 
     // If lang just changed and audio was playing, ensure audioActiveRef is true
     if (langChanged && isPlayingRef.current) {
-      console.log('[AudioPlayer] lang changed mid-play — forcing audioActiveRef true');
       audioActiveRef.current = true;
     }
 
@@ -100,9 +94,6 @@ export default function AudioPlayer({
         if (fetchTokenRef.current !== token) return;
         const ct = res.headers.get('content-type') || '';
         const isAudio = res.ok && ct.startsWith('audio/');
-        console.log('[AudioPlayer] HEAD result | isAudio:', isAudio,
-          '| audioActiveRef:', audioActiveRef.current,
-          '| path:', audioPath);
         setHasFile(isAudio);
 
         if (!isAudio) return;
@@ -124,12 +115,13 @@ export default function AudioPlayer({
 
         // Auto-play if user had audio running on previous node
         if (audioActiveRef.current) {
-          console.log('[AudioPlayer] attempting auto-play on new lang...');
           a.play()
-            .then(() => { console.log('[AudioPlayer] auto-play SUCCESS'); setIsPlaying(true); startRAF(); })
-            .catch((err) => { console.log('[AudioPlayer] auto-play BLOCKED:', err.message); setIsPlaying(false); });
-        } else {
-          console.log('[AudioPlayer] audioActiveRef false — not auto-playing');
+            .then(() => { setIsPlaying(true); setPendingPlay(false); startRAF(); })
+            .catch(() => {
+              // iOS Safari blocked auto-play — show pulsing play button instead
+              setIsPlaying(false);
+              setPendingPlay(true);
+            });
         }
       })
       .catch(() => {
@@ -179,6 +171,7 @@ export default function AudioPlayer({
   // ── Play / Pause / Rewind / Replay ───────────────────────
   const play = () => {
     if (!audioRef.current) return;
+    setPendingPlay(false);
     audioRef.current.play()
       .then(() => { setIsPlaying(true); setAudioActive(true); startRAF(); })
       .catch(() => setIsPlaying(false));
@@ -188,6 +181,7 @@ export default function AudioPlayer({
     audioRef.current?.pause();
     setIsPlaying(false);
     setAudioActive(false);
+    setPendingPlay(false);
     stopRAF();
   };
 
@@ -278,9 +272,16 @@ export default function AudioPlayer({
           onMouseLeave={e => { e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}
         >⏮ 10s</button>
 
-        <button onClick={isPlaying ? pause : play} style={{ ...btnStyle(isPlaying), padding:'5px 16px', fontWeight:700 }}
+        <button onClick={isPlaying ? pause : play}
+          style={{
+            ...btnStyle(isPlaying || pendingPlay),
+            padding:'5px 16px',
+            fontWeight:700,
+            animation: pendingPlay ? 'pulse 1s ease-in-out infinite' : 'none',
+            boxShadow: pendingPlay ? `0 0 12px ${color}66` : 'none',
+          }}
           onMouseEnter={e => { e.currentTarget.style.borderColor=color; e.currentTarget.style.color=color; }}
-          onMouseLeave={e => { if(!isPlaying){ e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}}
+          onMouseLeave={e => { if(!isPlaying && !pendingPlay){ e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; e.currentTarget.style.color='rgba(255,255,255,0.6)'; }}}
         >
           {isPlaying ? '⏸' : '▶'} {isPlaying ? (lang==='hi'?'रोकें':'Pause') : (lang==='hi'?'सुनें':'Play')}
         </button>
