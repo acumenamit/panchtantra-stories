@@ -113,7 +113,7 @@ export default function AudioPlayer({
       audioRef.current?.pause();
       stopRAF();
     };
-  }, [audioReady, audioPath, stopRAF]);
+  }, [audioReady, audioPath, stopRAF]); // eslint-disable-line
 
   // ── Auto-play when active ─────────────────────────────────
   useEffect(() => {
