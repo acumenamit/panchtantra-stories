@@ -128,9 +128,19 @@ No markdown fences. No explanation.
 // ── Low-level API caller ──────────────────────────────────────
 
 async function callClaudeAPI(systemPrompt, userMessage, maxTokens = 4000) {
+  const apiKey = process.env.REACT_APP_ANTHROPIC_KEY;
+  if (!apiKey) {
+    throw new Error('REACT_APP_ANTHROPIC_KEY is not set. Add it to your Vercel environment variables.');
+  }
+
   const response = await fetch(CLAUDE_API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
     body: JSON.stringify({
       model:      CLAUDE_MODEL,
       max_tokens: maxTokens,
