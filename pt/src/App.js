@@ -3,6 +3,7 @@ import { LangProvider } from './LangContext';
 import Home from './pages/Home';
 import StoryEngine from './pages/StoryEngine';
 import STORIES from './stories';
+import StoryAgent from './pages/StoryAgent/StoryAgent';
 
 function StoryRoute() {
   const { id } = useParams();
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/"          element={<Home />} />
         <Route path="/story/:id" element={<StoryRoute />} />
         <Route path="*"          element={<Navigate to="/" replace />} />
+        <Route path="/agent"     element={<StoryAgent />} />
       </Routes>
     </LangProvider>
   );
