@@ -6,7 +6,7 @@ import ChoiceButton from '../components/ChoiceButton';
 import EndingCard from '../components/EndingCard';
 import LangToggle from '../components/LangToggle';
 import SCENES from '../scenes';
-import AudioButton from '../components/AudioButton';
+import AudioPlayer from '../components/AudioPlayer';
 import usePreloader from '../components/usePreloader';
 import InstallPrompt from '../components/InstallPrompt';
 import useHistory from '../components/useHistory';
@@ -30,6 +30,7 @@ export default function StoryEngine({ story }) {
   const [pickedNext,  setPicked]     = useState(null);
   const [imgLoaded,   setImgLoaded]  = useState(false);
   const [showInstall, setShowInstall] = useState(false);
+  const [resetKey,    setResetKey]    = useState(0); // incremented to force preloader re-fire
   const [imageReady,  setImageReady] = useState(false);
   const [audioReady,  setAudioReady] = useState(false);
   // audioActive: user's intent — stays true across nodes so audio
@@ -70,7 +71,7 @@ export default function StoryEngine({ story }) {
     }, 300);
 
     return () => clearInterval(interval);
-  }, [nodeId]); // eslint-disable-line
+  }, [nodeId, resetKey]); // eslint-disable-line
 
   // Re-check audio when language switches — restart polling until ready
   // Also reset textDone so choices stay hidden until typewriter replays
@@ -147,11 +148,17 @@ export default function StoryEngine({ story }) {
     historyRecordRestart(story.id, lang);
     setFading(true);
     setTimeout(() => {
-      setNodeId('start');
       setHistory([]);
       setTextDone(false);
       setImgLoaded(false);
-      setAudioReady(false); // explicit reset
+      if (nodeId === 'start') {
+        // nodeId won't change so preloader effect won't re-fire
+        // increment resetKey to force it
+        setResetKey(k => k + 1);
+      } else {
+        setAudioReady(false); // changing node — normal reset
+      }
+      setNodeId('start');
       setFading(false);
     }, 300);
   };
@@ -189,7 +196,7 @@ export default function StoryEngine({ story }) {
   const sceneLabel = typeof scene.label === 'object' ? scene.label[lang] : scene.label;
 
   return (
-    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 80px', transition:'background 1.2s ease' }}>
+    <div style={{ minHeight:'100vh', background:bg, display:'flex', flexDirection:'column', alignItems:'center', padding:'32px 16px 160px', transition:'background 1.2s ease' }}>
 
       {/* ── Header ── */}
       <div style={{ width:'100%', maxWidth:660, marginBottom:20 }}>
@@ -215,16 +222,7 @@ export default function StoryEngine({ story }) {
 
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, marginTop:4 }}>
             <LangToggle accent={accent} onChange={handleLangSwitch} />
-            {/* Audio button — fixed top right, always visible on all nodes */}
-            <AudioButton
-              storyId={story.id}
-              nodeId={nodeId}
-              lang={lang}
-              accent={accent}
-              audioReady={audioReady}
-              audioActive={audioActive}
-              setAudioActive={setAudioActive}
-            />
+
             {node.isAlternate && (
               <div style={{ padding:'4px 10px', borderRadius:20, background:'rgba(239,68,68,0.2)', border:'1px solid rgba(239,68,68,0.5)', color:'#ffb3b3', fontFamily:monoFont, fontSize:'0.62rem', whiteSpace:'nowrap' }}>
                 {altLabel}
@@ -393,6 +391,17 @@ export default function StoryEngine({ story }) {
       <div style={{ marginTop:8, fontFamily:monoFont, fontSize:'0.65rem', color:'rgba(255,255,255,0.5)', letterSpacing:monoSpacing||'0.18em', textShadow:'0 1px 6px rgba(0,0,0,0.8)', textAlign:'center' }}>
         {lang === 'hi' ? '✦ पञ्चतन्त्र ✦ नीतिशास्त्र ✦' : '✦ PANCHATANTRA ✦ NITISHASTRA ✦'}
       </div>
+
+      {/* ── Audio player — fixed above footer, never moves ── */}
+      <AudioPlayer
+        storyId={story.id}
+        nodeId={nodeId}
+        lang={lang}
+        accent={accent}
+        audioReady={audioReady}
+        audioActive={audioActive}
+        setAudioActive={setAudioActive}
+      />
 
       {/* Install prompt — shown after first story completion */}
       {showInstall && <InstallPrompt lang={lang} accent={accent} />}
