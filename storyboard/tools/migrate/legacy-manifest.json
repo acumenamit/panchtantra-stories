@@ -1,0 +1,27 @@
+{
+  "note": "Frozen legacy source (M1) and expected phase-1 conversion totals. Checked by tools/migrate/migrate.test.ts.",
+  "sourceFiles": {
+    "pt/src/stories/blueJackal.js": "8125723c1048361f9fd789b6a844d805d31bde3eda8e7bb0b60feac5be9b8f54",
+    "pt/src/stories/brahminAndCobra.js": "b8b3c4098b7638e0c82e8c6f2aca9628a8ee2c20f36ef2bc8f185d4903bffed9",
+    "pt/src/stories/brahminsDream.js": "55411b9e910fcda8a5a4d112bb8cbf4e8c21d39d53d2c989c060d250c9294f3b",
+    "pt/src/stories/brahminsGoat.js": "d7998a26da1676fa6b0f3a148d676c72926cce55ee69d78c67cfb68f2df5462f",
+    "pt/src/stories/crowAndSerpent.js": "ad5c5dae7bdf287df20b5b8dc6e23cbfb536271a1bf25f34ced049901f5aa740",
+    "pt/src/stories/fourFriendsAndHunter.js": "2d6935d667d6c18cf0faf197e7d9c9cebcaba09d6cd13b68e2d2650097f3f265",
+    "pt/src/stories/jackalAndWarDrum.js": "96a0e585b662ec615f00ee51ce47765b9aeecbb01cb9745cedcd165a4b5520ac",
+    "pt/src/stories/lionAndHare.js": "3765aa78e9a500434cfd2ea2505f21af7e5f52481e5a65629801a66ed5ba1adc",
+    "pt/src/stories/monkeyAndCrocodile.js": "2045d47a68a4ef6453dd892ee43d230a632789899d5f16da50efc2b4135fe3de",
+    "pt/src/stories/tortoiseAndGeese.js": "1597933c171988c036cbcb584172c226a84673cffbbe9a5563954aeb74afe521",
+    "pt/src/stories/weaverAndPrincess.js": "037268c53a34e4acd7dd9541bb67b230acaf10c4a85ee5e0a8645b331ff94a14"
+  },
+  "totals": {
+    "stories": 11,
+    "nodes": 95,
+    "choices": 110,
+    "endings": 28,
+    "goldenPaths": 136
+  },
+  "stringsComparedPerLocale": {
+    "en": 355,
+    "hi": 355
+  }
+}

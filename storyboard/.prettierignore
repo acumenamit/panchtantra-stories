@@ -6,3 +6,6 @@ pnpm-lock.yaml
 next-env.d.ts
 playwright-report
 test-results
+# Generated content stored as canonical JSON (RFC 8785): never reformat
+migration-input
+.content

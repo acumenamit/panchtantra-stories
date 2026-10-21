@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "migrate:convert": "tsx tools/migrate/cli.ts"
   },
   "dependencies": {
     "canonicalize": "5.1.0",
@@ -34,6 +35,7 @@
     "eslint-config-next": "16.4.2",
     "fast-check": "4.10.2",
     "prettier": "3.9.10",
+    "tsx": "4.23.15",
     "typescript": "6.0.3",
     "vite": "8.3.4",
     "vitest": "5.0.5"
