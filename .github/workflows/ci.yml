@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - 'storyboard/**'
+      - 'pt/src/stories/**' # legacy source: frozen-hash, conversion and waiver checks
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'storyboard/**'
+      - 'pt/src/stories/**'
       - '.github/workflows/ci.yml'
 
 permissions:
