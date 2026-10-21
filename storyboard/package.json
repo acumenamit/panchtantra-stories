@@ -18,7 +18,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "migrate:convert": "tsx tools/migrate/cli.ts",
-    "migrate:validate": "tsx tools/migrate/validate-cli.ts"
+    "migrate:validate": "tsx tools/migrate/validate-cli.ts",
+    "narration:plan": "tsx tools/narration/cli.ts plan",
+    "narration:run": "tsx tools/narration/cli.ts run"
   },
   "dependencies": {
     "canonicalize": "5.1.0",
