@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "1.0",
+  "storyId": "two-paths",
+  "version": 1,
+  "origin": "migration",
+  "collectionId": "panchatantra",
+  "source": { "work": "panchatantra", "book": "I" },
+  "age": "6+",
+  "addedOn": "2026-10-21",
+  "emoji": "🦊",
+  "color": "#C8892B",
+  "access": { "tier": "free" },
+  "aiUse": { "text": "none", "illustration": "none", "narration": "none" },
+  "locales": ["en", "hi"],
+  "defaultLocale": "en",
+  "startNodeId": "start",
+  "progressSteps": ["start", "wise_path", "ending_wise"],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "fork",
+      "scene": "forest_day",
+      "isAlternate": false,
+      "image": null,
+      "choices": [
+        { "id": "c1", "next": "wise_path" },
+        { "id": "c2", "next": "quick_path" }
+      ]
+    },
+    {
+      "id": "wise_path",
+      "type": "single",
+      "scene": "forest_day",
+      "isAlternate": false,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "ending_wise" }]
+    },
+    {
+      "id": "quick_path",
+      "type": "alternate",
+      "scene": "river",
+      "isAlternate": true,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "ending_quick" }]
+    },
+    {
+      "id": "ending_wise",
+      "type": "ending",
+      "scene": "forest_day",
+      "isAlternate": false,
+      "image": null,
+      "lessonIcon": "🌿"
+    },
+    {
+      "id": "ending_quick",
+      "type": "ending",
+      "scene": "river",
+      "isAlternate": true,
+      "image": null,
+      "lessonIcon": "💧"
+    }
+  ],
+  "text": {
+    "en": {
+      "title": "Two Paths (test fixture)",
+      "description": "A synthetic story used only by tests.",
+      "theme": "Patience",
+      "duration": "2 min",
+      "book": "Panchatantra — Book I",
+      "nodes": {
+        "start": {
+          "text": "A young fox stands where the forest path splits in two.",
+          "question": "Which way does the fox go?",
+          "choices": { "c1": "Take the long path", "c2": "Take the short path" }
+        },
+        "wise_path": {
+          "text": "The long path winds past a well and a banyan tree.",
+          "question": "What does the fox do now?",
+          "choices": { "c1": "Keep walking" }
+        },
+        "quick_path": {
+          "text": "The short path ends at a fast river.",
+          "question": "What does the fox do?",
+          "choices": { "c1": "Wade in" }
+        },
+        "ending_wise": {
+          "text": "The fox reaches home before dark.\nThe Panchatantra teaches: \"The patient traveller arrives.\"",
+          "lesson": "Taking time can be the faster way home."
+        },
+        "ending_quick": {
+          "text": "The river pushes the fox back to the bank.\nThe Panchatantra teaches: \"Haste meets the river.\"",
+          "lesson": "A short path is not always a quick one."
+        }
+      }
+    },
+    "hi": {
+      "title": "दो रास्ते (परीक्षण)",
+      "description": "केवल परीक्षण के लिए बनी कहानी।",
+      "theme": "धैर्य",
+      "duration": "2 मिनट",
+      "book": "पञ्चतन्त्र — पुस्तक I",
+      "nodes": {
+        "start": {
+          "text": "एक छोटी लोमड़ी वहाँ खड़ी है जहाँ जंगल का रास्ता दो हिस्सों में बँटता है।",
+          "question": "लोमड़ी किस तरफ़ जाती है?",
+          "choices": { "c1": "लंबा रास्ता लो", "c2": "छोटा रास्ता लो" }
+        },
+        "wise_path": {
+          "text": "लंबा रास्ता एक कुएँ और बरगद के पेड़ के पास से घूमता है।",
+          "question": "अब लोमड़ी क्या करती है?",
+          "choices": { "c1": "चलती रहो" }
+        },
+        "quick_path": {
+          "text": "छोटा रास्ता एक तेज़ नदी पर ख़त्म होता है।",
+          "question": "लोमड़ी क्या करती है?",
+          "choices": { "c1": "पानी में उतरो" }
+        },
+        "ending_wise": {
+          "text": "लोमड़ी अँधेरा होने से पहले घर पहुँच जाती है।\nपञ्चतन्त्र सिखाता है: \"धैर्यवान यात्री पहुँचता है।\"",
+          "lesson": "धीरे चलना भी जल्दी घर पहुँचा सकता है।"
+        },
+        "ending_quick": {
+          "text": "नदी लोमड़ी को किनारे पर वापस धकेल देती है।\nपञ्चतन्त्र सिखाता है: \"जल्दबाज़ी नदी से टकराती है।\"",
+          "lesson": "छोटा रास्ता हमेशा जल्दी नहीं होता।"
+        }
+      }
+    }
+  },
+  "assets": []
+}
