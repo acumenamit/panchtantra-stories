@@ -1,0 +1,38 @@
+# Root .gitignore for acumenamit/panchtantra-stories (public repo).
+# Committed before any other change (spec P0-2). Ignoring a path never
+# affects files that are already tracked.
+
+# Internal documents: never committed
+/docs/design/
+
+# Secrets and local environment files (.env.example stays committable)
+.env
+.env.*
+!.env.example
+*.pem
+
+# Local AI tooling config: kept on this machine only
+/CLAUDE.md
+/.mcp.json
+/.claude/
+.code-review-graph/
+
+# Dependencies, build output and caches
+node_modules/
+.next/
+.vercel/
+/pt/build/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Storyboard publisher local working folders (media, staged content)
+/storyboard/migration-input/
+/storyboard/.content/
+
+# Logs and OS files
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
