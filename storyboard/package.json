@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "migrate:convert": "tsx tools/migrate/cli.ts"
+    "migrate:convert": "tsx tools/migrate/cli.ts",
+    "migrate:validate": "tsx tools/migrate/validate-cli.ts"
   },
   "dependencies": {
     "canonicalize": "5.1.0",

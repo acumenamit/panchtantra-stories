@@ -9,3 +9,5 @@ test-results
 # Generated content stored as canonical JSON (RFC 8785): never reformat
 migration-input
 .content
+# Local-only private rule data (gitignored)
+.rules-private
