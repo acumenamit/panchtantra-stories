@@ -20,7 +20,10 @@
     "migrate:convert": "tsx tools/migrate/cli.ts",
     "migrate:validate": "tsx tools/migrate/validate-cli.ts",
     "narration:plan": "tsx tools/narration/cli.ts plan",
-    "narration:run": "tsx tools/narration/cli.ts run"
+    "narration:run": "tsx tools/narration/cli.ts run",
+    "narration:export": "tsx tools/narration/parler-cli.ts export",
+    "narration:ingest": "tsx tools/narration/parler-cli.ts ingest",
+    "narration:listened": "tsx tools/narration/parler-cli.ts listened"
   },
   "dependencies": {
     "canonicalize": "5.1.0",
