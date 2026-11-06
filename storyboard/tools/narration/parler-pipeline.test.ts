@@ -626,4 +626,15 @@ describe('Colab notebook contract', () => {
     expect([...read].filter((k) => !entryKeys.has(k))).toEqual([])
     expect(readJson(P().planPath).recipe.levelPeakDbfs).toBe(-1)
   })
+
+  it('refuses to run without a GPU, before anything is made', () => {
+    // Files made on a CPU runtime came out with much shorter Hindi pauses (measured 2026-11-06).
+    const step1 = cells.find((c) => c.startsWith('# 1.'))!
+    expect(step1).toMatch(
+      /\nif not torch\.cuda\.is_available\(\):\n(?:[ \t]*#[^\n]*\n)?[ \t]+raise RuntimeError\(/,
+    )
+    const guard = generate.indexOf("if device == 'cpu':\n    raise RuntimeError(")
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(generate.indexOf('MANIFEST = '))
+  })
 })
