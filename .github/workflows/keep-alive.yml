@@ -1,0 +1,143 @@
+# Keeps the Supabase Free project from being paused (spec §3.3, OQ-2) and re-checks the lock-down on every run.
+# Uses the repository variables SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY. Both are public by design and appear in
+# this public run log: never put a secret key here. Responses are reduced to HTTP status and error code.
+# GitHub disables scheduled workflows in a public repo after 60 days without repository activity; the second step
+# warns at 45 days, and the owner's NI-5 reminder is the backup (see the local runbook notes).
+name: keep-alive
+
+on:
+  schedule:
+    - cron: '17 3,11,19 * * *' # 03:17, 11:17, 19:17 UTC (08:47, 16:47, 00:47 IST), away from the top of the hour
+  workflow_dispatch:
+    inputs:
+      fail_on_purpose:
+        description: Fail this run on purpose after the normal checks (manual check only; the exit proof is the scheduled run with KEEPALIVE_FAIL_TEST=1)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read # only for reading the date of the last commit (60-day warning)
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      # Manual test: the run's checkbox. Scheduled test: repository variable KEEPALIVE_FAIL_TEST=1 (remove it after).
+      FAIL_ON_PURPOSE: ${{ inputs.fail_on_purpose == true || vars.KEEPALIVE_FAIL_TEST == '1' }}
+    steps:
+      - name: Call keep_alive() and re-check the lock-down
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "::error::Repository variables SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must both be set."
+            exit 1
+          fi
+          case "$SUPABASE_PUBLISHABLE_KEY" in
+            sb_publishable_*) ;;
+            *) echo "::error::SUPABASE_PUBLISHABLE_KEY is not an sb_publishable_ key. If a secret key was pasted here, it is now in this public log: rotate it in Supabase at once."
+               exit 1 ;;
+          esac
+          base="${SUPABASE_URL%/}"
+          failed=0
+
+          # call METHOD URL [curl args...]: prints the HTTP status (000 = no response); the body goes to body.txt.
+          # Brief network or gateway errors are retried; 4xx answers are not.
+          call() {
+            local method=$1 url=$2; shift 2
+            : > body.txt
+            curl -sS --retry 3 --retry-delay 5 --retry-connrefused --retry-max-time 45 --max-time 15 \
+              -o body.txt -w '%{http_code}' -X "$method" "$url" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" "$@" || true
+          }
+          # The error code of a JSON answer: "code" (Data API) or "statusCode" / "error" (Storage, Realtime).
+          err_code() {
+            local key v
+            for key in code statusCode error; do
+              v=$(sed -n "s/.*\"$key\" *: *\"\{0,1\}\([^\",}]*\).*/\1/p" body.txt | head -n 1)
+              if [ -n "$v" ]; then echo "$v"; return; fi
+            done
+            echo none
+          }
+          # expect STATUS "CODE ..." LABEL METHOD URL [curl args...]: exactly that status with one of those codes.
+          expect() {
+            local want=$1 codes=$2 label=$3; shift 3
+            local status code
+            status=$(call "$@")
+            code=$(err_code)
+            if [ "$status" = "$want" ] && [[ " $codes " == *" $code "* ]]; then
+              echo "$label: refused as expected (HTTP $status $code)"
+            else
+              echo "::error::LOCK-DOWN CHECK FAILED: $label gave HTTP ${status:-none} $code, expected $want ($codes)"
+              failed=1
+            fi
+          }
+
+          # 1. The keep-alive call itself must succeed and return true.
+          status=$(call POST "$base/rest/v1/rpc/keep_alive" -H 'Content-Type: application/json' -d '{}')
+          if [ "$status" = 200 ] && [ "$(tr -d ' \r\n' < body.txt)" = true ]; then
+            echo "keep_alive(): OK (HTTP 200)"
+          else
+            echo "::error::keep_alive() failed: HTTP ${status:-none} $(err_code)"
+            failed=1
+          fi
+
+          # 2. The reader tables: not in the exposed schema, and schema private not exposed.
+          for t in reader_reports story_counters; do
+            expect 404 "PGRST205 42P01" "read $t via public" GET "$base/rest/v1/$t?select=*&limit=1"
+            expect 406 "PGRST106" "read $t via private" GET "$base/rest/v1/$t?select=*&limit=1" -H 'Accept-Profile: private'
+            expect 406 "PGRST106" "write $t via private" POST "$base/rest/v1/$t" \
+              -H 'Content-Profile: private' -H 'Content-Type: application/json' -d '{}'
+          done
+
+          # 3. GraphQL: schema graphql_public not exposed (owner decision 2026-11-07).
+          expect 406 "PGRST106" "GraphQL endpoint" POST "$base/graphql/v1" \
+            -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}'
+
+          # 4. Realtime service off (owner decision 2026-11-07): broadcasting must be refused.
+          expect 403 "none" "Realtime broadcast" POST "$base/realtime/v1/api/broadcast" \
+            -H 'Content-Type: application/json' -d '{"messages":[{"topic":"keep-alive-probe","event":"probe","payload":{}}]}'
+
+          # 5. Storage: the public key can neither upload to content nor read the harmless test file in masters.
+          expect 400 "AccessDenied" "anonymous upload to content" POST "$base/storage/v1/object/content/keep-alive-probe.json" \
+            -H 'Content-Type: application/json' -d '{}'
+          expect 400 "NoSuchKey" "anonymous read of masters/canary.txt" GET "$base/storage/v1/object/masters/canary.txt"
+          expect 400 "NoSuchBucket" "public URL of masters/canary.txt" GET "$base/storage/v1/object/public/masters/canary.txt"
+
+          # 6. Auth sign-ups stay off until the Studio needs logins (P2; owner decision 2026-11-07).
+          status=$(call GET "$base/auth/v1/settings")
+          if [ "$status" = 200 ] && grep -Eq '"disable_signup" *: *true' body.txt; then
+            echo "auth sign-ups: off (HTTP 200)"
+          else
+            echo "::error::LOCK-DOWN CHECK FAILED: auth sign-ups are not reported as off (HTTP ${status:-none})"
+            failed=1
+          fi
+
+          exit "$failed"
+
+      - name: Warn before GitHub's 60-day rule stops this workflow
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          last=$(gh api "repos/$REPO/commits/$branch" --jq .commit.committer.date)
+          age=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s) ) / 86400 ))
+          if [ "$age" -gt 45 ]; then
+            echo "::error::The last commit on $branch is $age days old. GitHub disables this workflow after 60 days without repository activity: push a real commit (NI-5 runbook)."
+            exit 1
+          fi
+          echo "Last commit on $branch: $age days ago (warning at 45, GitHub's limit is 60)."
+
+      - name: Fail on purpose (failure-email test)
+        if: ${{ !cancelled() && env.FAIL_ON_PURPOSE == 'true' }}
+        run: |
+          echo "::error::Failing on purpose after the normal checks (keep_alive() was called). Remove KEEPALIVE_FAIL_TEST once the email has arrived."
+          exit 1

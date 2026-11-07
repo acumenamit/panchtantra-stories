@@ -11,3 +11,5 @@ migration-input
 .content
 # Local-only private rule data (gitignored)
 .rules-private
+# Supabase CLI private link state (gitignored)
+supabase/.temp
