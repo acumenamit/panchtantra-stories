@@ -8,7 +8,8 @@
   },
   "scripts": {
     "dev": "next dev --port 3005",
-    "build": "next build",
+    "build": "tsx scripts/load-content.ts && next build",
+    "content:load": "tsx scripts/load-content.ts",
     "start": "next start --port 3005",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -23,7 +24,8 @@
     "narration:run": "tsx tools/narration/cli.ts run",
     "narration:export": "tsx tools/narration/parler-cli.ts export",
     "narration:ingest": "tsx tools/narration/parler-cli.ts ingest",
-    "narration:listened": "tsx tools/narration/parler-cli.ts listened"
+    "narration:listened": "tsx tools/narration/parler-cli.ts listened",
+    "spike": "tsx tools/spikes/cli.ts"
   },
   "dependencies": {
     "canonicalize": "5.1.0",

@@ -27,6 +27,26 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  {
+    // Spec §10.2 import fence: reader code may not import Supabase clients or scripts/.
+    // tools/ is fenced too: tools/publisher holds a Storage client that uses the secret key.
+    files: ['src/reader/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { group: ['@supabase/*'], message: 'Reader code must not import Supabase clients.' },
+            {
+              group: ['**/scripts', '**/scripts/**'],
+              message: 'Reader code must not import scripts/.',
+            },
+            { group: ['**/tools', '**/tools/**'], message: 'Reader code must not import tools/.' },
+          ],
+        },
+      ],
+    },
+  },
   globalIgnores([
     '.next/**',
     'out/**',
