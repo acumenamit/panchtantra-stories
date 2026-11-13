@@ -352,17 +352,6 @@ describe('loadContent: storage mode, good content', () => {
     expect(readBuildInfo().featuredStoryId).toBeNull()
     expect(out).toContain('content: featured story=blue-jackal is not built; featuredStoryId=null')
   })
-
-  // P0-13 THROWAWAY: removed at cleanup together with SPIKE_ROOTS.
-  it('accepts the spikes/s1/ pointer root during P0-13', async () => {
-    await publish({ root: 'spikes/s1/', seq: 2 })
-    expect(await run(storageEnv('spikes/s1/catalogue/production.json'))).toBe(0)
-    const info = readBuildInfo()
-    expect([info.pointerPath, info.snapshotPath]).toEqual([
-      'spikes/s1/catalogue/production.json',
-      'spikes/s1/catalogue/snapshots/2.json',
-    ])
-  })
 })
 
 describe('loadContent: retries', () => {

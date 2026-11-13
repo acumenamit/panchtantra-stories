@@ -26,9 +26,7 @@ import {
   readCapped,
 } from '../tools/publisher/http'
 
-// P0-13 THROWAWAY: removed at cleanup with its test case; POINTER_ROOTS then equals DEFAULT_POINTER_ROOTS.
-export const SPIKE_ROOTS: readonly string[] = ['spikes/s1/']
-export const POINTER_ROOTS: readonly string[] = [...DEFAULT_POINTER_ROOTS, ...SPIKE_ROOTS]
+export const POINTER_ROOTS: readonly string[] = DEFAULT_POINTER_ROOTS
 
 export const MAX_BODY_BYTES = 1024 * 1024
 export const MAX_ATTEMPTS = 3 // one request plus up to 2 retries, on network errors or 5xx only

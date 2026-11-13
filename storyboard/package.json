@@ -24,8 +24,7 @@
     "narration:run": "tsx tools/narration/cli.ts run",
     "narration:export": "tsx tools/narration/parler-cli.ts export",
     "narration:ingest": "tsx tools/narration/parler-cli.ts ingest",
-    "narration:listened": "tsx tools/narration/parler-cli.ts listened",
-    "spike": "tsx tools/spikes/cli.ts"
+    "narration:listened": "tsx tools/narration/parler-cli.ts listened"
   },
   "dependencies": {
     "canonicalize": "5.1.0",
