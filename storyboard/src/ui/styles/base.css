@@ -1,0 +1,137 @@
+/*
+ * Base element styles (spec §6.6, §6.7; P1-1b). Token names only: colour and time literals live in
+ * tokens.css. Logical properties only (RC-12). In @layer base, so component CSS Modules (unlayered)
+ * always win; the one exception is the reduced-motion safety net, which is !important.
+ */
+@layer tokens, base;
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  /*
+   * The root font size is not set, so the browser's own text setting still works. line-height here
+   * and font-size on body are inherited as computed values, so a lang="hi" island on an English
+   * page keeps the Latin leading unless it sets its own from tokens (see tokens.css, [lang]).
+   * font-synthesis: weight never applies to the shipped faces (Lora 400-700, Noto 400 and 700 are
+   * real); it keeps headings bold in a single-weight fallback face, such as next/font's Lora
+   * fallback (local Times New Roman) while Lora loads or if it fails. Style synthesis stays off.
+   */
+  html {
+    color-scheme: dark;
+    background-color: var(--color-canvas);
+    color: var(--color-text);
+    font-family: var(--font-latin);
+    font-synthesis: weight;
+    line-height: var(--lh-body);
+    text-size-adjust: 100%;
+  }
+
+  /*
+   * iOS WebKit honours only the prefixed form. It sits in its own rule on the same element because
+   * the build's CSS minifier merges a prefixed and unprefixed pair in one rule and re-prefixes it
+   * for the desktop targets, which drops -webkit- (P1-1b build proof).
+   */
+  :root {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  :lang(hi) {
+    font-family: var(--font-hindi);
+  }
+
+  :lang(en) {
+    font-family: var(--font-latin);
+  }
+
+  body {
+    margin: 0;
+    min-block-size: 100dvb;
+    font-size: var(--fs-body);
+    overflow-wrap: break-word;
+  }
+
+  main {
+    max-inline-size: var(--page-max);
+    margin-inline: auto;
+    padding-block: var(--space-7);
+    padding-inline: var(--gutter);
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--color-text-strong);
+    font-weight: var(--fw-bold);
+    line-height: var(--lh-heading);
+  }
+
+  h1 {
+    font-size: var(--fs-title);
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin-block: 0 var(--space-4);
+  }
+
+  a {
+    color: var(--color-text-accent);
+    text-decoration-line: underline;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  a,
+  button,
+  summary {
+    touch-action: manipulation;
+  }
+
+  /* The ring is never removed; the canvas halo keeps it at 11.84:1 next to an amber fill. */
+  :focus-visible {
+    outline: var(--focus-width) solid var(--color-focus);
+    outline-offset: var(--focus-offset);
+    box-shadow: 0 0 0 var(--focus-offset) var(--color-canvas);
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: var(--color-text-on-accent);
+  }
+
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline-color: Highlight;
+      box-shadow: none;
+    }
+  }
+
+  /*
+   * Safety net (spec §6.6 motion): the duration tokens are already 0ms here; this catches anything
+   * that slips past them. !important is required: a layered rule loses to unlayered CSS Modules.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      /* css-lint-allow tokens/motion-literal: reduced-motion safety net; 0.01ms, not a 0ms token, so animationend and transitionend still fire */
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      /* css-lint-allow tokens/motion-literal: reduced-motion safety net; 0.01ms, not a 0ms token, so animationend and transitionend still fire */
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

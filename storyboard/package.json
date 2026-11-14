@@ -12,7 +12,7 @@
     "content:load": "tsx scripts/load-content.ts",
     "fixtures:catalogue": "tsx scripts/build-fixtures-catalogue.ts",
     "start": "next start --port 3005",
-    "lint": "eslint .",
+    "lint": "eslint . && tsx scripts/lint/css-lint.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

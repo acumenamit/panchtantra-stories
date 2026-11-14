@@ -1,0 +1,74 @@
+{
+  "fonts": [
+    {
+      "file": "lora-wght.woff2",
+      "upstreamName": "Lora[wght].woff2",
+      "family": "Lora",
+      "version": "v3.021 (cyrealtype/Lora-Cyrillic tag; name table \"Version 3.021\")",
+      "source": "https://raw.githubusercontent.com/cyrealtype/Lora-Cyrillic/v3.021/fonts/webfonts/Lora%5Bwght%5D.woff2",
+      "bytes": 84272,
+      "sha256": "e4359fb64060d178a1a2d14e56e6dcba97a79361328e0492b67891e7a454e1e3",
+      "gitBlobSha1": "7e885a1676bad370739a4174664708059446b115",
+      "licence": "public/licenses/fonts/Lora-OFL.txt"
+    },
+    {
+      "file": "noto-sans-devanagari-devanagari-400.woff2",
+      "upstreamName": "noto-sans-devanagari-devanagari-400-normal.woff2",
+      "family": "Noto Sans Devanagari",
+      "version": "@fontsource/noto-sans-devanagari@5.3.0 (name table \"Version 2.006\")",
+      "source": "https://unpkg.com/@fontsource/noto-sans-devanagari@5.3.0/files/noto-sans-devanagari-devanagari-400-normal.woff2",
+      "bytes": 50416,
+      "sha256": "f86f14cbd1004f5795689ee9cc70d5d87d915f5135b30283525c1c7b8f0eb192",
+      "licence": "public/licenses/fonts/NotoSansDevanagari-OFL.txt"
+    },
+    {
+      "file": "noto-sans-devanagari-devanagari-700.woff2",
+      "upstreamName": "noto-sans-devanagari-devanagari-700-normal.woff2",
+      "family": "Noto Sans Devanagari",
+      "version": "@fontsource/noto-sans-devanagari@5.3.0 (name table \"Version 2.006\")",
+      "source": "https://unpkg.com/@fontsource/noto-sans-devanagari@5.3.0/files/noto-sans-devanagari-devanagari-700-normal.woff2",
+      "bytes": 53984,
+      "sha256": "6a68069c959d7f3c02f4062dd9be85327448b5d753e95455b1c0320f37f68fc1",
+      "licence": "public/licenses/fonts/NotoSansDevanagari-OFL.txt"
+    },
+    {
+      "file": "noto-sans-devanagari-latin-400.woff2",
+      "upstreamName": "noto-sans-devanagari-latin-400-normal.woff2",
+      "family": "Noto Sans Devanagari",
+      "version": "@fontsource/noto-sans-devanagari@5.3.0 (name table \"Version 2.006\")",
+      "source": "https://unpkg.com/@fontsource/noto-sans-devanagari@5.3.0/files/noto-sans-devanagari-latin-400-normal.woff2",
+      "bytes": 10512,
+      "sha256": "1ea6a2f05ad1e2218d23fc9a788bcbce03c1a83e33eeb7078354ebe5f5e8d4e7",
+      "licence": "public/licenses/fonts/NotoSansDevanagari-OFL.txt"
+    },
+    {
+      "file": "noto-sans-devanagari-latin-700.woff2",
+      "upstreamName": "noto-sans-devanagari-latin-700-normal.woff2",
+      "family": "Noto Sans Devanagari",
+      "version": "@fontsource/noto-sans-devanagari@5.3.0 (name table \"Version 2.006\")",
+      "source": "https://unpkg.com/@fontsource/noto-sans-devanagari@5.3.0/files/noto-sans-devanagari-latin-700-normal.woff2",
+      "bytes": 10604,
+      "sha256": "9a66b62e21bcffd97e49f8cfc3630a08e70c3295e1f41f13214847281efbc252",
+      "licence": "public/licenses/fonts/NotoSansDevanagari-OFL.txt"
+    }
+  ],
+  "licences": [
+    {
+      "file": "public/licenses/fonts/Lora-OFL.txt",
+      "upstreamName": "OFL.txt",
+      "source": "https://raw.githubusercontent.com/cyrealtype/Lora-Cyrillic/v3.021/OFL.txt",
+      "lineEndings": "LF",
+      "bytes": 4423,
+      "sha256": "1d9a970809ac804b582a6ce7f0ebc4e7fefcbfd7ff6299cad35ee656a21be716",
+      "gitBlobSha1": "d0ce7fe062e60eaa92c4af3ee1bebe81c5141b4e"
+    },
+    {
+      "file": "public/licenses/fonts/NotoSansDevanagari-OFL.txt",
+      "upstreamName": "LICENSE",
+      "source": "https://unpkg.com/@fontsource/noto-sans-devanagari@5.3.0/LICENSE",
+      "lineEndings": "LF",
+      "bytes": 4384,
+      "sha256": "79c44862256af9a67fc23df7c45ae289e730c7f6d4f8fb8ef593bd3c314b6d6d"
+    }
+  ]
+}
