@@ -1,8 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmdirSync,
   rmSync,
@@ -24,6 +26,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BuildInfo } from '../src/core/content/build-info'
 import type { GateMode } from '../src/core/content/gates'
+import type { SnapshotEntry } from '../src/core/content/packages'
 import { jcsBytes, sha256Hex, toJcs } from '../src/core/hashing'
 import type { CatalogueSnapshot } from '../src/core/package/catalogue'
 import {
@@ -32,9 +35,11 @@ import {
   pointerPath,
   snapshotPath,
 } from '../src/core/package/catalogue-build'
+import { buildCatalogue, readFixtureEntries, writeCatalogue } from './build-fixtures-catalogue'
 import {
   isEntryPoint,
   loadContent,
+  loadPackages,
   MAX_BODY_BYTES,
   objectUrl,
   popFromCfRay,
@@ -566,9 +571,442 @@ describe('loadContent: Vercel Production needs a production pointer', () => {
   })
 })
 
+describe('loadContent: a Storage pointer can never select fixtures mode', () => {
+  it.each([{}, { VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production' }])(
+    'refuses CONTENT_POINTER=catalogue/fixtures.json without any request (%j)',
+    async (extra) => {
+      // Even if such an object were uploaded, it must not skip the approval gate.
+      const pub = await publish({ mode: 'staging' })
+      routes.set('catalogue/fixtures.json', [json(pub.pointerBytes)])
+      expect(await run(storageEnv('catalogue/fixtures.json', extra))).toBe(1)
+      expect(errors).toEqual([
+        'content gate failed: pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json',
+      ])
+      expect(seen).toHaveLength(0)
+      expectNoOutputs()
+    },
+  )
+})
+
+// ---- fixtures mode ----
+
+type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+
+const storyboardDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+const FIXTURE_IDS = ['lantern-walk', 'river-stones', 'two-paths']
+const fixturesEnv: Env = { CONTENT_SOURCE: 'fixtures' }
+
+const fixtures = () => join(root, 'fixtures')
+const fixturePath = (path: string) => join(fixtures(), ...path.split('/'))
+const fixtureBytes = (path: string) => new Uint8Array(readFileSync(fixturePath(path)))
+const contentBytes = (path: string) =>
+  new Uint8Array(readFileSync(join(root, '.content', ...path.split('/'))))
+const sha12Of = async (path: string) => (await sha256Hex(fixtureBytes(path))).slice(0, 12)
+
+/** A copy of the committed fixtures in this test's root, so a test can change it safely. */
+function copyFixtures(): void {
+  cpSync(join(storyboardDir, 'fixtures'), fixtures(), { recursive: true })
+}
+
+/** Rebuilds the copied catalogue from edited entries, with fresh hashes for pointer and snapshot. */
+async function rewriteCatalogue(
+  edit: (stories: SnapshotEntry[]) => SnapshotEntry[],
+  featuredStoryId: string | null = null,
+): Promise<void> {
+  const stories = edit(await readFixtureEntries(fixtures()))
+  writeCatalogue(fixtures(), await buildCatalogue(stories, featuredStoryId))
+}
+
+/** Changes one copied package, then rebuilds the catalogue so its sha256 still matches. */
+async function changePackage(storyId: string, mutate: (pkg: Json) => void): Promise<void> {
+  const entries = await readFixtureEntries(fixtures()) // before the change, which may not parse
+  const path = `packages/${storyId}.json`
+  const pkg = JSON.parse(readFileSync(fixturePath(path), 'utf8')) as Json
+  mutate(pkg)
+  writeFileSync(fixturePath(path), `${JSON.stringify(pkg, null, 2)}\n`)
+  const packageSha256 = await sha256Hex(fixtureBytes(path))
+  const stories = entries.map((e) => (e.storyId === storyId ? { ...e, packageSha256 } : e))
+  writeCatalogue(fixtures(), await buildCatalogue(stories))
+}
+
+/** Points the two-paths entry at another path, keeping everything else. */
+const moveTwoPaths = (packagePath: string) =>
+  rewriteCatalogue((stories) =>
+    stories.map((s) => (s.storyId === 'two-paths' ? { ...s, packagePath } : s)),
+  )
+
+describe('loadContent: fixtures mode, committed fixtures', () => {
+  it('loads the 3 fixtures without network and writes every output', async () => {
+    copyFixtures()
+    plantStaleOutputs()
+    const fetchImpl = vi.fn<typeof fetch>()
+    expect(await run(fixturesEnv, { fetchImpl })).toBe(0)
+    expect(errors).toEqual([])
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(seen).toHaveLength(0)
+
+    const entries = await readFixtureEntries(fixtures())
+    const snapshotBytes = fixtureBytes('catalogue/snapshots/1.json')
+    const info = readBuildInfo() // strict parse
+    expect(info).toEqual({
+      schemaVersion: '1.0',
+      mode: 'fixtures',
+      seq: 1,
+      pointerPath: 'catalogue/fixtures.json',
+      snapshotPath: 'catalogue/snapshots/1.json',
+      snapshotSha256: await sha256Hex(snapshotBytes),
+      featuredStoryId: null,
+      stories: entries.map(({ storyId, version, packageSha256 }) => ({
+        storyId,
+        version,
+        packageSha256,
+      })),
+      excluded: [],
+      appVersion: null,
+      deploymentId: null,
+      deploymentUrl: null,
+      builtAt: NOW.toISOString(),
+      fetches: [],
+    })
+    expect(info.stories.map((s) => s.storyId)).toEqual(FIXTURE_IDS)
+    expect(readFileSync(paths().contentInfo, 'utf8')).toBe(toJcs(info))
+    expect(readFileSync(paths().publicInfo, 'utf8')).toBe(toJcs(info))
+    expect(contentBytes('pointer.json')).toEqual(fixtureBytes('catalogue/fixtures.json'))
+    expect(contentBytes('snapshot.json')).toEqual(snapshotBytes)
+    expect(readdirSync(join(root, '.content', 'packages')).sort()).toEqual(
+      FIXTURE_IDS.map((id) => `${id}.json`),
+    )
+    for (const id of FIXTURE_IDS) {
+      // Each package's exact bytes, so its sha256 still matches build-info.
+      expect(contentBytes(`packages/${id}.json`)).toEqual(fixtureBytes(`packages/${id}.json`))
+    }
+    expect(existsSync(join(root, '.content', '.tmp'))).toBe(false)
+    expect(readFileSync(join(root, 'public', 'keep.txt'), 'utf8')).toBe('not ours')
+  })
+
+  it('logs each file read, each package, the skipped word-list checks and a final line', async () => {
+    copyFixtures()
+    expect(await run(fixturesEnv)).toBe(0)
+    const expected: unknown[] = [
+      `content: read path=catalogue/fixtures.json sha=${await sha12Of('catalogue/fixtures.json')} seq=1`,
+      `content: read path=catalogue/snapshots/1.json sha=${await sha12Of('catalogue/snapshots/1.json')} seq=1`,
+    ]
+    for (const id of FIXTURE_IDS) {
+      const sha = await sha12Of(`packages/${id}.json`)
+      expected.push(
+        `content: read path=packages/${id}.json sha=${sha} seq=-`,
+        expect.stringMatching(
+          new RegExp(
+            `^content: package story=${id} version=1 sha=${sha} errors=0 warnings=\\d+ info=\\d+$`,
+          ),
+        ),
+        `content: validator skipped E016,E017,E018 for story=${id} (private word lists not loaded)`,
+      )
+    }
+    expected.push('content: mode=fixtures seq=1 snapshot=catalogue/snapshots/1.json')
+    expect(out).toEqual(expected)
+  })
+
+  it('still reads only local files when Storage settings are also present', async () => {
+    copyFixtures()
+    await publish()
+    const env = {
+      ...fixturesEnv,
+      CONTENT_BASE_URL: baseUrl,
+      CONTENT_POINTER: 'catalogue/production.json',
+    }
+    expect(await run(env)).toBe(0)
+    expect(seen).toHaveLength(0)
+    expect(readBuildInfo().mode).toBe('fixtures')
+  })
+
+  it('never names a featured story, and logs the one the snapshot names', async () => {
+    copyFixtures()
+    await rewriteCatalogue((stories) => stories, 'river-stones')
+    expect(await run(fixturesEnv)).toBe(0)
+    expect(readBuildInfo().featuredStoryId).toBeNull()
+    expect(out).toContain(
+      'content: featured story=river-stones is not featured in fixtures mode; featuredStoryId=null',
+    )
+  })
+
+  it('follows snapshot order, not file-name order, in build-info and the log', async () => {
+    copyFixtures()
+    await rewriteCatalogue((stories) => [...stories].reverse())
+    expect(await run(fixturesEnv)).toBe(0)
+    const reversed = ['two-paths', 'river-stones', 'lantern-walk']
+    expect(readBuildInfo().stories.map((s) => s.storyId)).toEqual(reversed)
+    const packageLines = out.filter((line) => line.startsWith('content: package story='))
+    expect(packageLines.map((line) => /story=([a-z0-9-]+)/.exec(line)?.[1])).toEqual(reversed)
+  })
+
+  it('removes every output when a write fails part-way', async () => {
+    copyFixtures()
+    let planted = false
+    // now() runs after stale outputs are removed and before writing starts. A non-empty folder
+    // planted here blocks the third package, after pointer, snapshot and two packages are written.
+    const now = () => {
+      if (!planted) {
+        planted = true
+        const blocker = join(root, '.content', 'packages', 'two-paths.json')
+        mkdirSync(blocker, { recursive: true })
+        writeFileSync(join(blocker, 'keep.txt'), 'blocks the rename')
+      }
+      return NOW
+    }
+    expect(await run(fixturesEnv, { now })).toBe(1)
+    expect(planted).toBe(true)
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatch(/^content gate failed: writing outputs failed: /)
+    expectNoOutputs()
+  })
+})
+
+describe('loadPackages (the shared package step)', () => {
+  const entries = () => readFixtureEntries(join(storyboardDir, 'fixtures'))
+  const readEntry: Parameters<typeof loadPackages>[2] = async (entry) => ({
+    ok: true,
+    value: new Uint8Array(readFileSync(join(storyboardDir, 'fixtures', entry.packagePath))),
+  })
+
+  it('refuses a duplicate storyId among entries that are not built, before reading any package', async () => {
+    const [a, b, c] = await entries()
+    const readBytes = vi.fn(readEntry)
+    const result = await loadPackages([a!, b!, c!, { ...a! }], [b!, c!], readBytes, () => {})
+    expect(result).toEqual({
+      ok: false,
+      reason: 'snapshot lists story lantern-walk more than once',
+    })
+    expect(readBytes).not.toHaveBeenCalled()
+  })
+
+  it('reads and checks only the included entries, in the order given', async () => {
+    const [a, b, c] = await entries()
+    const readBytes = vi.fn(readEntry)
+    const result = await loadPackages([a!, b!, c!], [a!, c!], readBytes, () => {})
+    expect(result.ok && result.value.map((p) => p.entry.storyId)).toEqual([
+      'lantern-walk',
+      'two-paths',
+    ])
+    expect(readBytes.mock.calls.map(([entry]) => entry.storyId)).toEqual([
+      'lantern-walk',
+      'two-paths',
+    ])
+  })
+})
+
+describe('loadContent: fixtures mode is refused on Vercel', () => {
+  it.each(['production', 'preview', 'development', '', 'staging', 'other'])(
+    'refuses VERCEL_ENV=%j without reading, fetching or writing anything',
+    async (vercelEnv) => {
+      copyFixtures()
+      const fetchImpl = vi.fn<typeof fetch>()
+      expect(await run({ ...fixturesEnv, VERCEL_ENV: vercelEnv }, { fetchImpl })).toBe(1)
+      expect(errors).toEqual([
+        'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+      ])
+      expect(out).toEqual([])
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expectNoOutputs()
+    },
+  )
+
+  it.each(['1', '', 'other'])(
+    'refuses VERCEL=%j with no VERCEL_ENV, without reading, fetching or writing anything',
+    async (vercel) => {
+      copyFixtures()
+      const fetchImpl = vi.fn<typeof fetch>()
+      expect(await run({ ...fixturesEnv, VERCEL: vercel }, { fetchImpl })).toBe(1)
+      expect(errors).toEqual([
+        'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+      ])
+      expect(out).toEqual([])
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expectNoOutputs()
+    },
+  )
+})
+
+describe('loadContent: fixtures mode gates fail closed', () => {
+  /** Runs the loader over stale outputs and expects one named failure and no outputs at all. */
+  async function expectGateFailure(reason: string | RegExp): Promise<void> {
+    plantStaleOutputs()
+    expect(await run(fixturesEnv)).toBe(1)
+    expect(errors).toHaveLength(1)
+    if (typeof reason === 'string') expect(errors[0]).toBe(`content gate failed: ${reason}`)
+    else expect(errors[0]).toMatch(reason)
+    expectNoOutputs()
+  }
+
+  it('fails on tampered package bytes and names the story', async () => {
+    copyFixtures()
+    const path = fixturePath('packages/two-paths.json')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('A young fox', 'A young cat'))
+    await expectGateFailure('package two-paths sha256 mismatch')
+  })
+
+  it('fails on a tampered snapshot', async () => {
+    copyFixtures()
+    const path = fixturePath('catalogue/snapshots/1.json')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"version":1', '"version":2'))
+    await expectGateFailure('snapshot sha256 mismatch')
+  })
+
+  it('fails on a pointer that is not canonical JCS', async () => {
+    copyFixtures()
+    const path = fixturePath('catalogue/fixtures.json')
+    writeFileSync(path, JSON.stringify(JSON.parse(readFileSync(path, 'utf8')), null, 2))
+    await expectGateFailure('pointer is not canonical JCS')
+  })
+
+  it('fails on a package that fails the strict parse', async () => {
+    copyFixtures()
+    await changePackage('two-paths', (pkg) => {
+      pkg.extra = 1
+    })
+    await expectGateFailure(/^content gate failed: package two-paths failed strict parse: /)
+  })
+
+  it('fails on an unwaived validator error and names it', async () => {
+    copyFixtures()
+    await changePackage('two-paths', (pkg) => {
+      pkg.text.en.nodes.start.question = 'Which way? Left or right?'
+    })
+    await expectGateFailure(
+      'package two-paths failed the validator with 1 error(s); first: E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+    )
+  })
+
+  it('fails when the snapshot version differs from the package', async () => {
+    copyFixtures()
+    await rewriteCatalogue((stories) =>
+      stories.map((s) => (s.storyId === 'two-paths' ? { ...s, version: 2 } : s)),
+    )
+    await expectGateFailure('package two-paths has version 1, but the snapshot names 2')
+  })
+
+  it('fails when the snapshot storyId differs from the package', async () => {
+    copyFixtures()
+    await rewriteCatalogue((stories) =>
+      stories.map((s) => (s.storyId === 'two-paths' ? { ...s, storyId: 'other-story' } : s)),
+    )
+    await expectGateFailure(
+      'package other-story has storyId two-paths, but the snapshot names other-story',
+    )
+  })
+
+  it('fails when a storyId appears twice in the snapshot', async () => {
+    copyFixtures()
+    await rewriteCatalogue((stories) => [...stories, stories[2]!])
+    await expectGateFailure('snapshot lists story two-paths more than once')
+  })
+
+  it.each([
+    '../two-paths.json',
+    'packages/../../two-paths.json',
+    '/packages/two-paths.json',
+    'C:/packages/two-paths.json',
+    'packages\\two-paths.json',
+    '%2e%2e/two-paths.json',
+    'packages/./two-paths.json',
+  ])('refuses the package path %j, which could leave fixtures/', async (packagePath) => {
+    copyFixtures()
+    await moveTwoPaths(packagePath)
+    await expectGateFailure('package two-paths path is unsafe')
+  })
+
+  it('refuses a package path that leaves fixtures/ through a link', async () => {
+    copyFixtures()
+    const outside = mkdtempSync(join(tmpdir(), 'load-content-outside-'))
+    const link = fixturePath('packages/linked')
+    cpSync(fixturePath('packages/two-paths.json'), join(outside, 'two-paths.json'))
+    symlinkSync(outside, link, 'junction')
+    try {
+      await moveTwoPaths('packages/linked/two-paths.json')
+      await expectGateFailure('package two-paths path leaves the fixtures folder')
+    } finally {
+      unlinkSync(link) // only the link; then the outside folder itself
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('fails when a package file is missing', async () => {
+    copyFixtures()
+    await moveTwoPaths('packages/missing.json')
+    await expectGateFailure('package two-paths file not found: packages/missing.json')
+  })
+
+  it('fails when a package path names a folder', async () => {
+    copyFixtures()
+    await moveTwoPaths('packages')
+    await expectGateFailure('package two-paths is not a file: packages')
+  })
+
+  it('fails on a package file larger than 1 MiB', async () => {
+    copyFixtures()
+    const path = fixturePath('packages/two-paths.json')
+    writeFileSync(path, `${readFileSync(path, 'utf8')}${' '.repeat(MAX_BODY_BYTES)}`)
+    await rewriteCatalogue((stories) => stories) // a fresh sha256 for the padded bytes
+    await expectGateFailure(`package two-paths is larger than ${MAX_BODY_BYTES} bytes`)
+  })
+
+  it.each([
+    [
+      'a node picture',
+      (pkg: Json) => {
+        pkg.nodes[0].image = SHA
+      },
+    ],
+    [
+      'an asset',
+      (pkg: Json) => {
+        pkg.assets.push({
+          kind: 'image',
+          id: SHA,
+          width: 800,
+          height: 600,
+          variants: [{ path: `media/${SHA}.webp`, mime: 'image/webp', bytes: 1000, width: 800 }],
+          provenance: { origin: 'human' },
+        })
+      },
+    ],
+  ])(
+    'refuses a package that declares media (%s): fixtures mode has no media HEAD gate',
+    async (_what, mutate) => {
+      copyFixtures()
+      await changePackage('two-paths', mutate)
+      await expectGateFailure(
+        'package two-paths declares media; fixtures mode cannot run the media HEAD gate',
+      )
+    },
+  )
+
+  it('fails when the fixtures folder is missing', async () => {
+    await expectGateFailure('fixtures folder not found')
+  })
+})
+
 describe('resolveConfig', () => {
   it.each([
-    [{ CONTENT_SOURCE: 'fixtures' }, 'CONTENT_SOURCE must be "storage" or "none"'],
+    [{ CONTENT_SOURCE: 'remote' }, 'CONTENT_SOURCE must be "storage", "fixtures" or "none"'],
+    ...['production', 'preview', 'development', '', 'staging', 'other'].map(
+      (VERCEL_ENV): [Env, string] => [
+        { CONTENT_SOURCE: 'fixtures', VERCEL_ENV },
+        'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+      ],
+    ),
+    ...['1', '', 'other'].map((VERCEL): [Env, string] => [
+      { CONTENT_SOURCE: 'fixtures', VERCEL },
+      'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+    ]),
+    [
+      {
+        CONTENT_SOURCE: 'storage',
+        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_POINTER: 'catalogue/fixtures.json',
+      },
+      'pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json',
+    ],
     [{ CONTENT_SOURCE: 'storage' }, 'CONTENT_BASE_URL is not set'],
     [
       { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: 'not a url' },
@@ -617,6 +1055,18 @@ describe('resolveConfig', () => {
     ],
   ])('refuses %j', (env, reason) => {
     expect(resolveConfig(env)).toEqual({ ok: false, reason })
+  })
+
+  it('accepts CONTENT_SOURCE=fixtures outside Vercel and ignores any Storage settings', () => {
+    const fixtures = { ok: true, value: { kind: 'fixtures' } }
+    expect(resolveConfig({ CONTENT_SOURCE: 'fixtures' })).toEqual(fixtures)
+    expect(
+      resolveConfig({
+        CONTENT_SOURCE: 'fixtures',
+        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_POINTER: 'catalogue/production.json',
+      }),
+    ).toEqual(fixtures)
   })
 
   it('takes the gate mode from the pointer outside Vercel Production', () => {
@@ -742,5 +1192,35 @@ describe('load-content (real process, exit code)', () => {
     withLinkedFolder(join(storyboard, 'scripts'), (link) => {
       expectGateFailure(runInProductionWithoutSource(join(link, 'load-content.ts')))
     })
+  }, 30_000)
+
+  it('exits 1 on CONTENT_SOURCE=fixtures in a Vercel build and leaves the real outputs as they were', () => {
+    // This runs against the real storyboard folder, so it checks that the refusal comes before
+    // the loader removes or writes .content/ and public/build-info.json.
+    const publicInfo = join(storyboard, 'public', 'build-info.json')
+    const outputsNow = () => ({
+      content: existsSync(join(storyboard, '.content')),
+      buildInfo: existsSync(publicInfo) ? readFileSync(publicInfo, 'utf8') : null,
+    })
+    const before = outputsNow()
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      VERCEL_ENV: 'preview',
+      CONTENT_SOURCE: 'fixtures',
+    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(storyboard, 'node_modules/tsx/dist/cli.mjs'),
+        join(storyboard, 'scripts/load-content.ts'),
+      ],
+      { env, encoding: 'utf8' },
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(
+      'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+    )
+    expect(result.stdout).toBe('')
+    expect(outputsNow()).toEqual(before)
   }, 30_000)
 })

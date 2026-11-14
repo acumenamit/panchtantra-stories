@@ -45,6 +45,8 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test
       - run: pnpm build
+        env:
+          CONTENT_SOURCE: fixtures
 
   e2e:
     needs: checks
@@ -64,6 +66,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm build
+        env:
+          CONTENT_SOURCE: fixtures
       - run: pnpm test:e2e
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

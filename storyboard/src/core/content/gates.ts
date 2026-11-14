@@ -5,8 +5,17 @@ import { jcsBytes, sha256Hex } from '../hashing'
 import { CataloguePointer, CatalogueSnapshot } from '../package/catalogue'
 import { hasOwnProtoKey } from '../package/v1'
 
-export const GATE_MODES = ['production', 'staging'] as const
+/** Every mode a build can run in, and so every mode a build-info record can name. */
+export const GATE_MODES = ['production', 'staging', 'fixtures'] as const
 export type GateMode = (typeof GATE_MODES)[number]
+
+/**
+ * The only modes a Storage pointer path can select. Fixtures mode is left out on purpose: it skips
+ * the approval gate, so it may only come from CONTENT_SOURCE=fixtures reading the committed files,
+ * never from a Storage pointer such as "<root>catalogue/fixtures.json".
+ */
+export const STORAGE_GATE_MODES = ['production', 'staging'] as const satisfies readonly GateMode[]
+export type StorageGateMode = (typeof STORAGE_GATE_MODES)[number]
 
 export type GateResult<T> = { ok: true; value: T } | { ok: false; reason: string }
 
@@ -39,14 +48,19 @@ export interface PointerLocation {
   readonly root: string
 }
 
+/** A location taken from a Storage pointer path: production or staging, never fixtures. */
+export interface StoragePointerLocation extends PointerLocation {
+  readonly mode: StorageGateMode
+}
+
 /** Accepts exactly `<root>catalogue/production.json` or `<root>catalogue/staging.json`. */
 export function modeFromPointerPath(
   path: string,
   roots: readonly string[] = DEFAULT_POINTER_ROOTS,
-): GateResult<PointerLocation> {
+): GateResult<StoragePointerLocation> {
   for (const root of roots) {
     if (!isPointerRoot(root)) return fail('pointer root list contains an invalid root')
-    for (const mode of GATE_MODES) {
+    for (const mode of STORAGE_GATE_MODES) {
       if (path === `${root}catalogue/${mode}.json`) return ok({ mode, root })
     }
   }
@@ -100,9 +114,14 @@ export async function checkSnapshot(
   return ok(splitByApproval(snapshot, mode))
 }
 
-/** Production builds exclude unapproved entries; staging builds include every entry. */
+/**
+ * Production builds exclude unapproved entries. Staging and fixtures builds skip the approval gate
+ * and include every entry. Any other mode falls through to the production rule.
+ */
 export function splitByApproval(snapshot: CatalogueSnapshot, mode: GateMode): CheckedSnapshot {
-  if (mode === 'staging') return { snapshot, included: snapshot.stories, excluded: [] }
+  if (mode === 'staging' || mode === 'fixtures') {
+    return { snapshot, included: snapshot.stories, excluded: [] }
+  }
   return {
     snapshot,
     included: snapshot.stories.filter((s) => s.approvalSha256 !== undefined),
@@ -110,7 +129,22 @@ export function splitByApproval(snapshot: CatalogueSnapshot, mode: GateMode): Ch
   }
 }
 
-function parseCanonical<T>(bytes: Uint8Array, schema: z.ZodType<T>, label: string): GateResult<T> {
+export interface ParsedJson<T> {
+  /** The JSON value as parsed, before the schema ran. */
+  readonly raw: unknown
+  /** The schema's output. */
+  readonly data: T
+}
+
+/**
+ * Strict parse of UTF-8 JSON bytes against a schema. Refuses invalid UTF-8, invalid JSON and own
+ * "__proto__" keys. The bytes need not be canonical JCS (packages are checked by sha256 only).
+ */
+export function parseStrictJson<T>(
+  bytes: Uint8Array,
+  schema: z.ZodType<T>,
+  label: string,
+): GateResult<ParsedJson<T>> {
   let raw: unknown
   try {
     raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
@@ -121,8 +155,14 @@ function parseCanonical<T>(bytes: Uint8Array, schema: z.ZodType<T>, label: strin
   if (hasOwnProtoKey(raw)) return fail(`${label} contains a "__proto__" key`)
   const result = schema.safeParse(raw)
   if (!result.success) return fail(`${label} failed strict parse: ${firstIssue(result.error)}`)
-  if (!bytesEqual(jcsBytes(raw), bytes)) return fail(`${label} is not canonical JCS`)
-  return ok(result.data)
+  return ok({ raw, data: result.data })
+}
+
+function parseCanonical<T>(bytes: Uint8Array, schema: z.ZodType<T>, label: string): GateResult<T> {
+  const parsed = parseStrictJson(bytes, schema, label)
+  if (!parsed.ok) return parsed
+  if (!bytesEqual(jcsBytes(parsed.value.raw), bytes)) return fail(`${label} is not canonical JCS`)
+  return ok(parsed.value.data)
 }
 
 function firstIssue(error: z.ZodError): string {

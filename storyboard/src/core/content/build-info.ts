@@ -34,22 +34,34 @@ export const BuildInfoExcluded = z.strictObject({
   reason: z.enum(['approval-missing']),
 })
 
-export const BuildInfo = z.strictObject({
-  schemaVersion: z.literal('1.0'),
-  mode: z.enum(GATE_MODES),
-  seq: z.number().int().min(1),
-  pointerPath: z.string().min(1),
-  snapshotPath: z.string().min(1),
-  snapshotSha256: Sha256,
-  featuredStoryId: StoryId.nullable(),
-  stories: z.array(BuildInfoStory),
-  excluded: z.array(BuildInfoExcluded),
-  appVersion: VercelValue, // VERCEL_GIT_COMMIT_SHA
-  deploymentId: VercelValue, // VERCEL_DEPLOYMENT_ID
-  deploymentUrl: VercelValue, // VERCEL_URL: host only, no scheme
-  builtAt: z.iso.datetime(),
-  fetches: z.array(ContentFetch).min(1),
-})
+export const BuildInfo = z
+  .strictObject({
+    schemaVersion: z.literal('1.0'),
+    mode: z.enum(GATE_MODES),
+    seq: z.number().int().min(1),
+    pointerPath: z.string().min(1), // fixtures mode: relative to storyboard/fixtures/
+    snapshotPath: z.string().min(1),
+    snapshotSha256: Sha256,
+    featuredStoryId: StoryId.nullable(),
+    stories: z.array(BuildInfoStory),
+    excluded: z.array(BuildInfoExcluded),
+    appVersion: VercelValue, // VERCEL_GIT_COMMIT_SHA
+    deploymentId: VercelValue, // VERCEL_DEPLOYMENT_ID
+    deploymentUrl: VercelValue, // VERCEL_URL: host only, no scheme
+    builtAt: z.iso.datetime(),
+    fetches: z.array(ContentFetch),
+  })
+  .superRefine((info, ctx) => {
+    // A Storage build always GETs at least the pointer. Only fixtures mode reads local files and
+    // makes no request, so only there may the list be empty.
+    if (info.mode !== 'fixtures' && info.fetches.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['fetches'],
+        message: 'fetches may be empty only in fixtures mode',
+      })
+    }
+  })
 
 export type ContentFetch = z.infer<typeof ContentFetch>
 export type BuildInfoStory = z.infer<typeof BuildInfoStory>

@@ -1,24 +1,45 @@
 // Prebuild content loader (spec §3.2). Runs as its own tsx process before `next build`, using Node's
 // global fetch, so Next's fetch cache is never involved. It reads public configuration only:
-//   CONTENT_SOURCE    storage | none. Unset: skipped, except when VERCEL_ENV=production, where the
-//                     build fails, so a lost setting can never publish an empty site.
+//   CONTENT_SOURCE    storage | fixtures | none. Unset: skipped, except when VERCEL_ENV=production,
+//                     where the build fails, so a lost setting can never publish an empty site.
+//                     fixtures: the committed files under fixtures/ (no network); refused whenever
+//                     VERCEL or VERCEL_ENV is set, so it runs only in CI and locally (owner
+//                     decision D1, VERCEL guard 2026-11-14).
 //   CONTENT_BASE_URL  https://<ref>.supabase.co/storage/v1/object/public/content
 //   CONTENT_POINTER   <root>catalogue/production.json | <root>catalogue/staging.json (sets the gate mode)
 // Outputs: .content/ (pages read only this) and public/build-info.json, written after every gate passes.
 // Any failure prints "content gate failed: <reason>" and exits 1, so Vercel keeps the last good deployment.
-import { mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import {
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BuildInfo, type ContentFetch } from '../src/core/content/build-info'
 import {
   checkPointer,
   checkSnapshot,
   DEFAULT_POINTER_ROOTS,
+  isSafeStoragePath,
   modeFromPointerPath,
   type GateResult,
   type PointerLocation,
+  type StoragePointerLocation,
 } from '../src/core/content/gates'
+import {
+  checkPackage,
+  checkUniqueStoryIds,
+  type CheckedPackage,
+  type SnapshotEntry,
+} from '../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../src/core/hashing'
+import { pointerPath } from '../src/core/package/catalogue-build'
+import { PANCHATANTRA_RULESET } from '../src/core/rules/panchatantra'
 import {
   checkServiceUrl,
   describeNetworkError,
@@ -52,11 +73,12 @@ export interface LoaderOptions {
 
 export type LoaderConfig =
   | { readonly kind: 'skip'; readonly why: string }
+  | { readonly kind: 'fixtures' }
   | {
       readonly kind: 'storage'
       readonly baseUrl: URL
       readonly pointerPath: string
-      readonly location: PointerLocation
+      readonly location: StoragePointerLocation
     }
 
 const ok = <T>(value: T): GateResult<T> => ({ ok: true, value })
@@ -75,7 +97,18 @@ export function resolveConfig(
     return ok({ kind: 'skip', why: 'CONTENT_SOURCE is not set' })
   }
   if (source === 'none') return ok({ kind: 'skip', why: 'CONTENT_SOURCE=none' })
-  if (source !== 'storage') return fail('CONTENT_SOURCE must be "storage" or "none"')
+  if (source === 'fixtures') {
+    // Fixtures skip the approval gate, so they never build on Vercel. Vercel always sets VERCEL=1;
+    // VERCEL_ENV arrives only while system variables are exposed. Either one, any value (even empty),
+    // refuses fixtures (owner, 2026-11-14).
+    if (env.VERCEL !== undefined || env.VERCEL_ENV !== undefined) {
+      return fail(
+        'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
+      )
+    }
+    return ok({ kind: 'fixtures' })
+  }
+  if (source !== 'storage') return fail('CONTENT_SOURCE must be "storage", "fixtures" or "none"')
 
   const baseUrl = parseBaseUrl(env.CONTENT_BASE_URL)
   if (!baseUrl.ok) return baseUrl
@@ -259,6 +292,8 @@ export interface LoadedContent {
   readonly buildInfo: BuildInfo
   readonly pointerBytes: Uint8Array<ArrayBuffer>
   readonly snapshotBytes: Uint8Array<ArrayBuffer>
+  /** Gate-checked packages in snapshot order, written to .content/packages/<storyId>.json. */
+  readonly packages: readonly CheckedPackage[]
 }
 
 function vercelValue(env: Env, name: string): string | null {
@@ -329,6 +364,166 @@ async function loadFromStorage(
     buildInfo: buildInfo.data,
     pointerBytes: pointerBytes.value,
     snapshotBytes: snapshotBytes.value,
+    packages: [],
+  })
+}
+
+// ---- fixtures mode (owner decision D1, 2026-11-13) ----
+
+/** The committed pointer, relative to fixtures/: catalogue/fixtures.json. */
+export const FIXTURES_POINTER_PATH = pointerPath('fixtures')
+const FIXTURES_LOCATION: PointerLocation = { mode: 'fixtures', root: '' }
+
+/** The folder that holds the committed fixture catalogue and packages. */
+export function fixturesDir(root: string): string {
+  return join(root, 'fixtures')
+}
+
+/**
+ * Reads one committed fixture file by a gate-checked path relative to fixtures/. The path must be a
+ * safe Storage-style path, and the real file (links resolved) must sit inside the fixtures folder.
+ */
+function readFixture(
+  dir: string,
+  path: string,
+  label: string,
+): GateResult<Uint8Array<ArrayBuffer>> {
+  if (!isSafeStoragePath(path)) return fail(`${label} path is unsafe`)
+  let base: string
+  try {
+    base = realpathSync.native(dir)
+  } catch {
+    return fail('fixtures folder not found')
+  }
+  let file: string
+  try {
+    file = realpathSync.native(join(base, ...path.split('/')))
+  } catch {
+    return fail(`${label} file not found: ${path}`)
+  }
+  const inside = relative(base, file)
+  if (inside === '' || isAbsolute(inside) || inside.split(sep)[0] === '..') {
+    return fail(`${label} path leaves the fixtures folder`)
+  }
+  const stat = statSync(file)
+  if (!stat.isFile()) return fail(`${label} is not a file: ${path}`)
+  if (stat.size > MAX_BODY_BYTES) return fail(`${label} is larger than ${MAX_BODY_BYTES} bytes`)
+  const bytes = new Uint8Array(readFileSync(file))
+  return ok(bytes)
+}
+
+/** One log line per file read, shaped like the fetch lines of Storage mode. */
+async function logRead(path: string, bytes: Uint8Array<ArrayBuffer>, log: (line: string) => void) {
+  log(
+    `content: read path=${path} sha=${(await sha256Hex(bytes)).slice(0, 12)} seq=${peekSeq(bytes)}`,
+  )
+}
+
+/**
+ * The shared package step (Storage loading reuses it in P1-2b): a storyId may appear once per
+ * snapshot; then each included entry's bytes go through the package gate, in snapshot order.
+ */
+export async function loadPackages(
+  stories: readonly SnapshotEntry[],
+  included: readonly SnapshotEntry[],
+  readBytes: (entry: SnapshotEntry) => Promise<GateResult<Uint8Array<ArrayBuffer>>>,
+  log: (line: string) => void,
+): Promise<GateResult<CheckedPackage[]>> {
+  const unique = checkUniqueStoryIds(stories)
+  if (!unique.ok) return unique
+  const packages: CheckedPackage[] = []
+  for (const entry of included) {
+    const bytes = await readBytes(entry)
+    if (!bytes.ok) return bytes
+    const checked = await checkPackage(bytes.value, entry, PANCHATANTRA_RULESET)
+    if (!checked.ok) return checked
+    const { findings, skipped } = checked.value.report
+    const count = (severity: string) => findings.filter((f) => f.severity === severity).length
+    log(
+      `content: package story=${entry.storyId} version=${entry.version} sha=${entry.packageSha256.slice(0, 12)} errors=0 warnings=${count('warn')} info=${count('info')}`,
+    )
+    // Private word lists stay on the owner's PC, so these checks never run at build.
+    for (const reason of new Set(skipped.map((s) => s.reason))) {
+      const ids = skipped.filter((s) => s.reason === reason).map((s) => s.checkId)
+      log(`content: validator skipped ${ids.join(',')} for story=${entry.storyId} (${reason})`)
+    }
+    packages.push(checked.value)
+  }
+  return ok(packages)
+}
+
+/** Fixtures mode: the same pointer, snapshot and package gates as Storage, on committed files. */
+async function loadFromFixtures(
+  dir: string,
+  env: Env,
+  now: () => Date,
+  log: (line: string) => void,
+): Promise<GateResult<LoadedContent>> {
+  const pointerBytes = readFixture(dir, FIXTURES_POINTER_PATH, 'pointer')
+  if (!pointerBytes.ok) return pointerBytes
+  await logRead(FIXTURES_POINTER_PATH, pointerBytes.value, log)
+  const pointer = checkPointer(pointerBytes.value, FIXTURES_LOCATION)
+  if (!pointer.ok) return pointer
+
+  const { snapshotPath } = pointer.value
+  const snapshotBytes = readFixture(dir, snapshotPath, 'snapshot')
+  if (!snapshotBytes.ok) return snapshotBytes
+  await logRead(snapshotPath, snapshotBytes.value, log)
+  const checked = await checkSnapshot(snapshotBytes.value, pointer.value, 'fixtures')
+  if (!checked.ok) return checked
+
+  const { snapshot, included } = checked.value
+  const packages = await loadPackages(
+    snapshot.stories,
+    included,
+    async (entry) => {
+      const bytes = readFixture(dir, entry.packagePath, `package ${entry.storyId}`)
+      if (bytes.ok) await logRead(entry.packagePath, bytes.value, log)
+      return bytes
+    },
+    log,
+  )
+  if (!packages.ok) return packages
+  // The media HEAD gate needs the network, which fixtures mode never uses, so media is refused.
+  for (const { entry, pkg } of packages.value) {
+    if (pkg.assets.length > 0 || pkg.nodes.some((node) => node.image !== null)) {
+      return fail(
+        `package ${entry.storyId} declares media; fixtures mode cannot run the media HEAD gate`,
+      )
+    }
+  }
+
+  const buildInfo = BuildInfo.safeParse({
+    schemaVersion: '1.0',
+    mode: 'fixtures',
+    seq: snapshot.seq,
+    pointerPath: FIXTURES_POINTER_PATH,
+    snapshotPath,
+    snapshotSha256: pointer.value.snapshotSha256,
+    featuredStoryId: null, // the featured rule needs every picture and narration; fixtures have none
+    stories: packages.value.map(({ entry }) => ({
+      storyId: entry.storyId,
+      version: entry.version,
+      packageSha256: entry.packageSha256,
+    })),
+    excluded: [], // the approval gate is skipped in fixtures mode
+    appVersion: vercelValue(env, 'VERCEL_GIT_COMMIT_SHA'),
+    deploymentId: vercelValue(env, 'VERCEL_DEPLOYMENT_ID'),
+    deploymentUrl: vercelValue(env, 'VERCEL_URL'),
+    builtAt: now().toISOString(),
+    fetches: [], // no network in fixtures mode
+  })
+  if (!buildInfo.success) return fail('build-info failed strict parse')
+  if (snapshot.featuredStoryId !== null) {
+    log(
+      `content: featured story=${snapshot.featuredStoryId} is not featured in fixtures mode; featuredStoryId=null`,
+    )
+  }
+  return ok({
+    buildInfo: buildInfo.data,
+    pointerBytes: pointerBytes.value,
+    snapshotBytes: snapshotBytes.value,
+    packages: packages.value,
   })
 }
 
@@ -336,6 +531,7 @@ export function outputPaths(root: string) {
   const contentDir = join(root, '.content')
   return {
     contentDir,
+    packagesDir: join(contentDir, 'packages'),
     tmpDir: join(contentDir, '.tmp'),
     publicBuildInfo: join(root, 'public', 'build-info.json'),
   }
@@ -360,6 +556,11 @@ function writeOutputs(root: string, loaded: LoadedContent): void {
   const buildInfoBytes = jcsBytes(loaded.buildInfo)
   writeAtomic(join(paths.contentDir, 'pointer.json'), loaded.pointerBytes)
   writeAtomic(join(paths.contentDir, 'snapshot.json'), loaded.snapshotBytes)
+  if (loaded.packages.length > 0) mkdirSync(paths.packagesDir, { recursive: true })
+  for (const { entry, bytes } of loaded.packages) {
+    // storyId is a gate-checked StoryId ([a-z0-9-] only) and unique in the snapshot.
+    writeAtomic(join(paths.packagesDir, `${entry.storyId}.json`), bytes)
+  }
   writeAtomic(join(paths.contentDir, 'build-info.json'), buildInfoBytes)
   writeAtomic(paths.publicBuildInfo, buildInfoBytes) // last: its presence means "content loaded"
   rmSync(paths.tmpDir, { recursive: true, force: true })
@@ -392,9 +593,24 @@ export async function loadContent(options: LoaderOptions): Promise<number> {
       retryDelayMs: options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS,
       fetches: [],
     }
-    const loaded = await loadFromStorage(config.value, options.env, now, ctx)
+    const loaded =
+      config.value.kind === 'fixtures'
+        ? await loadFromFixtures(fixturesDir(options.root), options.env, now, log)
+        : await loadFromStorage(config.value, options.env, now, ctx)
     if (!loaded.ok) return failWith(loaded.reason)
-    writeOutputs(options.root, loaded.value)
+    try {
+      writeOutputs(options.root, loaded.value)
+    } catch (error) {
+      // A write that fails part-way (disk full, a locked file) must not leave half the outputs.
+      try {
+        removeStaleOutputs(options.root)
+      } catch {
+        // the build still fails below
+      }
+      return failWith(
+        `writing outputs failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      )
+    }
     const info = loaded.value.buildInfo
     log(`content: mode=${info.mode} seq=${info.seq} snapshot=${info.snapshotPath}`)
     return 0

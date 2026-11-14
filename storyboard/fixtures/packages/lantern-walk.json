@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "1.0",
+  "storyId": "lantern-walk",
+  "version": 1,
+  "origin": "migration",
+  "collectionId": "panchatantra",
+  "source": { "work": "panchatantra", "book": "III" },
+  "age": "6+",
+  "addedOn": "2026-11-13",
+  "emoji": "🏮",
+  "color": "#B5651D",
+  "access": { "tier": "free" },
+  "aiUse": { "text": "none", "illustration": "none", "narration": "none" },
+  "locales": ["en", "hi"],
+  "defaultLocale": "en",
+  "startNodeId": "start",
+  "progressSteps": ["start", "crossroads", "ending_light"],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "single",
+      "scene": "village_dusk",
+      "isAlternate": false,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "crossroads" }]
+    },
+    {
+      "id": "crossroads",
+      "type": "fork",
+      "scene": "village_dusk",
+      "isAlternate": false,
+      "image": null,
+      "choices": [
+        { "id": "c1", "next": "ending_light" },
+        { "id": "c2", "next": "ending_shadow" }
+      ]
+    },
+    {
+      "id": "ending_light",
+      "type": "ending",
+      "scene": "village_well",
+      "isAlternate": false,
+      "image": null,
+      "lessonIcon": "🏮"
+    },
+    {
+      "id": "ending_shadow",
+      "type": "ending",
+      "scene": "village_dusk",
+      "isAlternate": true,
+      "image": null,
+      "lessonIcon": "🌙"
+    }
+  ],
+  "text": {
+    "en": {
+      "title": "The Lantern Walk (test fixture)",
+      "description": "A synthetic story used only by tests.",
+      "theme": "Foresight",
+      "duration": "1 min",
+      "book": "Panchatantra — Book III",
+      "nodes": {
+        "start": {
+          "text": "A child walks to the village well at dusk with a small lantern.",
+          "question": "What does the child do first?",
+          "choices": { "c1": "Light the lantern" }
+        },
+        "crossroads": {
+          "text": "The path splits in two: one way is bright, the other is dark.",
+          "question": "Which way does the child walk?",
+          "choices": { "c1": "The bright way", "c2": "The dark way" }
+        },
+        "ending_light": {
+          "text": "The child reaches the well and fills the pot safely.\nThe Panchatantra teaches: \"A light you carry makes the path clear.\"",
+          "lesson": "Using the light you carry keeps the path clear."
+        },
+        "ending_shadow": {
+          "text": "The child trips on a root and walks home slowly.\nThe Panchatantra teaches: \"The dark way hides its roots.\"",
+          "lesson": "A dark shortcut can make the trip longer."
+        }
+      }
+    },
+    "hi": {
+      "title": "लालटेन की सैर (परीक्षण)",
+      "description": "केवल परीक्षण के लिए बनी कहानी।",
+      "theme": "दूरदर्शिता",
+      "duration": "1 मिनट",
+      "book": "पञ्चतन्त्र — पुस्तक III",
+      "nodes": {
+        "start": {
+          "text": "एक बच्चा शाम को छोटी लालटेन लेकर गाँव के कुएँ की ओर चलता है।",
+          "question": "बच्चा पहले क्या करता है?",
+          "choices": { "c1": "लालटेन जलाओ" }
+        },
+        "crossroads": {
+          "text": "रास्ता दो हिस्सों में बँटता है: एक उजला, एक अँधेरा।",
+          "question": "बच्चा किस रास्ते पर चलता है?",
+          "choices": { "c1": "उजला रास्ता", "c2": "अँधेरा रास्ता" }
+        },
+        "ending_light": {
+          "text": "बच्चा कुएँ तक पहुँचता है और घड़ा सुरक्षित भरता है।\nपञ्चतन्त्र सिखाता है: \"अपनी रोशनी रास्ता साफ करती है।\"",
+          "lesson": "साथ रखी रोशनी का उपयोग रास्ता साफ रखता है।"
+        },
+        "ending_shadow": {
+          "text": "बच्चा एक जड़ से ठोकर खाकर धीरे-धीरे घर लौटता है।\nपञ्चतन्त्र सिखाता है: \"अँधेरा रास्ता अपनी जड़ें छिपाता है।\"",
+          "lesson": "अँधेरा छोटा रास्ता सफर को लंबा कर सकता है।"
+        }
+      }
+    }
+  },
+  "assets": []
+}

@@ -1,0 +1,185 @@
+{
+  "schemaVersion": "1.0",
+  "storyId": "river-stones",
+  "version": 1,
+  "origin": "migration",
+  "collectionId": "panchatantra",
+  "source": { "work": "panchatantra", "book": "II" },
+  "age": "6+",
+  "addedOn": "2026-11-13",
+  "emoji": "🐐",
+  "color": "#4A7C9B",
+  "access": { "tier": "free" },
+  "aiUse": { "text": "none", "illustration": "none", "narration": "none" },
+  "locales": ["en", "hi"],
+  "defaultLocale": "en",
+  "startNodeId": "start",
+  "progressSteps": ["start", "flat_stones", "big_rock", "far_bank", "ending_dry"],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "fork",
+      "scene": "stream",
+      "isAlternate": false,
+      "image": null,
+      "choices": [
+        { "id": "c1", "next": "flat_stones" },
+        { "id": "c2", "next": "round_stones" }
+      ]
+    },
+    {
+      "id": "flat_stones",
+      "type": "single",
+      "scene": "stream",
+      "isAlternate": false,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "big_rock" }]
+    },
+    {
+      "id": "big_rock",
+      "type": "single",
+      "scene": "stream",
+      "isAlternate": false,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "far_bank" }]
+    },
+    {
+      "id": "far_bank",
+      "type": "single",
+      "scene": "meadow",
+      "isAlternate": false,
+      "image": null,
+      "choices": [{ "id": "c1", "next": "ending_dry" }]
+    },
+    {
+      "id": "round_stones",
+      "type": "alternate",
+      "scene": "stream",
+      "isAlternate": true,
+      "image": null,
+      "choices": [
+        { "id": "c1", "next": "ending_wet" },
+        { "id": "c2", "next": "ending_back" }
+      ]
+    },
+    {
+      "id": "ending_dry",
+      "type": "ending",
+      "scene": "meadow",
+      "isAlternate": false,
+      "image": null,
+      "lessonIcon": "🪨"
+    },
+    {
+      "id": "ending_wet",
+      "type": "ending",
+      "scene": "stream",
+      "isAlternate": true,
+      "image": null,
+      "lessonIcon": "💧"
+    },
+    {
+      "id": "ending_back",
+      "type": "ending",
+      "scene": "stream",
+      "isAlternate": true,
+      "image": null,
+      "lessonIcon": "👀"
+    }
+  ],
+  "text": {
+    "en": {
+      "title": "River Stones (test fixture)",
+      "description": "A synthetic story used only by tests.",
+      "theme": "Care",
+      "duration": "2 min",
+      "book": "Panchatantra — Book II",
+      "nodes": {
+        "start": {
+          "text": "A small goat stands at the edge of a shallow stream full of stones.",
+          "question": "Which stones does the goat choose?",
+          "choices": { "c1": "The flat stones", "c2": "The round stones" }
+        },
+        "flat_stones": {
+          "text": "The flat stones stay still under the hooves of the goat.",
+          "question": "What does the goat do next?",
+          "choices": { "c1": "Step onto the big rock" }
+        },
+        "big_rock": {
+          "text": "From the big rock, the goat can see the far bank.",
+          "question": "How does the goat go on?",
+          "choices": { "c1": "Hop slowly across" }
+        },
+        "far_bank": {
+          "text": "The goat lands on soft grass on the far bank.",
+          "question": "What does the goat do now?",
+          "choices": { "c1": "Shake off and rest" }
+        },
+        "round_stones": {
+          "text": "The round stones roll, and the goat wobbles.",
+          "question": "What does the goat do?",
+          "choices": { "c1": "Jump ahead", "c2": "Turn back" }
+        },
+        "ending_dry": {
+          "text": "The goat rests in the sun, dry and calm.\nThe Panchatantra teaches: \"A steady step keeps you dry.\"",
+          "lesson": "Choosing firm ground makes a crossing safe."
+        },
+        "ending_wet": {
+          "text": "The goat slips into the cold water and climbs out soaked.\nThe Panchatantra teaches: \"Rolling stones make a wet crossing.\"",
+          "lesson": "A quick choice can leave you cold and wet."
+        },
+        "ending_back": {
+          "text": "The goat goes back to the first bank and looks again.\nThe Panchatantra teaches: \"Looking twice is not losing.\"",
+          "lesson": "Going back to look again is also wise."
+        }
+      }
+    },
+    "hi": {
+      "title": "नदी के पत्थर (परीक्षण)",
+      "description": "केवल परीक्षण के लिए बनी कहानी।",
+      "theme": "सावधानी",
+      "duration": "2 मिनट",
+      "book": "पञ्चतन्त्र — पुस्तक II",
+      "nodes": {
+        "start": {
+          "text": "एक छोटी बकरी पत्थरों से भरी एक उथली धारा के किनारे खड़ी है।",
+          "question": "बकरी कौन से पत्थर चुनती है?",
+          "choices": { "c1": "चपटे पत्थर", "c2": "गोल पत्थर" }
+        },
+        "flat_stones": {
+          "text": "चपटे पत्थर बकरी के खुरों के नीचे स्थिर रहते हैं।",
+          "question": "बकरी आगे क्या करती है?",
+          "choices": { "c1": "बड़ी चट्टान पर कदम रखो" }
+        },
+        "big_rock": {
+          "text": "बड़ी चट्टान से बकरी को दूसरा किनारा दिखता है।",
+          "question": "बकरी आगे कैसे जाती है?",
+          "choices": { "c1": "धीरे-धीरे कूदकर पार करो" }
+        },
+        "far_bank": {
+          "text": "बकरी दूसरे किनारे की नरम घास पर उतरती है।",
+          "question": "अब बकरी क्या करती है?",
+          "choices": { "c1": "पानी झाड़ो और आराम करो" }
+        },
+        "round_stones": {
+          "text": "गोल पत्थर लुढ़कते हैं, और बकरी डगमगाती है।",
+          "question": "बकरी क्या करती है?",
+          "choices": { "c1": "आगे कूदो", "c2": "वापस मुड़ो" }
+        },
+        "ending_dry": {
+          "text": "बकरी धूप में आराम करती है, सूखी और शांत।\nपञ्चतन्त्र सिखाता है: \"स्थिर कदम तुम्हें सूखा रखता है।\"",
+          "lesson": "पक्का रास्ता चुनने से पार जाना सुरक्षित होता है।"
+        },
+        "ending_wet": {
+          "text": "बकरी ठंडे पानी में फिसल जाती है और भीगकर बाहर निकलती है।\nपञ्चतन्त्र सिखाता है: \"लुढ़कते पत्थर गीला रास्ता देते हैं।\"",
+          "lesson": "जल्दी का फैसला तुम्हें ठंडा और गीला छोड़ सकता है।"
+        },
+        "ending_back": {
+          "text": "बकरी पहले किनारे पर लौटती है और फिर से देखती है।\nपञ्चतन्त्र सिखाता है: \"दोबारा देखना हारना नहीं है।\"",
+          "lesson": "फिर से देखने के लिए लौटना भी समझदारी है।"
+        }
+      }
+    }
+  },
+  "assets": []
+}

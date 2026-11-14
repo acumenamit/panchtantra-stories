@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { jcsBytes, sha256Hex, toJcs } from '../hashing'
-import type { CataloguePointer, CatalogueSnapshot } from '../package/catalogue'
+import { CataloguePointer, type CatalogueSnapshot } from '../package/catalogue'
+import { StoryPackageV1 } from '../package/v1'
 import {
   checkPointer,
   checkSnapshot,
+  GATE_MODES,
   isPointerRoot,
   isSafeStoragePath,
   modeFromPointerPath,
+  parseStrictJson,
   splitByApproval,
+  STORAGE_GATE_MODES,
   type PointerLocation,
 } from './gates'
 
@@ -138,6 +142,21 @@ describe('modeFromPointerPath', () => {
     expect(modeFromPointerPath('spikes/catalogue/staging.json', roots).ok).toBe(false)
   })
 
+  it('never maps a Storage pointer path to fixtures mode, so the approval gate cannot be skipped', () => {
+    const reason =
+      'pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json'
+    expect(modeFromPointerPath('catalogue/fixtures.json')).toEqual({ ok: false, reason })
+    expect(modeFromPointerPath('spikes/run/catalogue/fixtures.json', ['', 'spikes/run/'])).toEqual({
+      ok: false,
+      reason,
+    })
+  })
+
+  it('keeps Storage pointer modes separate from build modes', () => {
+    expect(GATE_MODES).toEqual(['production', 'staging', 'fixtures'])
+    expect(STORAGE_GATE_MODES).toEqual(['production', 'staging'])
+  })
+
   it('refuses an invalid root list instead of matching against it', () => {
     expect(modeFromPointerPath('spikescatalogue/production.json', ['spikes'])).toEqual({
       ok: false,
@@ -255,6 +274,13 @@ describe('checkSnapshot', () => {
     expect(r.ok && r.value.excluded).toEqual([])
   })
 
+  it('includes every entry in fixtures mode (approval skipped)', async () => {
+    const { bytes, pointer } = await pair(jcsBytes(snapshotValue()))
+    const r = await checkSnapshot(bytes, pointer, 'fixtures')
+    expect(r.ok && r.value.included.map((s) => s.storyId)).toEqual(['blue-jackal', 'two-paths'])
+    expect(r.ok && r.value.excluded).toEqual([])
+  })
+
   it('excludes entries without approvalSha256 in production mode', async () => {
     const { bytes, pointer } = await pair(jcsBytes(snapshotValue()))
     const r = await checkSnapshot(bytes, pointer, 'production')
@@ -326,6 +352,35 @@ describe('splitByApproval', () => {
       snapshot: empty,
       included: [],
       excluded: [],
+    })
+  })
+
+  it('treats fixtures like staging: every entry included, approved or not', () => {
+    const snapshot = snapshotValue()
+    expect(splitByApproval(snapshot, 'fixtures')).toEqual(splitByApproval(snapshot, 'staging'))
+    expect(splitByApproval(snapshot, 'fixtures').included).toEqual(snapshot.stories)
+  })
+})
+
+describe('parseStrictJson', () => {
+  it('accepts valid JSON that is not canonical JCS and returns the raw value too', () => {
+    const text = JSON.stringify(pointerValue(), null, 2)
+    const r = parseStrictJson(encode(text), CataloguePointer, 'pointer')
+    expect(r).toEqual({ ok: true, value: { raw: pointerValue(), data: pointerValue() } })
+  })
+
+  it('names the label in each failure', () => {
+    expect(parseStrictJson(encode('{'), StoryPackageV1, 'package a-b')).toEqual({
+      ok: false,
+      reason: 'package a-b is not valid UTF-8 JSON',
+    })
+    expect(parseStrictJson(encode('{"__proto__":{}}'), StoryPackageV1, 'package a-b')).toEqual({
+      ok: false,
+      reason: 'package a-b contains a "__proto__" key',
+    })
+    expect(parseStrictJson(encode('{}'), StoryPackageV1, 'package a-b')).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/^package a-b failed strict parse: /),
     })
   })
 })

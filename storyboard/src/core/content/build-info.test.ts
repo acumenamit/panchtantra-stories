@@ -64,8 +64,23 @@ describe('BuildInfo', () => {
     )
   })
 
+  it('accepts a fixtures-mode record with no fetches (no network in fixtures mode)', () => {
+    const r = BuildInfo.safeParse(
+      info({ mode: 'fixtures', excluded: [], fetches: [], pointerPath: 'catalogue/fixtures.json' }),
+    )
+    expect(r.success, JSON.stringify(r.error?.issues)).toBe(true)
+  })
+
+  it.each(['production', 'staging'])('requires at least one fetch in %s mode', (mode) => {
+    const r = BuildInfo.safeParse(info({ mode, fetches: [] }))
+    expect(r.success).toBe(false)
+    expect(r.error?.issues.map((i) => [i.path.join('.'), i.message])).toEqual([
+      ['fetches', 'fetches may be empty only in fixtures mode'],
+    ])
+  })
+
   it.each([
-    ['a mode outside production and staging', { mode: 'fixtures' }],
+    ['a mode outside production, staging and fixtures', { mode: 'preview' }],
     ['seq 0', { seq: 0 }],
     ['an empty fetch list', { fetches: [] }],
     ['a full-length sha256 in a fetch row', { fetches: [fetchRow({ sha256: SHA })] }],

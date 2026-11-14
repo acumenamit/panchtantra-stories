@@ -10,6 +10,7 @@
     "dev": "next dev --port 3005",
     "build": "tsx scripts/load-content.ts && next build",
     "content:load": "tsx scripts/load-content.ts",
+    "fixtures:catalogue": "tsx scripts/build-fixtures-catalogue.ts",
     "start": "next start --port 3005",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
