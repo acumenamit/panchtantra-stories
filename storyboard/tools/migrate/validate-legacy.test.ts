@@ -1,5 +1,7 @@
 // Runs the public rule set over the 11 converted legacy stories (re-converted from pt/) and checks
 // the result against spec §5.4: 41 error records on 27 nodes, per story and per check.
+// P1-2b (design p1-step8-design.md §3.2, §5.6): exactly one T006 warning, crow-and-serpent
+// seek_advice hi (U+7425 U+73C0).
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -47,6 +49,29 @@ describe('legacy stories against panchatantra@3.0.0 (spec §5.4)', () => {
     )
     expect(errors).toHaveLength(41)
     expect(new Set(errors).size).toBe(27)
+  })
+
+  it('show exactly one T006 warning: crow-and-serpent seek_advice hi (P1-2b)', () => {
+    const t006 = reports.flatMap((r) =>
+      r.findings
+        .filter((f) => f.checkId === 'T006')
+        .map((f) => ({
+          storyId: r.storyId,
+          nodeId: f.nodeId,
+          locale: f.locale,
+          severity: f.severity,
+          message: f.message,
+        })),
+    )
+    expect(t006).toEqual([
+      {
+        storyId: 'crow-and-serpent',
+        nodeId: 'seek_advice',
+        locale: 'hi',
+        severity: 'warn',
+        message: 'Letters outside the rendered scripts: U+7425 U+73C0',
+      },
+    ])
   })
 
   it('show the 4 progressSteps warnings through alternate nodes (E007)', () => {

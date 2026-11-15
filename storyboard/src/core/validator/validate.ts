@@ -1,10 +1,18 @@
 // Validator (spec §5.3): pure, synchronous, never throws. Waivers are applied separately (waivers.ts).
+// P1-2b (design p1-step8-design.md §5.5, §5.6): A001 asset references (error), T006 scripts (warn).
 import { getLocaleDef, isEnabledLocale } from '../locales'
 import type { LocaleCode } from '../locales'
 import { StoryPackageV1 } from '../package/v1'
 import type { StoryNode, StoryPackageV1 as Pkg } from '../package/v1'
 import type { PrivateRuleData, PublicRuleSet, Severity } from '../rules/types'
-import { containsWord, questionProblem, teachingProblem, textHygiene, wordCount } from './text'
+import {
+  containsWord,
+  questionProblem,
+  scriptProblem,
+  teachingProblem,
+  textHygiene,
+  wordCount,
+} from './text'
 import type { Finding, ValidationMode, ValidationReport } from './types'
 
 export interface ValidateOptions {
@@ -226,12 +234,55 @@ function checkText(p: Pkg, add: Add): void {
       if (nt.lesson) fields.push([id, nt.lesson])
       for (const c of Object.values(nt.choices ?? {})) fields.push([id, c])
     }
-    for (const [nodeId, s] of fields)
+    for (const [nodeId, s] of fields) {
       for (const h of textHygiene(s)) add(h.checkId, 'error', h.message, { nodeId, locale: l })
+      // T006 (warn in P1-2b, design §5.6): one finding per string; raised to an error only with
+      // the owner's U+7425 U+73C0 correction (design §3.2).
+      const scripts = scriptProblem(s)
+      if (scripts) add('T006', 'warn', scripts, { nodeId, locale: l })
+    }
   }
 }
 
+const shortId = (sha: string): string => sha.slice(0, 12)
+
 function checkAssets(p: Pkg, add: Add, forFeature: boolean): void {
+  // A001 (error in every mode, design p1-step8-design.md §5.5; P1-2b): asset references resolve.
+  const ids = new Set<string>()
+  const repeated = new Set<string>()
+  for (const a of p.assets) {
+    if (ids.has(a.id)) repeated.add(a.id)
+    ids.add(a.id)
+  }
+  for (const id of repeated)
+    add('A001', 'error', `Asset id ${shortId(id)} is declared more than once`)
+  const images = new Set(p.assets.filter((a) => a.kind === 'image').map((a) => a.id))
+  for (const n of p.nodes) {
+    if (n.image !== null && !images.has(n.image))
+      add('A001', 'error', `Picture ${shortId(n.image)} names no image asset`, { nodeId: n.id })
+  }
+  const nodeIds = new Set(p.nodes.map((n) => n.id))
+  const narrations = new Map<string, { nodeId: string; locale: LocaleCode; count: number }>()
+  for (const a of p.assets) {
+    if (a.kind !== 'audio') continue
+    const where = { nodeId: a.nodeId, locale: a.locale }
+    if (!nodeIds.has(a.nodeId))
+      add('A001', 'error', `Narration ${shortId(a.id)} is for a node that does not exist`, where)
+    if (!p.locales.includes(a.locale))
+      add('A001', 'error', `Narration ${shortId(a.id)} is in a language the story lacks`, where)
+    const key = `${a.nodeId}|${a.locale}`
+    const seen = narrations.get(key)
+    if (seen) seen.count++
+    else narrations.set(key, { ...where, count: 1 })
+  }
+  for (const { nodeId, locale, count } of narrations.values()) {
+    if (count > 1)
+      add('A001', 'error', `${count} narrations for one node and language (at most 1)`, {
+        nodeId,
+        locale,
+      })
+  }
+
   const sev: Severity = forFeature ? 'error' : 'warn'
   const audio = new Set(
     p.assets.filter((a) => a.kind === 'audio').map((a) => `${a.nodeId}|${a.locale}`),

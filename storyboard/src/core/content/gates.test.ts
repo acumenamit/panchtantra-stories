@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest'
+import fixtureSnapshot from '../../../fixtures/catalogue/snapshots/1.json'
 import { jcsBytes, sha256Hex, toJcs } from '../hashing'
-import { CataloguePointer, type CatalogueSnapshot } from '../package/catalogue'
+import { CataloguePointer, CatalogueSnapshot } from '../package/catalogue'
 import { StoryPackageV1 } from '../package/v1'
 import {
+  checkPackagePaths,
   checkPointer,
   checkSnapshot,
+  decodeJson,
+  expectedPackagePath,
+  expectedSnapshotPath,
   GATE_MODES,
+  isCanonicalJcs,
   isPointerRoot,
   isSafeStoragePath,
   modeFromPointerPath,
   parseStrictJson,
+  safeLogText,
   splitByApproval,
   STORAGE_GATE_MODES,
+  type GateResult,
   type PointerLocation,
 } from './gates'
 
@@ -263,6 +271,188 @@ describe('checkPointer', () => {
       ok: false,
       reason: 'pointer snapshotPath must sit under spikes/run/catalogue/snapshots/',
     })
+  })
+
+  // P1-2b (design §3.4 row 22, §9 item 7): exactly <root>catalogue/snapshots/<pointer.seq>.json.
+  it.each([
+    ['another seq', 'catalogue/snapshots/4.json'],
+    ['a leading zero', 'catalogue/snapshots/03.json'],
+    ['a suffix', 'catalogue/snapshots/3.json.bak'],
+    ['another extension', 'catalogue/snapshots/3.jcs'],
+    ['a deeper folder', 'catalogue/snapshots/x/3.json'],
+    ['a name that is not the seq', 'catalogue/snapshots/latest.json'],
+  ])('rejects a snapshot path that is not <seq>.json: %s', (_why, snapshotPath) => {
+    expect(checkPointer(jcsBytes(pointerValue({ snapshotPath })), PROD)).toEqual({
+      ok: false,
+      reason: 'pointer snapshotPath must be catalogue/snapshots/3.json',
+    })
+  })
+
+  it('names the root and the seq in the exact snapshot path it expects', () => {
+    const p = pointerValue({ seq: 12, snapshotPath: 'spikes/run/catalogue/snapshots/3.json' })
+    expect(checkPointer(jcsBytes(p), { mode: 'staging', root: 'spikes/run/' })).toEqual({
+      ok: false,
+      reason: 'pointer snapshotPath must be spikes/run/catalogue/snapshots/12.json',
+    })
+    const good = pointerValue({ seq: 12, snapshotPath: 'spikes/run/catalogue/snapshots/12.json' })
+    expect(checkPointer(jcsBytes(good), { mode: 'staging', root: 'spikes/run/' })).toEqual({
+      ok: true,
+      value: good,
+    })
+  })
+
+  it('keeps the earlier path reasons ahead of the exact-path rule', () => {
+    const unsafe = pointerValue({ snapshotPath: 'catalogue/snapshots/../3.json' })
+    expect(checkPointer(jcsBytes(unsafe), PROD)).toEqual({
+      ok: false,
+      reason: 'pointer snapshotPath is unsafe',
+    })
+    const outside = pointerValue({ snapshotPath: 'catalogue/3.json' })
+    expect(checkPointer(jcsBytes(outside), PROD)).toEqual({
+      ok: false,
+      reason: 'pointer snapshotPath must sit under catalogue/snapshots/',
+    })
+  })
+
+  it('accepts the committed fixtures pointer, which names snapshots/1.json for seq 1', () => {
+    const p = pointerValue({ seq: 1, snapshotPath: 'catalogue/snapshots/1.json' })
+    expect(checkPointer(jcsBytes(p), { mode: 'fixtures', root: '' }).ok).toBe(true)
+  })
+})
+
+describe('expectedSnapshotPath', () => {
+  it('builds <root>catalogue/snapshots/<seq>.json', () => {
+    expect(expectedSnapshotPath('', 1)).toBe('catalogue/snapshots/1.json')
+    expect(expectedSnapshotPath('spikes/run/', 42)).toBe('spikes/run/catalogue/snapshots/42.json')
+  })
+})
+
+describe('checkPackagePaths (P1-2b)', () => {
+  const entry = (storyId: string, sha: string, packagePath: string, approved = true) => ({
+    storyId,
+    collectionId: 'panchatantra',
+    version: 1,
+    packagePath,
+    packageSha256: sha,
+    ...(approved ? { approvalSha256: SHA_B } : {}),
+  })
+  const storage = (root = '') => [
+    entry('blue-jackal', SHA_A, `${root}packages/blue-jackal/${SHA_A}.json`),
+    entry('two-paths', SHA_B, `${root}packages/two-paths/${SHA_B}.json`, false),
+  ]
+
+  it('accepts the Storage layout in production and staging, with any root', () => {
+    for (const mode of STORAGE_GATE_MODES) {
+      expect(checkPackagePaths(storage(), mode, '')).toEqual({ ok: true, value: null })
+      expect(checkPackagePaths(storage('spikes/run/'), mode, 'spikes/run/')).toEqual({
+        ok: true,
+        value: null,
+      })
+    }
+  })
+
+  it('accepts the committed fixtures snapshot in fixtures mode', () => {
+    const snapshot = CatalogueSnapshot.parse(fixtureSnapshot)
+    expect(snapshot.stories).toHaveLength(3)
+    expect(checkPackagePaths(snapshot.stories, 'fixtures', '')).toEqual({ ok: true, value: null })
+  })
+
+  it('accepts an empty catalogue', () => {
+    expect(checkPackagePaths([], 'production', '')).toEqual({ ok: true, value: null })
+  })
+
+  it.each([
+    ['another root', `spikes/run/packages/blue-jackal/${SHA_A}.json`, ''],
+    ['no root where one is set', `packages/blue-jackal/${SHA_A}.json`, 'spikes/run/'],
+    ['another sha256', `packages/blue-jackal/${SHA_B}.json`, ''],
+    ['an uppercase sha256', `packages/blue-jackal/${SHA_A.toUpperCase()}.json`, ''],
+    ['another story folder', `packages/two-paths/${SHA_A}.json`, ''],
+    ['a parent segment', `packages/blue-jackal/../blue-jackal/${SHA_A}.json`, ''],
+    ['a leading slash', `/packages/blue-jackal/${SHA_A}.json`, ''],
+    ['a query', `packages/blue-jackal/${SHA_A}.json?x=1`, ''],
+    ['the fixtures layout', 'packages/blue-jackal.json', ''],
+  ])('refuses %s in Storage mode', (_why, packagePath, root) => {
+    const stories = [entry('blue-jackal', SHA_A, packagePath)]
+    for (const mode of STORAGE_GATE_MODES) {
+      expect(checkPackagePaths(stories, mode, root)).toEqual({
+        ok: false,
+        reason: `snapshot entry blue-jackal: packagePath must be ${root}packages/blue-jackal/${SHA_A}.json`,
+      })
+    }
+  })
+
+  it.each([
+    ['the Storage layout', `packages/blue-jackal/${SHA_A}.json`],
+    ['another story name', 'packages/two-paths.json'],
+    ['a parent segment', 'packages/../packages/blue-jackal.json'],
+    ['a sub-folder', 'packages/x/blue-jackal.json'],
+    ['a root', 'spikes/run/packages/blue-jackal.json'],
+  ])('refuses %s in fixtures mode', (_why, packagePath) => {
+    expect(checkPackagePaths([entry('blue-jackal', SHA_A, packagePath)], 'fixtures', '')).toEqual({
+      ok: false,
+      reason: 'snapshot entry blue-jackal: packagePath must be packages/blue-jackal.json',
+    })
+  })
+
+  it('checks excluded (unapproved) entries too, and names the first bad entry in snapshot order', () => {
+    const stories = [
+      entry('blue-jackal', SHA_A, `packages/blue-jackal/${SHA_A}.json`),
+      entry('two-paths', SHA_B, 'packages/two-paths.json', false),
+      entry('lion-and-hare', SHA_A, 'packages/lion-and-hare.json'),
+    ]
+    expect(checkPackagePaths(stories, 'production', '')).toEqual({
+      ok: false,
+      reason: `snapshot entry two-paths: packagePath must be packages/two-paths/${SHA_B}.json`,
+    })
+  })
+})
+
+describe('expectedPackagePath', () => {
+  it('gives the Storage layout under the root, and the fixtures layout without one', () => {
+    const e = { storyId: 'blue-jackal', packageSha256: SHA_A }
+    expect(expectedPackagePath(e, 'production', '')).toBe(`packages/blue-jackal/${SHA_A}.json`)
+    expect(expectedPackagePath(e, 'staging', 'spikes/run/')).toBe(
+      `spikes/run/packages/blue-jackal/${SHA_A}.json`,
+    )
+    expect(expectedPackagePath(e, 'fixtures', '')).toBe('packages/blue-jackal.json')
+  })
+})
+
+describe('GateResult details (P1-2b)', () => {
+  it('lets a failure carry ordered detail lines, and leaves them optional', () => {
+    const withDetails: GateResult<null> = { ok: false, reason: 'r', details: ['a', 'b'] }
+    const without: GateResult<null> = { ok: false, reason: 'r' }
+    expect(withDetails.ok || withDetails.details).toEqual(['a', 'b'])
+    expect(without).not.toHaveProperty('details')
+  })
+})
+
+describe('safeLogText', () => {
+  it('keeps printable ASCII without spaces, at most 64 characters, and "-" for nothing', () => {
+    expect(safeLogText('panchatantra')).toBe('panchatantra')
+    expect(safeLogText('a b\nc\td\u0000eéf')).toBe('abcdef')
+    expect(safeLogText('x'.repeat(100))).toBe('x'.repeat(64))
+    expect(safeLogText('')).toBe('-')
+    expect(safeLogText(' \né')).toBe('-')
+  })
+})
+
+describe('decodeJson and isCanonicalJcs', () => {
+  it('decodes UTF-8 JSON and names the label on failure', () => {
+    expect(decodeJson(encode('{"a":1}'), 'package x')).toEqual({ ok: true, value: { a: 1 } })
+    expect(decodeJson(encode('{"a":'), 'package x')).toEqual({
+      ok: false,
+      reason: 'package x is not valid UTF-8 JSON',
+    })
+    expect(decodeJson(new Uint8Array([0x22, 0xff, 0x22]), 'package x').ok).toBe(false)
+  })
+
+  it('is true only for the exact JCS bytes of the value', () => {
+    const value = { b: [1, 'x'], a: null }
+    expect(isCanonicalJcs(value, jcsBytes(value))).toBe(true)
+    expect(isCanonicalJcs(value, encode(JSON.stringify(value)))).toBe(false)
+    expect(isCanonicalJcs(value, encode(`${toJcs(value)}\n`))).toBe(false)
+    expect(isCanonicalJcs({ n: Number.POSITIVE_INFINITY }, encode('{"n":1e400}'))).toBe(false)
   })
 })
 

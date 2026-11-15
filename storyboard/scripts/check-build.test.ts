@@ -1,24 +1,31 @@
 // The post-build check (design p1-step7-design.md §5.7 item 2, §8.1 item 11; P1-1c). The sample
 // outputs are shaped on real Step 7 builds (Next 16.4.5, Turbopack): the prerender-manifest keys and
 // entries, and the head, <main> and script markup of index.html, the locale pages and the 404.
+// P1-2b (design p1-step8-design.md §3.3 C-2, §10.1): the [content-outputs] truth table.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveLaunch, type LaunchDecision } from '../src/config/launch'
+import type { BuildInfo } from '../src/core/content/build-info'
+import type { GateMode } from '../src/core/content/gates'
+import { jcsBytes } from '../src/core/hashing'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import {
   checkBuild,
+  checkContentOutputs,
   COMING_SOON_MAIN,
   DISAGREEMENT_HINT,
   escapeNonAscii,
   leakForms,
   readCatalogues,
+  readContentOutputs,
   ROBOTS_META,
   runCheckBuild,
   type BuildOutput,
   type CatalogueValue,
+  type ContentOutputs,
 } from './check-build'
 
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -565,16 +572,26 @@ describe('runCheckBuild on files', () => {
    * `layout` 'route-cache' writes each page the way Next 16.4.5 does when a deployment adapter is
    * set (Vercel): .next/server/route-cache/APP_PAGE/<one folder per source route>/$/<path>.html.
    */
+  /**
+   * `content` writes the loader's outputs for that mode (.content/build-info.json and its public
+   * copy), as a fixtures or storage build has them; null writes none (CONTENT_SOURCE none or unset).
+   */
   function writeRoot(
     output: BuildOutput,
     catalogues = true,
     layout: 'app' | 'route-cache' = 'app',
+    content: GateMode | null = null,
   ): string {
     const root = mkdtempSync(join(tmpdir(), 'check-build-'))
     dirs.push(root)
-    const write = (path: string, text: string) => {
+    const write = (path: string, text: string | Uint8Array) => {
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, text)
+    }
+    if (content !== null) {
+      const bytes = jcsBytes(buildInfo(content))
+      write(join(root, '.content', 'build-info.json'), bytes)
+      write(join(root, 'public', 'build-info.json'), bytes)
     }
     if (output.manifest !== undefined)
       write(join(root, '.next', 'prerender-manifest.json'), output.manifest)
@@ -620,7 +637,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('passes an open build', () => {
-    const result = run(writeRoot(openOutput()), {
+    const result = run(writeRoot(openOutput(), true, 'app', 'fixtures'), {
       CONTENT_SOURCE: 'fixtures',
       READER_LAUNCH: 'review',
     })
@@ -642,7 +659,7 @@ describe('runCheckBuild on files', () => {
       out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
       err: [],
     })
-    const open = run(writeRoot(openOutput(), true, 'route-cache'), {
+    const open = run(writeRoot(openOutput(), true, 'route-cache', 'fixtures'), {
       CONTENT_SOURCE: 'fixtures',
       READER_LAUNCH: 'review',
     })
@@ -703,7 +720,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('exits 1 naming the rule when the environment disagrees with the output', () => {
-    const result = run(writeRoot(gatedOutput()), {
+    const result = run(writeRoot(gatedOutput(), true, 'app', 'fixtures'), {
       CONTENT_SOURCE: 'fixtures',
       READER_LAUNCH: 'review',
     })
@@ -735,5 +752,236 @@ describe('runCheckBuild on files', () => {
     expect(result.err[0]).toBe(
       'check-build failed [catalogue] messages/hi.json is not a flat object of strings',
     )
+  })
+
+  it('[content-outputs]: a gated build with a stray build-info fails, naming the rule', () => {
+    const root = writeRoot(gatedOutput(), true, 'app', 'fixtures')
+    const result = run(root, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })
+    expect(result).toEqual({
+      code: 1,
+      out: ['reader launch: gated (committed); locale routes: 0'],
+      err: [
+        'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
+        'check-build failed [content-outputs] public/build-info.json exists, but CONTENT_SOURCE is none',
+      ],
+    })
+  })
+
+  it('[content-outputs]: a fixtures build without its outputs fails', () => {
+    const result = run(writeRoot(openOutput()), {
+      CONTENT_SOURCE: 'fixtures',
+      READER_LAUNCH: 'review',
+    })
+    expect(result.code).toBe(1)
+    expect(result.err).toEqual([
+      'check-build failed [content-outputs] missing .content/build-info.json (CONTENT_SOURCE=fixtures)',
+      'check-build failed [content-outputs] missing public/build-info.json (CONTENT_SOURCE=fixtures)',
+    ])
+  })
+
+  it('[content-outputs]: runs even when the build output is unreadable', () => {
+    const root = writeRoot(gatedOutput(), true, 'app', 'staging')
+    mkdirSync(join(root, '.next', 'server', 'route-cache', 'APP_PAGE', 'x', '$'), {
+      recursive: true,
+    })
+    writeFileSync(
+      join(root, '.next', 'server', 'route-cache', 'APP_PAGE', 'x', '$', 'index.html'),
+      '<main></main>',
+    )
+    const result = run(root, { CONTENT_SOURCE: 'none' })
+    expect(result.err).toEqual([
+      'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
+      'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
+      'check-build failed [content-outputs] public/build-info.json exists, but CONTENT_SOURCE is none',
+    ])
+  })
+
+  it('reads the content outputs by the output-layout names', () => {
+    const none = writeRoot(gatedOutput())
+    expect(readContentOutputs(none)).toEqual({
+      contentDir: false,
+      contentBuildInfo: null,
+      publicBuildInfoExists: false,
+      publicBuildInfo: null,
+    })
+    const loaded = writeRoot(gatedOutput(), true, 'app', 'fixtures')
+    const bytes = new Uint8Array(jcsBytes(buildInfo('fixtures')))
+    expect(readContentOutputs(loaded)).toEqual({
+      contentDir: true,
+      contentBuildInfo: bytes,
+      publicBuildInfoExists: true,
+      publicBuildInfo: bytes,
+    })
+    // A folder where a file belongs exists but has no bytes.
+    const folder = writeRoot(gatedOutput())
+    mkdirSync(join(folder, 'public', 'build-info.json'), { recursive: true })
+    expect(readContentOutputs(folder)).toMatchObject({
+      publicBuildInfoExists: true,
+      publicBuildInfo: null,
+    })
+  })
+})
+
+/** A strict build-info record of this mode (a Storage mode needs at least one GET). */
+function buildInfo(mode: GateMode): BuildInfo {
+  return {
+    schemaVersion: '1.0',
+    mode,
+    seq: 1,
+    pointerPath: mode === 'fixtures' ? 'catalogue/fixtures.json' : `catalogue/${mode}.json`,
+    snapshotPath: 'catalogue/snapshots/1.json',
+    snapshotSha256: 'a'.repeat(64),
+    featuredStoryId: null,
+    stories: [],
+    excluded: [],
+    appVersion: null,
+    deploymentId: null,
+    deploymentUrl: null,
+    builtAt: '2026-11-15T00:00:00.000Z',
+    fetches:
+      mode === 'fixtures'
+        ? []
+        : [
+            {
+              path: `catalogue/${mode}.json`,
+              status: 200,
+              cfCacheStatus: null,
+              age: null,
+              pop: null,
+              sha256: null,
+              ms: 1,
+            },
+          ],
+  }
+}
+
+describe('[content-outputs] (C-2): content outputs exist exactly when content was loaded', () => {
+  const bytesOf = (mode: GateMode) => new Uint8Array(jcsBytes(buildInfo(mode)))
+  const NONE: ContentOutputs = {
+    contentDir: false,
+    contentBuildInfo: null,
+    publicBuildInfoExists: false,
+    publicBuildInfo: null,
+  }
+  const loaded = (mode: GateMode): ContentOutputs => ({
+    contentDir: true,
+    contentBuildInfo: bytesOf(mode),
+    publicBuildInfoExists: true,
+    publicBuildInfo: bytesOf(mode),
+  })
+
+  describe.each([
+    [undefined, 'unset'],
+    ['', 'empty'],
+    ['none', 'none'],
+  ])('CONTENT_SOURCE %j (%s)', (source, name) => {
+    it('passes with no outputs', () => {
+      expect(checkContentOutputs(source, NONE)).toEqual([])
+    })
+
+    it('fails on a stray .content/', () => {
+      expect(checkContentOutputs(source, { ...NONE, contentDir: true })).toEqual([
+        `[content-outputs] .content/ exists, but CONTENT_SOURCE is ${name}`,
+      ])
+    })
+
+    it('fails on a stray public/build-info.json, a file or not', () => {
+      const expected = [
+        `[content-outputs] public/build-info.json exists, but CONTENT_SOURCE is ${name}`,
+      ]
+      expect(
+        checkContentOutputs(source, {
+          ...NONE,
+          publicBuildInfoExists: true,
+          publicBuildInfo: bytesOf('fixtures'),
+        }),
+      ).toEqual(expected)
+      expect(checkContentOutputs(source, { ...NONE, publicBuildInfoExists: true })).toEqual(
+        expected,
+      )
+    })
+
+    it('fails on both, naming each', () => {
+      expect(checkContentOutputs(source, loaded('fixtures'))).toEqual([
+        `[content-outputs] .content/ exists, but CONTENT_SOURCE is ${name}`,
+        `[content-outputs] public/build-info.json exists, but CONTENT_SOURCE is ${name}`,
+      ])
+    })
+  })
+
+  it.each<[string, GateMode]>([
+    ['fixtures', 'fixtures'],
+    ['storage', 'production'],
+    ['storage', 'staging'],
+  ])('CONTENT_SOURCE=%s passes with equal %s build-info copies', (source, mode) => {
+    expect(checkContentOutputs(source, loaded(mode))).toEqual([])
+  })
+
+  it.each<[string, GateMode, string]>([
+    [
+      'fixtures',
+      'staging',
+      'build-info mode is staging, but CONTENT_SOURCE=fixtures needs fixtures',
+    ],
+    [
+      'fixtures',
+      'production',
+      'build-info mode is production, but CONTENT_SOURCE=fixtures needs fixtures',
+    ],
+    [
+      'storage',
+      'fixtures',
+      'build-info mode is fixtures, but CONTENT_SOURCE=storage needs production or staging',
+    ],
+  ])('CONTENT_SOURCE=%s fails on a %s build-info', (source, mode, message) => {
+    expect(checkContentOutputs(source, loaded(mode))).toEqual([`[content-outputs] ${message}`])
+  })
+
+  it.each(['fixtures', 'storage'])('CONTENT_SOURCE=%s fails on a missing copy', (source) => {
+    const mode: GateMode = source === 'fixtures' ? 'fixtures' : 'staging'
+    expect(checkContentOutputs(source, { ...loaded(mode), contentBuildInfo: null })).toEqual([
+      `[content-outputs] missing .content/build-info.json (CONTENT_SOURCE=${source})`,
+    ])
+    expect(
+      checkContentOutputs(source, {
+        ...loaded(mode),
+        publicBuildInfoExists: false,
+        publicBuildInfo: null,
+      }),
+    ).toEqual([`[content-outputs] missing public/build-info.json (CONTENT_SOURCE=${source})`])
+    expect(checkContentOutputs(source, NONE)).toEqual([
+      `[content-outputs] missing .content/build-info.json (CONTENT_SOURCE=${source})`,
+      `[content-outputs] missing public/build-info.json (CONTENT_SOURCE=${source})`,
+    ])
+  })
+
+  it('fails on copies that differ by one byte', () => {
+    const other = bytesOf('fixtures')
+    other[other.length - 2] = other[other.length - 2] === 0x30 ? 0x31 : 0x30
+    expect(
+      checkContentOutputs('fixtures', { ...loaded('fixtures'), publicBuildInfo: other }),
+    ).toEqual(['[content-outputs] .content/build-info.json and public/build-info.json differ'])
+  })
+
+  it('fails on equal copies that are not JSON or fail the strict parse', () => {
+    const text = (value: string) => new TextEncoder().encode(value)
+    const with_ = (bytes: Uint8Array): ContentOutputs => ({
+      ...loaded('fixtures'),
+      contentBuildInfo: bytes,
+      publicBuildInfo: bytes,
+    })
+    expect(checkContentOutputs('fixtures', with_(text('{')))).toEqual([
+      '[content-outputs] .content/build-info.json is not valid JSON',
+    ])
+    expect(
+      checkContentOutputs('fixtures', with_(jcsBytes({ ...buildInfo('fixtures'), extra: 1 }))),
+    ).toEqual(['[content-outputs] .content/build-info.json failed strict parse'])
+  })
+
+  it('fails on any other CONTENT_SOURCE without echoing it', () => {
+    const value = ['some', 'other', 'value'].join('_')
+    const failures = checkContentOutputs(value, loaded('fixtures'))
+    expect(failures).toEqual(['[content-outputs] CONTENT_SOURCE is not storage, fixtures or none'])
+    expect(JSON.stringify(failures)).not.toContain(value)
   })
 })

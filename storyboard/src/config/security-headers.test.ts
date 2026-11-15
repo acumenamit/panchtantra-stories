@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   checkBuildNodeEnv,
   checkContentBaseUrl,
+  CONTENT_PUBLIC_BASE,
+  CONTENT_PUBLIC_PATH,
   contentSecurityPolicy,
   DISABLED_FEATURES,
   MEDIA_ORIGIN,
@@ -52,6 +54,40 @@ describe('contentSecurityPolicy', () => {
     expect(MEDIA_ORIGIN).toBe('https://wlunxatrekiqygwphkgy.supabase.co')
     expect(SPEC_CSP).toContain(`img-src 'self' ${MEDIA_ORIGIN};`)
     expect(SPEC_CSP).toContain(`media-src 'self' ${MEDIA_ORIGIN};`)
+  })
+})
+
+describe('CONTENT_PUBLIC_PATH and CONTENT_PUBLIC_BASE (P1-2b)', () => {
+  it('pin the public content bucket path and the committed base URL', () => {
+    expect(CONTENT_PUBLIC_PATH).toBe('/storage/v1/object/public/content')
+    expect(CONTENT_PUBLIC_BASE).toBe(
+      'https://wlunxatrekiqygwphkgy.supabase.co/storage/v1/object/public/content',
+    )
+    expect(CONTENT_PUBLIC_BASE).toBe(`${MEDIA_ORIGIN}${CONTENT_PUBLIC_PATH}`)
+  })
+
+  it('is a URL on the media origin with no trailing slash, query or fragment', () => {
+    const url = new URL(CONTENT_PUBLIC_BASE)
+    expect(url.origin).toBe(MEDIA_ORIGIN)
+    expect(url.href).toBe(CONTENT_PUBLIC_BASE)
+    expect(url.pathname).toBe(CONTENT_PUBLIC_PATH)
+    expect(CONTENT_PUBLIC_BASE.endsWith('/')).toBe(false)
+    expect(url.search).toBe('')
+    expect(url.hash).toBe('')
+  })
+
+  it('passes the next build base-URL check, with and without a trailing slash', () => {
+    expect(baseUrlError(CONTENT_PUBLIC_BASE)).toBeNull()
+    expect(baseUrlError(`${CONTENT_PUBLIC_BASE}/`)).toBeNull()
+  })
+
+  it('leaves the CSP byte for byte as before: it names the origin only, never the path', () => {
+    for (const env of [{ NODE_ENV: 'production' }, { NODE_ENV: 'test' }, {}]) {
+      expect(contentSecurityPolicy(env)).toBe(SPEC_CSP)
+      expect(securityHeaders(env)[0]).toEqual({ key: 'Content-Security-Policy', value: SPEC_CSP })
+    }
+    expect(SPEC_CSP).not.toContain(CONTENT_PUBLIC_PATH)
+    expect(SPEC_CSP).not.toContain('/storage')
   })
 })
 

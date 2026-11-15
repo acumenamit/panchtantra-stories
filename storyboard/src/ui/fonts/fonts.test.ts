@@ -2,6 +2,8 @@
 // texts match fonts.lock.json byte for byte, fonts/index.ts names exactly the locked files, and the
 // faces cover the Hindi text the reader ships. Glyphs are read with next's bundled fontkit (an
 // internal path, no new package: a Next upgrade that moves it fails here loudly, design R7).
+// P1-2b (design p1-step8-design.md §2 fonts.test row, §5.6): the validator's RENDERED_SCRIPTS (T006)
+// is pinned to the scripts these faces render.
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -9,6 +11,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { RENDERED_SCRIPTS, scriptProblem } from '../../core/validator/text'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const storyboard = resolve(here, '../../..')
@@ -392,6 +395,62 @@ describe('glyph coverage', () => {
     }
     for (const { file, font } of latinFonts) {
       expect(viaLatin.filter((cp) => !font.hasGlyphForCodePoint(cp)).map(hex), file).toEqual([])
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// T006 (design p1-step8-design.md §2 fonts.test row, §5.6, R17; P1-2b). RENDERED_SCRIPTS names the
+// scripts the shipped faces render, not every script they cover: Lora also has Cyrillic, which is
+// deliberately not a rendered script, and Lora lacks many rarer Latin letters, so T006 stays
+// script-level and this file stays the glyph guard. Adding a script means updating both.
+
+const codeRange = (start: number, end: number): number[] =>
+  Array.from({ length: end - start + 1 }, (_, i) => start + i)
+const isMatch =
+  (pattern: RegExp) =>
+  (cp: number): boolean =>
+    pattern.test(String.fromCodePoint(cp))
+const t006Hits = (cps: readonly number[]): string[] =>
+  cps.filter((cp) => scriptProblem(String.fromCodePoint(cp)) !== null).map(hex)
+
+describe('rendered scripts (T006)', () => {
+  it('pins RENDERED_SCRIPTS to exactly Latin and Devanagari', () => {
+    expect(RENDERED_SCRIPTS).toEqual(['Latn', 'Deva'])
+  })
+
+  it('Latin: every letter of U+0041-005A, U+0061-007A and U+00C0-00FF is in Lora and inside the Noto Latin subset', () => {
+    const letters = [
+      ...codeRange(0x41, 0x5a),
+      ...codeRange(0x61, 0x7a),
+      ...codeRange(0xc0, 0xff),
+    ].filter(isMatch(/^\p{L}$/u))
+    // 26 + 26 + 62: U+00D7 and U+00F7 are not letters.
+    expect(letters).toHaveLength(114)
+    expect(letters.filter((cp) => !isMatch(/^\p{scx=Latn}$/u)(cp)).map(hex)).toEqual([])
+    expect(t006Hits(letters)).toEqual([])
+    const lora = openFont('lora-wght.woff2')
+    expect(letters.filter((cp) => !lora.hasGlyphForCodePoint(cp)).map(hex)).toEqual([])
+    const latinRanges = rangesOf('devanagariLatin')
+    expect(letters.filter((cp) => !inRanges(latinRanges, cp)).map(hex)).toEqual([])
+    for (const file of filesOf('devanagariLatin')) {
+      const font = openFont(file)
+      expect(letters.filter((cp) => !font.hasGlyphForCodePoint(cp)).map(hex), file).toEqual([])
+    }
+  })
+
+  it('Devanagari: every letter, mark and digit Unicode assigns in U+0900-097F is in both Noto Sans Devanagari files', () => {
+    const assigned = codeRange(0x900, 0x97f).filter(isMatch(/^[\p{L}\p{M}\p{N}]$/u))
+    expect(assigned).toHaveLength(125)
+    expect(t006Hits(assigned)).toEqual([])
+    const ranges = rangesOf('devanagari')
+    expect(assigned.filter((cp) => !inRanges(ranges, cp)).map(hex)).toEqual([])
+    const files = filesOf('devanagari')
+    expect(files).toHaveLength(2)
+    for (const file of files) {
+      const font = openFont(file)
+      expect(font.familyName).toBe('Noto Sans Devanagari')
+      expect(assigned.filter((cp) => !font.hasGlyphForCodePoint(cp)).map(hex), file).toEqual([])
     }
   })
 })

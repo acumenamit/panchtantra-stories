@@ -18,6 +18,14 @@ export interface SecurityHeader {
  */
 export const MEDIA_ORIGIN = 'https://wlunxatrekiqygwphkgy.supabase.co'
 
+/**
+ * The public path of the `content` bucket, and the one base URL the content loader accepts and
+ * pages build media URLs from (spec §3.5, D3; design p1-step8-design.md §3.4 row 19, §9 item 4;
+ * P1-2b). Not part of the CSP, which names only MEDIA_ORIGIN.
+ */
+export const CONTENT_PUBLIC_PATH = '/storage/v1/object/public/content'
+export const CONTENT_PUBLIC_BASE = MEDIA_ORIGIN + CONTENT_PUBLIC_PATH
+
 // The spec §9 CSP, directive by directive and in the spec's order.
 const CSP_DIRECTIVES: readonly (readonly [name: string, sources: readonly string[]])[] = [
   ['default-src', ["'self'"]],

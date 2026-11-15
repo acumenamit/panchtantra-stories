@@ -1,4 +1,4 @@
-// Pure text helpers for validator checks.
+// Pure text helpers for validator checks. P1-2b adds T006 (design p1-step8-design.md §5.6).
 
 export function wordCount(s: string): number {
   const t = s.trim()
@@ -19,6 +19,36 @@ export function textHygiene(s: string): { checkId: string; message: string }[] {
     out.push({ checkId: 'T004', message: 'Unbalanced *emphasis* asterisks' })
   if (HTML_OR_URL.test(s)) out.push({ checkId: 'T005', message: 'HTML or URL in text' })
   return out
+}
+
+/**
+ * The scripts the shipped faces render (design p1-step8-design.md §5.6; P1-2b): Latin (Lora, and
+ * the Noto Latin subset in Hindi text) and Devanagari (Noto Sans Devanagari).
+ * src/ui/fonts/fonts.test.ts pins this list to the faces; adding a script means updating both.
+ */
+export const RENDERED_SCRIPTS = ['Latn', 'Deva'] as const
+
+const SCRIPT_CHECKED = /[\p{L}\p{M}\p{N}]/u
+/** Script_Extensions in a rendered script, or Common (Zyyy) or Inherited (Zinh). */
+const SCRIPT_RENDERED = new RegExp(
+  `[${[...RENDERED_SCRIPTS, 'Zyyy', 'Zinh'].map((s) => String.raw`\p{scx=${s}}`).join('')}]`,
+  'u',
+)
+const SCRIPT_LISTED_MAX = 5
+
+/**
+ * T006: every letter, mark and digit has Script_Extensions in RENDERED_SCRIPTS, Common or
+ * Inherited. Returns null, or the message listing the first 5 distinct code points outside them.
+ */
+export function scriptProblem(s: string): string | null {
+  const outside: string[] = []
+  for (const ch of s) {
+    if (!SCRIPT_CHECKED.test(ch) || SCRIPT_RENDERED.test(ch)) continue
+    const cp = `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`
+    if (!outside.includes(cp)) outside.push(cp)
+    if (outside.length === SCRIPT_LISTED_MAX) break
+  }
+  return outside.length === 0 ? null : `Letters outside the rendered scripts: ${outside.join(' ')}`
 }
 
 const QUOTES = /["“”]/gu

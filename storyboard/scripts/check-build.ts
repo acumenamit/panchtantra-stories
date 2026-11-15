@@ -18,6 +18,11 @@
 //   raw or \uXXXX-escaped in either hex case (a minifier may escape Devanagari and ’).
 // - A missing file is a failure, never a skip. It prints the launch line once (the only place it
 //   is printed: next.config is loaded by several build workers), then each failed rule by name.
+// - [content-outputs] (C-2; design p1-step8-design.md §3.3, §9 item 35; P1-2b): .content/ and
+//   public/build-info.json exist exactly when the loader loaded content. With CONTENT_SOURCE
+//   unset, empty or none neither exists, so a gated build proves /build-info.json cannot be
+//   served; with fixtures or storage both build-info copies exist, are byte-equal and name a mode
+//   that agrees with CONTENT_SOURCE.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +34,13 @@ import {
   type LaunchDecision,
 } from '../src/config/launch'
 import { APP_NAME } from '../src/core/app-info'
+import { BuildInfo } from '../src/core/content/build-info'
+import {
+  BUILD_INFO_FILE,
+  CONTENT_DIR,
+  PUBLIC_BUILD_INFO_FILE,
+  PUBLIC_DIR,
+} from '../src/core/content/output-layout'
 import {
   ENABLED_LOCALE_CODES,
   isEnabledLocale,
@@ -385,6 +397,100 @@ export function readCatalogues(root: string): CatalogueValue[] {
   })
 }
 
+/** What [content-outputs] reads from the storyboard folder. */
+export interface ContentOutputs {
+  /** Something exists at .content/. */
+  readonly contentDir: boolean
+  /** .content/build-info.json; null when missing or not a file. */
+  readonly contentBuildInfo: Uint8Array | null
+  /** Something exists at public/build-info.json. */
+  readonly publicBuildInfoExists: boolean
+  /** public/build-info.json; null when missing or not a file. */
+  readonly publicBuildInfo: Uint8Array | null
+}
+
+/** The build-info modes each loading CONTENT_SOURCE may produce. */
+const CONTENT_MODES: Readonly<Record<'fixtures' | 'storage', readonly string[]>> = {
+  fixtures: ['fixtures'],
+  storage: ['production', 'staging'],
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i])
+}
+
+/**
+ * Rule [content-outputs] (C-2, design p1-step8-design.md §3.3). `contentSource` is this process's
+ * CONTENT_SOURCE; an empty value counts as unset, as in the loader. Messages name enums and file
+ * names only, never a value.
+ */
+export function checkContentOutputs(
+  contentSource: string | undefined,
+  outputs: ContentOutputs,
+): string[] {
+  const failures: string[] = []
+  const fail = (message: string): void => {
+    failures.push(`[content-outputs] ${message}`)
+  }
+  const source = contentSource ?? ''
+  if (source === '' || source === 'none') {
+    const name = contentSource === undefined ? 'unset' : source === '' ? 'empty' : 'none'
+    if (outputs.contentDir) fail(`.content/ exists, but CONTENT_SOURCE is ${name}`)
+    if (outputs.publicBuildInfoExists) {
+      fail(`public/build-info.json exists, but CONTENT_SOURCE is ${name}`)
+    }
+    return failures
+  }
+  if (source !== 'fixtures' && source !== 'storage') {
+    fail('CONTENT_SOURCE is not storage, fixtures or none')
+    return failures
+  }
+  const { contentBuildInfo, publicBuildInfo } = outputs
+  if (contentBuildInfo === null) fail(`missing .content/build-info.json (CONTENT_SOURCE=${source})`)
+  if (publicBuildInfo === null) fail(`missing public/build-info.json (CONTENT_SOURCE=${source})`)
+  if (contentBuildInfo === null || publicBuildInfo === null) return failures
+  if (!bytesEqual(contentBuildInfo, publicBuildInfo)) {
+    fail('.content/build-info.json and public/build-info.json differ')
+    return failures
+  }
+  let parsed: ReturnType<typeof BuildInfo.safeParse>
+  try {
+    parsed = BuildInfo.safeParse(JSON.parse(new TextDecoder().decode(contentBuildInfo)))
+  } catch {
+    fail('.content/build-info.json is not valid JSON')
+    return failures
+  }
+  if (!parsed.success) {
+    fail('.content/build-info.json failed strict parse')
+    return failures
+  }
+  const expected = CONTENT_MODES[source]
+  if (!expected.includes(parsed.data.mode)) {
+    fail(
+      `build-info mode is ${parsed.data.mode}, but CONTENT_SOURCE=${source} needs ${expected.join(' or ')}`,
+    )
+  }
+  return failures
+}
+
+/** Reads the loader's outputs under <root> (output-layout.ts names), for [content-outputs]. */
+export function readContentOutputs(root: string): ContentOutputs {
+  const file = (path: string): Uint8Array | null => {
+    try {
+      return new Uint8Array(readFileSync(path))
+    } catch {
+      return null // missing, or a folder
+    }
+  }
+  const publicPath = join(root, PUBLIC_DIR, PUBLIC_BUILD_INFO_FILE)
+  return {
+    contentDir: existsSync(join(root, CONTENT_DIR)),
+    contentBuildInfo: file(join(root, CONTENT_DIR, BUILD_INFO_FILE)),
+    publicBuildInfoExists: existsSync(publicPath),
+    publicBuildInfo: file(publicPath),
+  }
+}
+
 export interface CheckBuildOptions {
   readonly root: string
   readonly env: Env
@@ -414,6 +520,18 @@ export function runCheckBuild(options: CheckBuildOptions): number {
     const reason = error instanceof Error ? error.message : 'unknown'
     result = { launchLine: launchLogLine(decision), failures: [`[read] ${reason}`] }
   }
+  // C-2 runs whatever the build output gave, so a gated build always proves its content outputs.
+  let contentFailures: string[]
+  try {
+    contentFailures = checkContentOutputs(
+      options.env.CONTENT_SOURCE,
+      readContentOutputs(options.root),
+    )
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown'
+    contentFailures = [`[content-outputs] unreadable: ${reason}`]
+  }
+  result = { ...result, failures: [...result.failures, ...contentFailures] }
   log(result.launchLine)
   if (result.failures.length === 0) {
     log('check-build: ok')

@@ -1,3 +1,10 @@
+// The content loader (spec §3.2; P1-2a; P1-2b design p1-step8-design.md §4, §6, §7, §9, §10.1):
+// in-process loadContent against the local Storage stub (scripts/testing/stub-storage.ts) with a
+// temp root, fixtures mode on copies of the committed fixtures, resolveConfig, and the real process.
+// Against vacuous passes (design §10.1): each stub test asserts the exact request list it expects;
+// HEAD property tests run over exactly N > 0 HEADs; deadline tests set the per-attempt timeout above
+// the deadline; Storage tests serve jcsBytes of the fixture packages (the committed files are not
+// canonical JCS) with the matching sha256 and packagePath.
 import { spawnSync } from 'node:child_process'
 import {
   cpSync,
@@ -12,121 +19,102 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import ts from 'typescript'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CONTENT_PUBLIC_BASE } from '../src/config/security-headers'
 import { BuildInfo } from '../src/core/content/build-info'
 import type { GateMode } from '../src/core/content/gates'
+import type { MediaPackage } from '../src/core/content/media'
 import type { SnapshotEntry } from '../src/core/content/packages'
 import { jcsBytes, sha256Hex, toJcs } from '../src/core/hashing'
-import type { CatalogueSnapshot } from '../src/core/package/catalogue'
+import type { CatalogueSnapshot, WaiverKeys } from '../src/core/package/catalogue'
 import {
   makePointer,
   makeSnapshot,
   pointerPath,
   snapshotPath,
 } from '../src/core/package/catalogue-build'
+import { StoryPackageV1 } from '../src/core/package/v1'
+import { findingFingerprint } from '../src/core/validator/waivers'
 import { buildCatalogue, readFixtureEntries, writeCatalogue } from './build-fixtures-catalogue'
+import { createFileSource } from './content/file-source'
+import { runMediaGate } from './content/media-gate'
+import { startDeadline } from './content/request'
 import {
+  BASE_URL_REFUSED,
+  environmentLine,
+  FIXTURES_REFUSED_HERE,
   isEntryPoint,
   loadContent,
   loadPackages,
   MAX_BODY_BYTES,
   objectUrl,
   popFromCfRay,
+  POINTER_ROOTS,
   resolveConfig,
   vercelEnvName,
   type Env,
   type LoaderOptions,
 } from './load-content'
+import {
+  drop,
+  json,
+  neverAnswer,
+  redirect,
+  serveObject,
+  slow,
+  stallBody,
+  startStubStorage,
+  status,
+  STUB_PREFIX,
+  truncateBody,
+  type StubHandler,
+  type StubStorage,
+} from './testing/stub-storage'
 
-const PREFIX = '/storage/v1/object/public/content/'
 const NOW = new Date('2026-11-07T10:00:00.000Z')
 const SHA = 'e'.repeat(64)
+const APPROVAL = 'a'.repeat(64)
 const COMMIT = '1ab6342c0ffee1ab6342c0ffee1ab6342c0ffee0'
 // Joined at runtime so no file holds a string shaped like a real key (secret scanners on push).
 const SECRETISH = ['sb', 'secret', 'should_never_print'].join('_')
 
-type Handler = (req: IncomingMessage, res: ServerResponse) => void
-interface SeenRequest {
-  readonly method: string
-  readonly path: string
-  readonly query: URLSearchParams
-  readonly headers: IncomingHttpHeaders
-}
+const STORAGE_ENV_LINE =
+  'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=linux'
+const FIXTURES_ENV_LINE =
+  'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=win32'
 
-let server: Server
+let stub: StubStorage
 let baseUrl: string
-/** Per object path, the handlers for successive requests; the last one repeats. */
-let routes: Map<string, Handler[]>
-let seen: SeenRequest[]
 let root: string
 let out: string[]
 let errors: string[]
 let sleeps: number[]
 
-beforeAll(async () => {
-  server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-    const path = url.pathname.startsWith(PREFIX) ? url.pathname.slice(PREFIX.length) : url.pathname
-    seen.push({ method: req.method ?? '', path, query: url.searchParams, headers: req.headers })
-    const queue = routes.get(path)
-    const handler = queue && queue.length > 1 ? queue.shift() : queue?.[0]
-    ;(handler ?? status(404))(req, res)
-  })
-  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}${PREFIX.slice(0, -1)}`
-})
-
-afterAll(async () => {
-  server.closeAllConnections()
-  await new Promise<void>((done) => server.close(() => done()))
-})
-
-beforeEach(() => {
-  routes = new Map()
-  seen = []
+// A fresh stub per test: a HEAD a stopped pool had already sent can reach the server after its
+// test ended, and must never land in the next test's request log or in-flight count.
+beforeEach(async () => {
+  stub = await startStubStorage()
+  baseUrl = stub.baseUrl
   out = []
   errors = []
   sleeps = []
   root = mkdtempSync(join(tmpdir(), 'load-content-'))
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await stub.close()
   rmSync(root, { recursive: true, force: true })
 })
 
-// ---- server handlers ----
+const seen = () => stub.requests
+const requestList = () => seen().map((r) => [r.method, r.path])
+const route = (path: string, ...handlers: StubHandler[]) => stub.queue(path, ...handlers)
 
-const CDN_HEADERS = { 'cf-cache-status': 'MISS', 'cf-ray': '8f1a2b3c4d5e6f70-BOM', age: '0' }
-
-function json(bytes: Uint8Array, type = 'application/json'): Handler {
-  return (_req, res) => {
-    res.writeHead(200, { 'content-type': type, 'content-length': bytes.length, ...CDN_HEADERS })
-    res.end(bytes)
-  }
-}
-
-function status(code: number, headers: Record<string, string> = {}): Handler {
-  return (_req, res) => {
-    res.writeHead(code, { 'content-type': 'application/json', ...headers })
-    res.end('{"error":"x"}')
-  }
-}
-
-const dropConnection: Handler = (req) => req.socket.destroy()
-const neverAnswer: Handler = () => undefined
-
-// ---- fixtures ----
+// ---- catalogue ----
 
 interface Published {
   readonly pointerPath: string
@@ -164,8 +152,8 @@ async function publish(
     updatedAt: NOW.toISOString(),
   })
   const pPath = pointerPath(o.mode ?? 'production', o.root)
-  routes.set(pPath, [json(pointer.bytes)])
-  routes.set(sPath, [json(snapshot.bytes, 'application/json; charset=utf-8')])
+  stub.put(pPath, pointer.bytes, 'application/json')
+  stub.put(sPath, snapshot.bytes, 'application/json; charset=utf-8')
   return {
     pointerPath: pPath,
     snapshotPath: sPath,
@@ -186,6 +174,7 @@ const run = (env: Env, extra: Partial<LoaderOptions> = {}) =>
   loadContent({
     env,
     root,
+    platform: 'linux',
     now: () => NOW,
     log: (line) => void out.push(line),
     logError: (line) => void errors.push(line),
@@ -233,6 +222,165 @@ function withLinkedFolder<T>(target: string, body: (link: string) => T): T {
     rmdirSync(parent) // not recursive: it refuses to run if the link were still there
   }
 }
+
+// ---- Storage packages and synthetic media ----
+
+type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
+
+const storyboardDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+const FIXTURE_IDS = ['lantern-walk', 'river-stones', 'two-paths']
+
+const fixturePackage = (storyId: string): Json =>
+  JSON.parse(readFileSync(join(storyboardDir, 'fixtures', 'packages', `${storyId}.json`), 'utf8'))
+
+interface Served {
+  readonly entry: SnapshotEntry
+  readonly pkg: Json
+  readonly bytes: Uint8Array<ArrayBuffer>
+}
+
+/**
+ * A committed fixture package, changed by `mutate`, served as canonical JCS at the spec layout
+ * `<root>packages/<storyId>/<sha256>.json`, with its snapshot entry.
+ */
+async function servePackage(
+  storyId: string,
+  o: {
+    root?: string
+    mutate?: (pkg: Json) => void
+    approved?: boolean
+    waivers?: WaiverKeys
+    serve?: boolean
+  } = {},
+): Promise<Served> {
+  const pkg = fixturePackage(storyId)
+  o.mutate?.(pkg)
+  const bytes = jcsBytes(pkg)
+  const packageSha256 = await sha256Hex(bytes)
+  const entry: SnapshotEntry = {
+    storyId,
+    collectionId: pkg.collectionId,
+    version: pkg.version,
+    packagePath: `${o.root ?? ''}packages/${storyId}/${packageSha256}.json`,
+    packageSha256,
+    ...(o.approved ? { approvalSha256: APPROVAL } : {}),
+    ...(o.waivers ? { waivers: o.waivers } : {}),
+  }
+  if (o.serve !== false) stub.put(entry.packagePath, bytes, 'application/json')
+  return { entry, pkg, bytes }
+}
+
+type MediaMime = 'image/webp' | 'image/jpeg' | 'audio/mpeg'
+const EXT: Record<MediaMime, string> = {
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
+  'audio/mpeg': 'mp3',
+}
+
+interface MediaVariant {
+  readonly path: string
+  readonly mime: MediaMime
+  readonly bytes: number
+}
+
+const hex64 = (n: number) => n.toString(16).padStart(64, '0')
+const variantPath = (storyId: string, n: number, name: string, mime: MediaMime, prefix = '') =>
+  `${prefix}media/${storyId}/${hex64(n)}-${name}.${EXT[mime]}`
+
+/** Adds an image asset (id hex64(n)) with these variants; returns them. */
+function addImage(
+  pkg: Json,
+  n: number,
+  variants: readonly (readonly [name: string, mime: MediaMime, bytes: number])[],
+  prefix = '',
+): MediaVariant[] {
+  const list = variants.map(([name, mime, bytes]) => ({
+    path: variantPath(pkg.storyId, n, name, mime, prefix),
+    mime,
+    bytes,
+  }))
+  pkg.assets.push({
+    kind: 'image',
+    id: hex64(n),
+    width: 800,
+    height: 600,
+    variants: list.map((v) => ({ ...v, width: 800 })),
+    provenance: { origin: 'human' },
+  })
+  return list
+}
+
+/** Adds an audio asset (id hex64(n)) for one node and locale; returns its one variant. */
+function addAudio(
+  pkg: Json,
+  n: number,
+  nodeId: string,
+  locale: string,
+  bytes: number,
+  prefix = '',
+): MediaVariant {
+  const variant = {
+    path: variantPath(pkg.storyId, n, 'mp3', 'audio/mpeg', prefix),
+    mime: 'audio/mpeg' as const,
+    bytes,
+  }
+  pkg.assets.push({
+    kind: 'audio',
+    id: hex64(n),
+    nodeId,
+    locale,
+    durationMs: 1000,
+    variants: [variant],
+    provenance: { origin: 'human' },
+    narratedTextSha256: SHA,
+  })
+  return variant
+}
+
+/** Stores each variant as an object of exactly its declared size and type. */
+function serveMedia(variants: readonly MediaVariant[]): void {
+  for (const v of variants) stub.put(v.path, new Uint8Array(v.bytes), v.mime)
+}
+
+/** Every node pictured and narrated in every locale (a package the featured rule keeps). */
+function addFullMedia(pkg: Json): MediaVariant[] {
+  const variants: MediaVariant[] = []
+  let n = 100
+  for (const node of pkg.nodes) {
+    const id = n++
+    variants.push(...addImage(pkg, id, [['w800', 'image/webp', 2000 + id]]))
+    node.image = hex64(id)
+    for (const locale of pkg.locales) variants.push(addAudio(pkg, n++, node.id, locale, 3000 + n))
+  }
+  return variants
+}
+
+/** The GETs of a staging load of these packages: pointer, snapshot, then each package in order. */
+const stagingGets = (...served: readonly Served[]) => [
+  ['GET', 'catalogue/staging.json'],
+  ['GET', 'catalogue/snapshots/1.json'],
+  ...served.map((s) => ['GET', s.entry.packagePath]),
+]
+
+const fetchLine = async (path: string, bytes: Uint8Array, seq = '-') =>
+  `content: fetch path=${path} status=200 cf=MISS age=0 pop=BOM sha=${await sha12(bytes)} seq=${seq}`
+
+const packageLine = (entry: SnapshotEntry, waived = 0) =>
+  expect.stringMatching(
+    new RegExp(
+      `^content: package story=${entry.storyId} version=${entry.version} sha=${entry.packageSha256.slice(0, 12)} errors=0 waived=${waived} warnings=\\d+ info=\\d+$`,
+    ),
+  )
+
+const skippedLine = (storyId: string) =>
+  `content: validator skipped E016,E017,E018 for story=${storyId} (private word lists not loaded)`
+
+const summaryLine = (heads: number, ok: number, failed = 0, retried = 0) =>
+  expect.stringMatching(
+    new RegExp(
+      `^content: media heads=${heads} ok=${ok} failed=${failed} retried=${retried} ms=\\d+$`,
+    ),
+  )
 
 // ---- tests ----
 
@@ -295,24 +443,27 @@ describe('loadContent: storage mode, good content', () => {
     expect(existsSync(join(root, '.content', '.tmp'))).toBe(false)
   })
 
-  it('logs one line per GET and a final line', async () => {
+  it('logs the environment line, one line per GET, the media summary, featured and a final line', async () => {
     const pub = await publish()
     expect(await run(storageEnv())).toBe(0)
     expect(out).toEqual([
-      `content: fetch path=catalogue/production.json status=200 cf=MISS age=0 pop=BOM sha=${await sha12(pub.pointerBytes)} seq=1`,
-      `content: fetch path=catalogue/snapshots/1.json status=200 cf=MISS age=0 pop=BOM sha=${await sha12(pub.snapshotBytes)} seq=1`,
-      'content: mode=production seq=1 snapshot=catalogue/snapshots/1.json',
+      STORAGE_ENV_LINE,
+      await fetchLine('catalogue/production.json', pub.pointerBytes, '1'),
+      await fetchLine('catalogue/snapshots/1.json', pub.snapshotBytes, '1'),
+      summaryLine(0, 0),
+      'content: featured none',
+      'content: mode=production seq=1 snapshot=catalogue/snapshots/1.json stories=0 excluded=0 featured=none',
     ])
   })
 
   it('reads the pointer with a cacheNonce and the snapshot without a query, both with identity encoding', async () => {
     await publish()
     expect(await run(storageEnv())).toBe(0)
-    expect(seen.map((r) => [r.method, r.path, r.query.toString()])).toEqual([
+    expect(seen().map((r) => [r.method, r.path, r.query.toString()])).toEqual([
       ['GET', 'catalogue/production.json', `cacheNonce=${NOW.getTime()}`],
       ['GET', 'catalogue/snapshots/1.json', ''],
     ])
-    expect(seen.every((r) => r.headers['accept-encoding'] === 'identity')).toBe(true)
+    expect(seen().every((r) => r.headers['accept-encoding'] === 'identity')).toBe(true)
   })
 
   it('maps a staging pointer to staging mode and leaves Vercel values null outside Vercel', async () => {
@@ -332,37 +483,799 @@ describe('loadContent: storage mode, good content', () => {
     expect(readFileSync(join(root, 'public', 'keep.txt'), 'utf8')).toBe('not ours')
   })
 
-  it('excludes unapproved stories in production mode and logs each one', async () => {
-    await publish({
-      stories: [
-        {
-          storyId: 'two-paths',
-          collectionId: 'panchatantra',
-          version: 2,
-          packagePath: `packages/two-paths/${SHA}.json`,
-          packageSha256: SHA,
-        },
-      ],
+  it('loads a staging pointer, its packages in snapshot order and their media, and writes every output', async () => {
+    const media: MediaVariant[] = []
+    const lantern = await servePackage('lantern-walk')
+    const river = await servePackage('river-stones', {
+      mutate: (pkg) => {
+        media.push(
+          ...addImage(pkg, 1, [
+            ['w800', 'image/webp', 1200],
+            ['w400', 'image/webp', 600],
+          ]),
+          addAudio(pkg, 2, 'start', 'en', 3000),
+        )
+      },
     })
-    expect(await run(storageEnv())).toBe(0)
-    expect(readBuildInfo().excluded).toEqual([
-      { storyId: 'two-paths', version: 2, reason: 'approval-missing' },
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => void media.push(...addImage(pkg, 3, [['full', 'image/jpeg', 5000]])),
+    })
+    serveMedia(media)
+    const served = [lantern, river, two]
+    const pub = await publish({ mode: 'staging', stories: served.map((s) => s.entry) })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(errors).toEqual([])
+
+    // GETs one at a time in snapshot order, then exactly one HEAD per declared variant.
+    const list = requestList()
+    expect(list.slice(0, 5)).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ...served.map((s) => ['GET', s.entry.packagePath]),
     ])
-    expect(out).toContain('content: excluded story=two-paths version=2 reason=approval-missing')
+    expect(list.slice(5).sort()).toEqual(media.map((v) => ['HEAD', v.path]).sort())
+    expect(
+      seen()
+        .filter((r) => r.method === 'HEAD')
+        .every((r) => r.query.toString() === ''),
+    ).toBe(true)
+
+    const info = readBuildInfo()
+    expect(info.mode).toBe('staging')
+    expect(info.stories).toEqual(
+      served.map(({ entry }) => ({
+        storyId: entry.storyId,
+        version: entry.version,
+        packageSha256: entry.packageSha256,
+      })),
+    )
+    expect(info.featuredStoryId).toBeNull()
+    expect(info.excluded).toEqual([])
+    // build-info lists GETs only; HEADs are logged, never recorded.
+    expect(info.fetches.map((f) => [f.path, f.status])).toEqual([
+      ['catalogue/staging.json', 200],
+      ['catalogue/snapshots/1.json', 200],
+      ...served.map((s) => [s.entry.packagePath, 200]),
+    ])
+    expect(readdirSync(join(root, '.content', 'packages')).sort()).toEqual(
+      FIXTURE_IDS.map((id) => `${id}.json`),
+    )
+    for (const s of served) {
+      expect(
+        new Uint8Array(readFileSync(join(root, '.content', 'packages', `${s.entry.storyId}.json`))),
+      ).toEqual(s.bytes)
+    }
+
+    const expected: unknown[] = [
+      STORAGE_ENV_LINE,
+      await fetchLine('catalogue/staging.json', pub.pointerBytes, '1'),
+      await fetchLine('catalogue/snapshots/1.json', pub.snapshotBytes, '1'),
+    ]
+    for (const s of served) {
+      expected.push(
+        await fetchLine(s.entry.packagePath, s.bytes),
+        packageLine(s.entry),
+        skippedLine(s.entry.storyId),
+      )
+    }
+    expected.push(
+      'content: media story=lantern-walk variants=0 bytes=0 ok',
+      'content: media story=river-stones variants=3 bytes=4800 ok',
+      'content: media story=two-paths variants=1 bytes=5000 ok',
+      summaryLine(4, 4),
+      'content: featured none',
+      'content: mode=staging seq=1 snapshot=catalogue/snapshots/1.json stories=3 excluded=0 featured=none',
+    )
+    expect(out).toEqual(expected)
   })
 
-  it('never names a featured story that was not built', async () => {
-    await publish({ featuredStoryId: 'blue-jackal' })
+  it('loads a production pointer: excluded entries are logged and path-checked, never fetched or HEADed', async () => {
+    const media: MediaVariant[] = []
+    const lantern = await servePackage('lantern-walk', { approved: true })
+    const river = await servePackage('river-stones', {
+      approved: true,
+      mutate: (pkg) => void media.push(...addImage(pkg, 7, [['w800', 'image/webp', 900]])),
+    })
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => void addImage(pkg, 8, [['w800', 'image/webp', 900]]),
+    })
+    serveMedia(media)
+    await publish({ stories: [lantern.entry, two.entry, river.entry] })
     expect(await run(storageEnv())).toBe(0)
-    expect(readBuildInfo().featuredStoryId).toBeNull()
-    expect(out).toContain('content: featured story=blue-jackal is not built; featuredStoryId=null')
+    expect(errors).toEqual([])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/production.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ['GET', lantern.entry.packagePath],
+      ['GET', river.entry.packagePath],
+      ['HEAD', media[0]!.path],
+    ])
+    const info = readBuildInfo()
+    expect(info.stories.map((s) => s.storyId)).toEqual(['lantern-walk', 'river-stones'])
+    expect(info.excluded).toEqual([
+      { storyId: 'two-paths', version: 1, reason: 'approval-missing' },
+    ])
+    expect(out).toContain('content: excluded story=two-paths version=1 reason=approval-missing')
+    expect(out.at(-1)).toBe(
+      'content: mode=production seq=1 snapshot=catalogue/snapshots/1.json stories=2 excluded=1 featured=none',
+    )
+    expect(existsSync(join(root, '.content', 'packages', 'two-paths.json'))).toBe(false)
+  })
+
+  it('excludes unapproved stories in production mode and logs each one', async () => {
+    const two = await servePackage('two-paths', { serve: false })
+    await publish({ stories: [two.entry] })
+    expect(await run(storageEnv())).toBe(0)
+    expect(readBuildInfo().excluded).toEqual([
+      { storyId: 'two-paths', version: 1, reason: 'approval-missing' },
+    ])
+    expect(out).toContain('content: excluded story=two-paths version=1 reason=approval-missing')
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/production.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+    ])
+  })
+
+  it('applies the snapshot entry waiver keys: each waived finding and each unused key on its own line', async () => {
+    const parsed: { pkg?: StoryPackageV1 } = {}
+    const mutate = (pkg: Json) => {
+      pkg.text.en.nodes.start.question = 'Which way? Left or right?'
+      parsed.pkg = StoryPackageV1.parse(pkg)
+    }
+    // A first pass only to compute the fingerprint the key binds to.
+    await servePackage('two-paths', { mutate, serve: false })
+    const keys: WaiverKeys = {
+      ruleSetRef: 'panchatantra@3.0.0',
+      waiverFileSha256: 'b'.repeat(64),
+      keys: [
+        { checkId: 'E004', nodeId: 'start', locale: 'hi', nodeTextSha256: 'f'.repeat(64) },
+        {
+          checkId: 'E005',
+          nodeId: 'start',
+          locale: 'en',
+          nodeTextSha256: await findingFingerprint(parsed.pkg!, { nodeId: 'start', locale: 'en' }),
+        },
+      ],
+    }
+    const two = await servePackage('two-paths', { mutate, waivers: keys })
+    await publish({ mode: 'staging', stories: [two.entry] })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(errors).toEqual([])
+    expect(requestList()).toEqual(stagingGets(two))
+    const at = out.findIndex((line) => line.startsWith('content: package story=two-paths'))
+    expect(out.slice(at, at + 4)).toEqual([
+      packageLine(two.entry, 1),
+      'content: waived story=two-paths check=E005 node=start locale=en',
+      'content: waiver key unused story=two-paths check=E004 node=start locale=hi (no matching finding)',
+      skippedLine('two-paths'),
+    ])
   })
 })
 
-describe('loadContent: retries', () => {
+describe('loadContent: storage packages fail closed', () => {
+  /** One staging entry, two-paths, with the given serving; returns it. */
+  async function oneStory(o: Parameters<typeof servePackage>[1] = {}): Promise<Served> {
+    const two = await servePackage('two-paths', o)
+    await publish({ mode: 'staging', stories: [two.entry] })
+    return two
+  }
+
+  async function expectFailure(lines: readonly string[]): Promise<void> {
+    plantStaleOutputs()
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(errors).toEqual(lines)
+    expectNoOutputs()
+  }
+
+  const GETS = stagingGets
+
+  it('fails on a missing package object (Supabase answers 400) without retrying', async () => {
+    const two = await oneStory({ serve: false })
+    await expectFailure(['content gate failed: package two-paths GET returned status 400'])
+    expect(requestList()).toEqual(GETS(two))
+    expect(sleeps).toEqual([])
+  })
+
+  it('retries a 5xx package answer, then loads it', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, status(503), json(two.bytes))
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(requestList()).toEqual([...GETS(two), ['GET', two.entry.packagePath]])
+    expect(sleeps).toEqual([1_000])
+    expect(readBuildInfo().fetches.map((f) => f.status)).toEqual([200, 200, 503, 200])
+  })
+
+  it('retries a 429 after its Retry-After of 2 s, then loads it', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, status(429, { 'retry-after': '2' }), json(two.bytes))
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(requestList()).toEqual([...GETS(two), ['GET', two.entry.packagePath]])
+    expect(sleeps).toEqual([2_000])
+  })
+
+  it('fails at once when Retry-After asks for more than 10 s', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, status(429, { 'retry-after': '11' }))
+    await expectFailure(['content gate failed: package two-paths GET asked to wait 11 s'])
+    expect(requestList()).toEqual(GETS(two))
+    expect(sleeps).toEqual([])
+  })
+
+  it('fails on a package content-type other than application/json', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, json(two.bytes, 'text/plain'))
+    await expectFailure([
+      'content gate failed: package two-paths content-type must be application/json, got text/plain',
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('fails on a package larger than 1 MiB', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, json(new Uint8Array(MAX_BODY_BYTES + 1)))
+    await expectFailure([
+      `content gate failed: package two-paths is larger than ${MAX_BODY_BYTES} bytes`,
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('fails on a packagePath off the spec layout before any package GET', async () => {
+    const two = await servePackage('two-paths')
+    const entry = { ...two.entry, packagePath: 'packages/two-paths.json' }
+    await publish({ mode: 'staging', stories: [entry] })
+    await expectFailure([
+      `content gate failed: snapshot entry two-paths: packagePath must be packages/two-paths/${two.entry.packageSha256}.json`,
+    ])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+    ])
+  })
+
+  it('path-checks excluded entries too, before any package GET', async () => {
+    const lantern = await servePackage('lantern-walk', { approved: true })
+    const two = await servePackage('two-paths')
+    await publish({
+      stories: [lantern.entry, { ...two.entry, packagePath: `packages/${SHA}.json` }],
+    })
+    plantStaleOutputs()
+    expect(await run(storageEnv())).toBe(1)
+    expect(errors).toEqual([
+      `content gate failed: snapshot entry two-paths: packagePath must be packages/two-paths/${two.entry.packageSha256}.json`,
+    ])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/production.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+    ])
+    expectNoOutputs()
+  })
+
+  it('fails on a package whose bytes do not match the snapshot sha256', async () => {
+    const two = await oneStory()
+    route(two.entry.packagePath, json(jcsBytes({ ...two.pkg, emoji: 'x' })))
+    await expectFailure(['content gate failed: package two-paths sha256 mismatch'])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('fails on Storage package bytes that are not canonical JCS', async () => {
+    const pretty = new TextEncoder().encode(JSON.stringify(fixturePackage('two-paths'), null, 2))
+    const sha = await sha256Hex(pretty)
+    const entry: SnapshotEntry = {
+      storyId: 'two-paths',
+      collectionId: 'panchatantra',
+      version: 1,
+      packagePath: `packages/two-paths/${sha}.json`,
+      packageSha256: sha,
+    }
+    stub.put(entry.packagePath, pretty, 'application/json')
+    await publish({ mode: 'staging', stories: [entry] })
+    await expectFailure(['content gate failed: package two-paths is not canonical JCS'])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ['GET', entry.packagePath],
+    ])
+  })
+
+  it('fails on an unwaived validator error, printing its detail line before the failure line', async () => {
+    const two = await oneStory({
+      mutate: (pkg) => void (pkg.text.en.nodes.start.question = 'Which way? Left or right?'),
+    })
+    await expectFailure([
+      'content: unwaived story=two-paths check=E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+      'content gate failed: package two-paths failed the validator with 1 unwaived error(s); first: E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('marks a key that binds other text as lapsed', async () => {
+    const keys: WaiverKeys = {
+      ruleSetRef: 'panchatantra@3.0.0',
+      waiverFileSha256: 'b'.repeat(64),
+      keys: [{ checkId: 'E005', nodeId: 'start', locale: 'en', nodeTextSha256: 'c'.repeat(64) }],
+    }
+    const two = await oneStory({
+      waivers: keys,
+      mutate: (pkg) => void (pkg.text.en.nodes.start.question = 'Which way? Left or right?'),
+    })
+    await expectFailure([
+      'content: unwaived story=two-paths check=E005 node=start locale=en: 2 question marks (exactly 1 expected) (lapsed: a key for this check, node and locale binds other text)',
+      'content gate failed: package two-paths failed the validator with 1 unwaived error(s); first: E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('fails on waiver keys recorded under another rule set', async () => {
+    const two = await oneStory({
+      waivers: { ruleSetRef: 'panchatantra@3.1.0', waiverFileSha256: 'b'.repeat(64), keys: [] },
+    })
+    await expectFailure([
+      'content gate failed: waiver keys for two-paths were recorded for panchatantra@3.1.0; this build validates with panchatantra@3.0.0',
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('fails on waiver keys on a package whose origin is not migration', async () => {
+    const two = await oneStory({
+      mutate: (pkg) => void (pkg.origin = 'agent_flow'),
+      waivers: { ruleSetRef: 'panchatantra@3.0.0', waiverFileSha256: 'b'.repeat(64), keys: [] },
+    })
+    await expectFailure([
+      'content gate failed: package two-paths carries waiver keys but its origin is agent_flow; waivers apply only to origin migration (spec §5.3)',
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+
+  it('stops at the first failing package, in snapshot order', async () => {
+    const lantern = await servePackage('lantern-walk', { serve: false })
+    const two = await servePackage('two-paths')
+    await publish({ mode: 'staging', stories: [lantern.entry, two.entry] })
+    await expectFailure(['content gate failed: package lantern-walk GET returned status 400'])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ['GET', lantern.entry.packagePath],
+    ])
+  })
+
+  it('fails a media pre-check before any HEAD', async () => {
+    const two = await oneStory({
+      mutate: (pkg) =>
+        void pkg.assets.push({
+          kind: 'image',
+          id: hex64(1),
+          width: 800,
+          height: 600,
+          variants: [
+            { path: `media/other-story/${hex64(1)}-w800.webp`, mime: 'image/webp', bytes: 10 },
+          ],
+          provenance: { origin: 'human' },
+        }),
+    })
+    await expectFailure([
+      `content gate failed: package two-paths media media/other-story/${hex64(1)}-w800.webp: path must be media/two-paths/<64 hex>-<variant>.<ext>`,
+    ])
+    expect(requestList()).toEqual(GETS(two))
+  })
+})
+
+describe('loadContent: the media HEAD gate', () => {
+  /** two-paths with one declared variant, served by `handlers` (default: the stored object). */
+  async function oneVariant(
+    handlers: StubHandler[] = [],
+    mime: MediaMime = 'image/webp',
+    bytes = 1000,
+  ): Promise<{ readonly path: string; readonly two: Served }> {
+    let variant: MediaVariant | undefined
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => {
+        variant =
+          mime === 'audio/mpeg'
+            ? addAudio(pkg, 5, 'start', 'en', bytes)
+            : (addImage(pkg, 5, [['w800', mime, bytes]])[0] as MediaVariant)
+      },
+    })
+    serveMedia([variant!])
+    if (handlers.length > 0) route(variant!.path, ...handlers)
+    await publish({ mode: 'staging', stories: [two.entry] })
+    return { path: variant!.path, two }
+  }
+
+  const heads = () => seen().filter((r) => r.method === 'HEAD')
+
+  it.each<[string, StubHandler[], string, number, Partial<LoaderOptions>?]>([
+    ['304', [status(304)], 'status 304', 1],
+    ['404', [status(404)], 'status 404', 1],
+    [
+      'a redirect, never followed',
+      [redirect(302, `${STUB_PREFIX}elsewhere.webp`)],
+      'redirect 302 (not followed)',
+      1,
+    ],
+    ['503 on every attempt', [status(503)], 'failed after 3 attempts: status 503', 3],
+    ['429 asking for 11 s', [status(429, { 'retry-after': '11' })], 'asked to wait 11 s', 1],
+    [
+      'a timeout on every attempt',
+      [neverAnswer],
+      'failed after 3 attempts: TimeoutError',
+      3,
+      { timeoutMs: 100 },
+    ],
+    ['no content-length', [serveObject({ contentLength: null })], 'content-length missing', 1],
+    [
+      'a wrong content-length',
+      [serveObject({ contentLength: 999 })],
+      'content-length 999 does not match declared 1000',
+      1,
+    ],
+    [
+      'another media type',
+      [serveObject({ contentType: 'image/png' })],
+      'content-type image/png does not match declared image/webp',
+      1,
+    ],
+    [
+      'binary/octet-stream',
+      [serveObject({ contentType: 'binary/octet-stream' })],
+      'content-type binary/octet-stream does not match declared image/webp',
+      1,
+    ],
+    [
+      'content-encoding br',
+      [serveObject({ contentEncoding: 'br' })],
+      'content-encoding br is not identity',
+      1,
+    ],
+  ])('fails on %s, naming the variant', async (_what, handlers, reason, attempts, extra = {}) => {
+    const { path, two } = await oneVariant(handlers)
+    plantStaleOutputs()
+    expect(await run(storageEnv('catalogue/staging.json'), extra)).toBe(1)
+    expect(errors).toEqual([
+      `content: media failed story=two-paths path=${path} reason=${reason}`,
+      `content gate failed: media HEAD failed for 1 of 1 variants; first: ${path} ${reason}`,
+    ])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ['GET', two.entry.packagePath],
+      ...Array.from({ length: attempts }, () => ['HEAD', path]),
+    ])
+    // One `media head` line per attempt that was not a 200; a judged 200 logs none.
+    const headLines = out.filter((line) => line.startsWith(`content: media head path=${path} `))
+    expect(headLines).toHaveLength(reason.startsWith('content-') ? 0 : attempts)
+    expectNoOutputs()
+  })
+
+  it('fails on a missing media object (Supabase answers 400)', async () => {
+    let path = ''
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => void (path = addImage(pkg, 5, [['w800', 'image/webp', 1000]])[0]!.path),
+    })
+    await publish({ mode: 'staging', stories: [two.entry] })
+    plantStaleOutputs()
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(errors).toEqual([
+      `content: media failed story=two-paths path=${path} reason=status 400`,
+      `content gate failed: media HEAD failed for 1 of 1 variants; first: ${path} status 400`,
+    ])
+    expect(out).toContain(`content: media head path=${path} attempt=1 status=400`)
+    expect(requestList()).toEqual([...stagingGets(two), ['HEAD', path]])
+    expectNoOutputs()
+  })
+
+  it.each<[string, StubHandler[], number[], string[]]>([
+    ['audio/mpeg; charset=x', [serveObject({ contentType: 'audio/mpeg; charset=x' })], [], []],
+    ['content-encoding identity', [serveObject({ contentEncoding: 'identity' })], [], []],
+    [
+      '503, then 200',
+      [status(503), serveObject()],
+      [1_000],
+      ['attempt=1 status=503', 'attempt=2 status=200'],
+    ],
+    [
+      '429 with Retry-After 2, then 200',
+      [status(429, { 'retry-after': '2' }), serveObject()],
+      [2_000],
+      ['attempt=1 status=429', 'attempt=2 status=200'],
+    ],
+    [
+      'a dropped connection, then 200',
+      [drop, serveObject()],
+      [1_000],
+      ['attempt=1 status=error(TypeError', 'attempt=2 status=200'],
+    ],
+  ])('passes on %s', async (what, handlers, expectedSleeps, headLines) => {
+    const mime = what.startsWith('audio') ? 'audio/mpeg' : 'image/webp'
+    const { path, two } = await oneVariant(handlers, mime)
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(errors).toEqual([])
+    expect(sleeps).toEqual(expectedSleeps)
+    const logged = out.filter((line) => line.startsWith('content: media head '))
+    expect(logged).toHaveLength(headLines.length)
+    headLines.forEach((fragment, i) => {
+      expect(logged[i]!.startsWith(`content: media head path=${path} ${fragment}`)).toBe(true)
+    })
+    expect(out).toContain('content: media story=two-paths variants=1 bytes=1000 ok')
+    expect(out).toContainEqual(summaryLine(1, 1, 0, headLines.length > 0 ? 1 : 0))
+    expect(requestList()).toEqual([
+      ...stagingGets(two),
+      ...Array.from({ length: Math.max(1, headLines.length) }, () => ['HEAD', path]),
+    ])
+  })
+
+  it('records a missing Accept-Ranges in a note line only', async () => {
+    const { path, two } = await oneVariant([serveObject({ acceptRanges: false })])
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(requestList()).toEqual([...stagingGets(two), ['HEAD', path]])
+    expect(out.slice(-4)).toEqual([
+      summaryLine(1, 1),
+      'content: media note: 1 of 1 answers had no "Accept-Ranges: bytes" (recorded, not a gate)',
+      'content: featured none',
+      'content: mode=staging seq=1 snapshot=catalogue/snapshots/1.json stories=1 excluded=0 featured=none',
+    ])
+  })
+
+  it('sends identity encoding, no authorization, no cookie and no query on exactly N HEADs', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) =>
+        void media.push(
+          ...addImage(pkg, 1, [
+            ['w800', 'image/webp', 100],
+            ['w400', 'image/webp', 50],
+          ]),
+          addAudio(pkg, 2, 'start', 'hi', 70),
+        ),
+    })
+    serveMedia(media)
+    await publish({ mode: 'staging', stories: [two.entry] })
+    stub.setCookie('__cf_bm=stub-cookie; Path=/; HttpOnly')
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(
+      heads()
+        .map((r) => r.path)
+        .sort(),
+    ).toEqual(media.map((v) => v.path).sort())
+    expect(heads()).toHaveLength(3)
+    for (const r of seen()) {
+      expect(r.headers['accept-encoding']).toBe('identity')
+      expect(r.headers.authorization).toBeUndefined()
+      expect(r.headers.cookie).toBeUndefined()
+    }
+    expect(heads().every((r) => r.query.toString() === '')).toBe(true)
+  })
+
+  it('keeps 6 HEADs in flight, never more', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => {
+        for (let i = 0; i < 12; i++)
+          media.push(...addImage(pkg, 10 + i, [['w800', 'image/webp', 100 + i]]))
+      },
+    })
+    serveMedia(media)
+    for (const v of media) route(v.path, slow(150, serveObject()))
+    await publish({ mode: 'staging', stories: [two.entry] })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(heads()).toHaveLength(12)
+    expect(stub.maxInFlight).toBe(6)
+  })
+
+  it('stops after 10 failures and lists them in declaration order', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => {
+        for (let i = 0; i < 20; i++)
+          media.push(...addImage(pkg, 30 + i, [['w800', 'image/webp', 100]]))
+      },
+    })
+    serveMedia(media)
+    // Later variants answer sooner, so completion order differs from declaration order.
+    media.forEach((v, i) => route(v.path, slow((20 - i) * 4, status(404))))
+    await publish({ mode: 'staging', stories: [two.entry] })
+    plantStaleOutputs()
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(errors).toHaveLength(11)
+    const failed = errors.slice(0, 10).map((line) => {
+      const match = /^content: media failed story=two-paths path=(\S+) reason=status 404$/.exec(
+        line,
+      )
+      expect(match).not.toBeNull()
+      return match![1]!
+    })
+    const order = failed.map((path) => media.findIndex((v) => v.path === path))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(errors[10]).toBe(
+      `content gate failed: media HEAD failed for 10 of 20 variants; first: ${failed[0]} status 404`,
+    )
+    expect(heads().length).toBeGreaterThanOrEqual(10)
+    expect(heads().length).toBeLessThan(20)
+    expectNoOutputs()
+  })
+
+  it('aborts the HEADs still in flight at the 10th failure instead of waiting for them', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => {
+        for (let i = 0; i < 14; i++)
+          media.push(...addImage(pkg, 70 + i, [['w800', 'image/webp', 100]]))
+      },
+    })
+    serveMedia(media)
+    // Variants 0 and 1 never answer, so they are in flight when the 10th fast 404 (variants 2-11)
+    // arrives; 12 and 13 never answer either. The per-attempt timeout is far above the test's
+    // limit, so only the pool's stop signal can end the hanging HEADs in time.
+    const hanging = [0, 1, 12, 13].map((i) => media[i]!.path)
+    for (const v of media) route(v.path, hanging.includes(v.path) ? neverAnswer : status(404))
+    await publish({ mode: 'staging', stories: [two.entry] })
+    plantStaleOutputs()
+    const started = performance.now()
+    expect(await run(storageEnv('catalogue/staging.json'), { timeoutMs: 20_000 })).toBe(1)
+    expect(performance.now() - started).toBeLessThan(5_000)
+    const failing = media.slice(2, 12).map((v) => v.path)
+    expect(errors).toEqual([
+      ...failing.map(
+        (path) => `content: media failed story=two-paths path=${path} reason=status 404`,
+      ),
+      `content gate failed: media HEAD failed for 10 of 14 variants; first: ${failing[0]} status 404`,
+    ])
+    // Aborted attempts are never logged, listed or retried.
+    expect(out.filter((line) => hanging.some((path) => line.includes(path)))).toEqual([])
+    expect(out).toContainEqual(summaryLine(14, 0, 10))
+    expect(requestList().filter(([method]) => method === 'GET')).toEqual(stagingGets(two))
+    const headPaths = heads().map((r) => r.path)
+    expect(new Set(headPaths).size).toBe(headPaths.length)
+    expect(headPaths).toEqual(expect.arrayContaining([hanging[0], hanging[1], ...failing]))
+    expect(headPaths.every((path) => media.some((v) => v.path === path))).toBe(true)
+    expect(sleeps).toEqual([])
+    expectNoOutputs()
+  })
+
+  it('passes a variant above 1 MiB: a HEAD answer is never read through readCapped', async () => {
+    const bytes = 2 * 1024 * 1024
+    expect(bytes).toBeGreaterThan(MAX_BODY_BYTES)
+    const { path, two } = await oneVariant([], 'audio/mpeg', bytes)
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(errors).toEqual([])
+    expect(out).toContain(`content: media story=two-paths variants=1 bytes=${bytes} ok`)
+    expect(out).toContainEqual(summaryLine(1, 1))
+    expect(out.filter((line) => line.startsWith('content: media head '))).toEqual([])
+    expect(requestList()).toEqual([...stagingGets(two), ['HEAD', path]])
+  })
+
+  it('stops at the media deadline without retrying, naming how many were checked', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) =>
+        void media.push(
+          ...addImage(pkg, 1, [
+            ['a', 'image/webp', 10],
+            ['b', 'image/webp', 11],
+            ['c', 'image/webp', 12],
+          ]),
+        ),
+    })
+    serveMedia(media)
+    route(media[1]!.path, neverAnswer)
+    route(media[2]!.path, neverAnswer)
+    await publish({ mode: 'staging', stories: [two.entry] })
+    plantStaleOutputs()
+    const started = performance.now()
+    // The per-attempt timeout is far above the deadline, so only the deadline can end the run.
+    expect(
+      await run(storageEnv('catalogue/staging.json'), { mediaDeadlineMs: 500, timeoutMs: 20_000 }),
+    ).toBe(1)
+    expect(performance.now() - started).toBeLessThan(5_000)
+    expect(errors).toEqual(['content gate failed: media HEAD stopped after 0.5 s (1 of 3 checked)'])
+    expect(
+      heads()
+        .map((r) => r.path)
+        .sort(),
+    ).toEqual(media.map((v) => v.path).sort())
+    expect(sleeps).toEqual([])
+    expectNoOutputs()
+  })
+
+  it('stops at the whole-load deadline during the HEADs with its own message', async () => {
+    const { path, two } = await oneVariant([neverAnswer])
+    plantStaleOutputs()
+    expect(
+      await run(storageEnv('catalogue/staging.json'), {
+        loadDeadlineMs: 2_000,
+        mediaDeadlineMs: 20_000,
+        timeoutMs: 20_000,
+      }),
+    ).toBe(1)
+    expect(errors).toEqual(['content gate failed: content loading exceeded 2 s'])
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/staging.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+      ['GET', two.entry.packagePath],
+      ['HEAD', path],
+    ])
+    expectNoOutputs()
+  })
+})
+
+describe('runMediaGate with an injected fetch (design §3.4 row 37, §4.1)', () => {
+  /** The gate over two-paths with `variants` declared images; HEADs go to `fetchImpl` only. */
+  function gate(variants: number, fetchImpl: typeof fetch, loadDeadline = startDeadline(600_000)) {
+    const pkg = fixturePackage('two-paths')
+    const media: MediaVariant[] = []
+    for (let i = 0; i < variants; i++) {
+      media.push(...addImage(pkg, 60 + i, [['w800', 'image/webp', 100]]))
+    }
+    const lines: string[] = []
+    const runGate = () =>
+      runMediaGate({
+        packages: [{ pkg: pkg as MediaPackage['pkg'] }],
+        root: '',
+        objectUrl: (path) => new URL(`${STUB_PREFIX}${path}`, 'http://127.0.0.1:9'),
+        mediaDeadlineMs: 300_000,
+        ctx: {
+          fetchImpl,
+          clock: () => performance.now(),
+          sleep: async () => undefined,
+          log: (line) => void lines.push(line),
+          timeoutMs: 15_000,
+          retryDelayMs: 1_000,
+          fetches: [],
+          loadDeadline,
+        },
+      })
+    return { media, lines, runGate }
+  }
+
+  it('lists at most 10 failures, also when more answers are judged in the turn of the 10th', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls++
+      return new Response(null, { status: 404 })
+    }) as unknown as typeof fetch
+    const { media, lines, runGate } = gate(30, fetchImpl)
+    const result = await runGate()
+    // Answers that resolve at once land in the same turn: more HEADs were judged than may be listed.
+    expect(calls).toBeGreaterThan(10)
+    if (result.ok) throw new Error('expected the gate to fail')
+    expect(result.details).toHaveLength(10)
+    const order = (result.details ?? []).map((line) => {
+      const match = /^content: media failed story=two-paths path=(\S+) reason=status 404$/.exec(
+        line,
+      )
+      expect(match).not.toBeNull()
+      return media.findIndex((v) => v.path === match![1])
+    })
+    expect(new Set(order).size).toBe(10)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(result.reason).toBe(
+      `media HEAD failed for 10 of 30 variants; first: ${media[order[0]!]!.path} status 404`,
+    )
+    expect(lines).toContainEqual(summaryLine(30, 0, 10))
+  })
+
+  it('fails when the whole-load deadline fired before the gate, even with no HEAD to make', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    const live = gate(0, fetchImpl)
+    expect(await live.runGate()).toEqual({ ok: true, value: null })
+    expect(live.lines).toContain('content: media story=two-paths variants=0 bytes=0 ok')
+
+    const deadline = startDeadline(1)
+    await vi.waitFor(() => expect(deadline.signal.aborted).toBe(true))
+    const expired = gate(0, fetchImpl, deadline)
+    expect(await expired.runGate()).toEqual({
+      ok: false,
+      reason: 'content loading exceeded 0.001 s',
+      details: [],
+    })
+    expect(expired.lines).toEqual([summaryLine(0, 0)])
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe('loadContent: retries and the load deadline', () => {
   it('retries a 500 and succeeds on the next 200, recording both GETs', async () => {
     const pub = await publish()
-    routes.set(pub.snapshotPath, [status(500), json(pub.snapshotBytes)])
+    route(pub.snapshotPath, status(500), json(pub.snapshotBytes))
     expect(await run(storageEnv())).toBe(0)
     expect(readBuildInfo().fetches.map((f) => [f.path, f.status])).toEqual([
       ['catalogue/production.json', 200],
@@ -370,57 +1283,108 @@ describe('loadContent: retries', () => {
       ['catalogue/snapshots/1.json', 200],
     ])
     expect(sleeps).toEqual([1_000])
-    expect(out[1]).toMatch(
+    expect(out[2]).toMatch(
       /^content: fetch path=catalogue\/snapshots\/1\.json status=500 cf=- age=- pop=- sha=[a-f0-9]{12} seq=-$/,
     )
   })
 
   it('retries a dropped connection and records it with status null', async () => {
     const pub = await publish()
-    routes.set(pub.pointerPath, [dropConnection, json(pub.pointerBytes)])
+    route(pub.pointerPath, drop, json(pub.pointerBytes))
     expect(await run(storageEnv())).toBe(0)
     const [first] = readBuildInfo().fetches
     expect(first).toMatchObject({ path: 'catalogue/production.json', status: null, sha256: null })
-    expect(out[0]).toMatch(
+    expect(out[1]).toMatch(
       /^content: fetch path=catalogue\/production\.json status=error\(TypeError/,
     )
   })
 
   it('fails after 3 attempts when every answer is a 5xx', async () => {
     const pub = await publish()
-    routes.set(pub.snapshotPath, [status(503)])
+    route(pub.snapshotPath, status(503))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual([
       'content gate failed: snapshot GET failed after 3 attempts: status 503',
     ])
-    expect(seen.filter((r) => r.path === pub.snapshotPath)).toHaveLength(3)
+    expect(seen().filter((r) => r.path === pub.snapshotPath)).toHaveLength(3)
     expect(sleeps).toEqual([1_000, 2_000])
     expectNoOutputs()
   })
 
   it('fails after 3 attempts when every request times out', async () => {
     const pub = await publish()
-    routes.set(pub.pointerPath, [neverAnswer])
+    route(pub.pointerPath, neverAnswer)
     expect(await run(storageEnv(), { timeoutMs: 100 })).toBe(1)
     expect(errors).toEqual([
       'content gate failed: pointer GET failed after 3 attempts: TimeoutError',
     ])
-    expect(seen).toHaveLength(3)
+    expect(seen()).toHaveLength(3)
+  })
+
+  it('times out a body that stalls after the headers: the per-attempt timer covers the body', async () => {
+    const pub = await publish()
+    route(pub.pointerPath, stallBody(pub.pointerBytes))
+    expect(await run(storageEnv(), { timeoutMs: 100 })).toBe(1)
+    expect(errors).toEqual([
+      'content gate failed: pointer GET failed after 3 attempts: TimeoutError',
+    ])
+    expect(requestList()).toEqual(Array.from({ length: 3 }, () => ['GET', pub.pointerPath]))
+    expect(sleeps).toEqual([1_000, 2_000])
+  })
+
+  it('retries a body cut short by a closed connection', async () => {
+    const pub = await publish()
+    route(pub.pointerPath, truncateBody(pub.pointerBytes), json(pub.pointerBytes))
+    expect(await run(storageEnv())).toBe(0)
+    expect(requestList()).toEqual([
+      ['GET', pub.pointerPath],
+      ['GET', pub.pointerPath],
+      ['GET', pub.snapshotPath],
+    ])
+    expect(readBuildInfo().fetches[0]).toMatchObject({ status: null, sha256: null })
+    expect(sleeps).toEqual([1_000])
   })
 
   it('does not retry a 404', async () => {
-    routes.set('catalogue/production.json', [status(404)])
+    route('catalogue/production.json', status(404))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer GET returned status 404'])
-    expect(seen).toHaveLength(1)
+    expect(seen()).toHaveLength(1)
   })
 
   it('does not follow a redirect', async () => {
     const pub = await publish()
-    routes.set(pub.pointerPath, [status(302, { location: `${PREFIX}${pub.snapshotPath}` })])
+    route(pub.pointerPath, redirect(302, `${STUB_PREFIX}${pub.snapshotPath}`))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer GET returned status 302'])
-    expect(seen).toHaveLength(1)
+    expect(seen()).toHaveLength(1)
+  })
+
+  it('fails at the whole-load deadline, never retried, with its own message', async () => {
+    const pub = await publish()
+    route(pub.pointerPath, neverAnswer)
+    plantStaleOutputs()
+    const started = performance.now()
+    // The per-attempt timeout is far above the deadline, so only the deadline can end the run.
+    expect(await run(storageEnv(), { loadDeadlineMs: 150, timeoutMs: 20_000 })).toBe(1)
+    expect(performance.now() - started).toBeLessThan(5_000)
+    expect(errors).toEqual(['content gate failed: content loading exceeded 0.15 s'])
+    expect(requestList()).toEqual([['GET', 'catalogue/production.json']])
+    expect(sleeps).toEqual([])
+    expect(out).toEqual([
+      STORAGE_ENV_LINE,
+      'content: fetch path=catalogue/production.json status=error(TimeoutError) cf=- age=- pop=- sha=- seq=-',
+    ])
+    expectNoOutputs()
+  })
+
+  it('races a retry sleep against the load deadline', async () => {
+    const pub = await publish()
+    route(pub.pointerPath, status(503))
+    const sleep = () => new Promise<void>(() => undefined) // never ends on its own
+    expect(await run(storageEnv(), { loadDeadlineMs: 150, timeoutMs: 20_000, sleep })).toBe(1)
+    expect(errors).toEqual(['content gate failed: content loading exceeded 0.15 s'])
+    expect(requestList()).toEqual([['GET', 'catalogue/production.json']])
   })
 })
 
@@ -430,13 +1394,13 @@ describe('loadContent: response checks and gates', () => {
     await publish({ pointerSha256: SHA })
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: snapshot sha256 mismatch'])
-    expect(out).toHaveLength(2) // both fetch lines, for the build log
+    expect(out).toHaveLength(3) // the environment line and both fetch lines, for the build log
     expectNoOutputs()
   })
 
   it('fails on a content-type other than application/json', async () => {
     const pub = await publish()
-    routes.set(pub.pointerPath, [json(pub.pointerBytes, 'text/html')])
+    route(pub.pointerPath, json(pub.pointerBytes, 'text/html'))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual([
       'content gate failed: pointer content-type must be application/json, got text/html',
@@ -445,7 +1409,7 @@ describe('loadContent: response checks and gates', () => {
 
   it('compares the content-type without parameters or case', async () => {
     const pub = await publish()
-    routes.set(pub.pointerPath, [json(pub.pointerBytes, 'Application/JSON; charset=UTF-8')])
+    route(pub.pointerPath, json(pub.pointerBytes, 'Application/JSON; charset=UTF-8'))
     expect(await run(storageEnv())).toBe(0)
     expect(errors).toEqual([])
   })
@@ -453,7 +1417,7 @@ describe('loadContent: response checks and gates', () => {
   it('fails on non-canonical pointer bytes', async () => {
     const pub = await publish()
     const pretty = JSON.stringify(JSON.parse(new TextDecoder().decode(pub.pointerBytes)), null, 2)
-    routes.set(pub.pointerPath, [json(new TextEncoder().encode(pretty))])
+    route(pub.pointerPath, json(new TextEncoder().encode(pretty)))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer is not canonical JCS'])
   })
@@ -466,48 +1430,103 @@ describe('loadContent: response checks and gates', () => {
       snapshotSha256: SHA,
       updatedAt: NOW.toISOString(),
     })
-    routes.set('catalogue/production.json', [json(unsafe)])
+    route('catalogue/production.json', json(unsafe))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer snapshotPath is unsafe'])
-    expect(seen).toHaveLength(1)
+    expect(seen()).toHaveLength(1)
+  })
+
+  it('fails on a snapshot path other than catalogue/snapshots/<seq>.json without requesting it', async () => {
+    const pointer = jcsBytes({
+      schemaVersion: '1.0',
+      seq: 2,
+      snapshotPath: 'catalogue/snapshots/1.json',
+      snapshotSha256: SHA,
+      updatedAt: NOW.toISOString(),
+    })
+    route('catalogue/production.json', json(pointer))
+    expect(await run(storageEnv())).toBe(1)
+    expect(errors).toEqual([
+      'content gate failed: pointer snapshotPath must be catalogue/snapshots/2.json',
+    ])
+    expect(requestList()).toEqual([['GET', 'catalogue/production.json']])
   })
 
   it('fails when a declared body is larger than 1 MiB', async () => {
-    routes.set('catalogue/production.json', [json(new Uint8Array(MAX_BODY_BYTES + 1))])
+    route('catalogue/production.json', json(new Uint8Array(MAX_BODY_BYTES + 1)))
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer is larger than 1048576 bytes'])
   })
 
   it('fails when a streamed body without content-length grows past 1 MiB', async () => {
-    routes.set('catalogue/production.json', [
-      (_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        for (let i = 0; i <= 16; i++) res.write(new Uint8Array(64 * 1024))
-        res.end()
-      },
-    ])
+    route('catalogue/production.json', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      for (let i = 0; i <= 16; i++) res.write(new Uint8Array(64 * 1024))
+      res.end()
+    })
     expect(await run(storageEnv())).toBe(1)
     expect(errors).toEqual(['content gate failed: pointer is larger than 1048576 bytes'])
   })
+})
 
-  it('fails closed on a snapshot that lists stories to build (packages arrive in P1-2)', async () => {
-    await publish({
-      mode: 'staging',
-      stories: [
-        {
-          storyId: 'two-paths',
-          collectionId: 'panchatantra',
-          version: 1,
-          packagePath: `packages/two-paths/${SHA}.json`,
-          packageSha256: SHA,
-        },
-      ],
-    })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
-    expect(errors).toEqual([
-      'content gate failed: snapshot lists 1 stories to build; package loading arrives in P1-2',
+describe('loadContent: the featured rule', () => {
+  it('drops a featured story that is not in the snapshot', async () => {
+    await publish({ featuredStoryId: 'blue-jackal' })
+    expect(await run(storageEnv())).toBe(0)
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/production.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
     ])
-    expectNoOutputs()
+    expect(readBuildInfo().featuredStoryId).toBeNull()
+    expect(out).toContain(
+      'content: featured story=blue-jackal dropped (reason=not-in-snapshot); featuredStoryId=null',
+    )
+  })
+
+  it('drops a featured story that production excluded for a missing approval', async () => {
+    const two = await servePackage('two-paths', { serve: false })
+    await publish({ stories: [two.entry], featuredStoryId: 'two-paths' })
+    expect(await run(storageEnv())).toBe(0)
+    expect(requestList()).toEqual([
+      ['GET', 'catalogue/production.json'],
+      ['GET', 'catalogue/snapshots/1.json'],
+    ])
+    expect(readBuildInfo().featuredStoryId).toBeNull()
+    expect(out).toContain(
+      'content: featured story=two-paths dropped (reason=approval-missing); featuredStoryId=null',
+    )
+  })
+
+  it('drops a built story without its pictures and narration, counting them', async () => {
+    const two = await servePackage('two-paths')
+    await publish({ mode: 'staging', stories: [two.entry], featuredStoryId: 'two-paths' })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(requestList()).toEqual(stagingGets(two))
+    expect(readBuildInfo().featuredStoryId).toBeNull()
+    // two-paths: 5 nodes in 2 locales, no picture and no narration.
+    expect(out).toContain(
+      'content: featured story=two-paths dropped (reason=media-incomplete A001=0 A005=10 A006=5); featuredStoryId=null',
+    )
+  })
+
+  it('keeps a built story whose every node is pictured and narrated', async () => {
+    const media: MediaVariant[] = []
+    const lantern = await servePackage('lantern-walk', {
+      mutate: (pkg) => void media.push(...addFullMedia(pkg)),
+    })
+    serveMedia(media)
+    await publish({ mode: 'staging', stories: [lantern.entry], featuredStoryId: 'lantern-walk' })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(errors).toEqual([])
+    expect(media).toHaveLength(12) // 4 pictures, 8 narrations
+    const list = requestList()
+    expect(list.slice(0, 3)).toEqual(stagingGets(lantern))
+    expect(list.slice(3).sort()).toEqual(media.map((v) => ['HEAD', v.path]).sort())
+    expect(readBuildInfo().featuredStoryId).toBe('lantern-walk')
+    expect(out.slice(-2)).toEqual([
+      'content: featured story=lantern-walk',
+      'content: mode=staging seq=1 snapshot=catalogue/snapshots/1.json stories=1 excluded=0 featured=lantern-walk',
+    ])
   })
 })
 
@@ -519,29 +1538,52 @@ describe('loadContent: CONTENT_SOURCE unset or none', () => {
     expect(errors).toEqual([
       'content gate failed: CONTENT_SOURCE is not set; it is required when VERCEL_ENV=production',
     ])
+    expect(out).toEqual([
+      'content: environment VERCEL=unset VERCEL_ENV=production CONTENT_SOURCE=unset GITHUB_ACTIONS=unset platform=linux',
+    ])
     expect(fetchImpl).not.toHaveBeenCalled()
-    expect(seen).toHaveLength(0)
+    expect(seen()).toHaveLength(0)
   })
 
   it.each([
-    ['CI or this PC (no VERCEL_ENV)', {}, 'unset'],
-    ['a Vercel Preview', { VERCEL_ENV: 'preview' }, 'preview'],
-    ['an empty CONTENT_SOURCE', { CONTENT_SOURCE: '' }, 'unset'],
-  ])('skips without network on %s and removes stale outputs', async (_where, env, vercelEnv) => {
-    plantStaleOutputs()
-    const fetchImpl = vi.fn<typeof fetch>()
-    expect(await run(env, { fetchImpl })).toBe(0)
-    expect(out).toEqual([`content: skipped (CONTENT_SOURCE is not set; VERCEL_ENV=${vercelEnv})`])
-    expect(errors).toEqual([])
-    expect(fetchImpl).not.toHaveBeenCalled()
-    expectNoOutputs()
-    expect(existsSync(join(root, 'public', 'keep.txt'))).toBe(true)
-  })
+    ['CI or this PC (no VERCEL_ENV)', {}, 'unset', 'VERCEL_ENV=unset CONTENT_SOURCE=unset'],
+    [
+      'a Vercel Preview',
+      { VERCEL_ENV: 'preview' },
+      'preview',
+      'VERCEL_ENV=preview CONTENT_SOURCE=unset',
+    ],
+    [
+      'an empty CONTENT_SOURCE',
+      { CONTENT_SOURCE: '' },
+      'unset',
+      'VERCEL_ENV=unset CONTENT_SOURCE=empty',
+    ],
+  ])(
+    'skips without network on %s and removes stale outputs',
+    async (_where, env, vercelEnv, names) => {
+      plantStaleOutputs()
+      const fetchImpl = vi.fn<typeof fetch>()
+      expect(await run(env, { fetchImpl })).toBe(0)
+      expect(out).toEqual([
+        `content: environment VERCEL=unset ${names} GITHUB_ACTIONS=unset platform=linux`,
+        `content: skipped (CONTENT_SOURCE is not set; VERCEL_ENV=${vercelEnv})`,
+      ])
+      expect(errors).toEqual([])
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expectNoOutputs()
+      expect(existsSync(join(root, 'public', 'keep.txt'))).toBe(true)
+    },
+  )
 
   it('skips on CONTENT_SOURCE=none, in Production too', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
-    expect(await run({ CONTENT_SOURCE: 'none', VERCEL_ENV: 'production' }, { fetchImpl })).toBe(0)
-    expect(out).toEqual(['content: skipped (CONTENT_SOURCE=none; VERCEL_ENV=production)'])
+    const env = { VERCEL: '1', CONTENT_SOURCE: 'none', VERCEL_ENV: 'production' }
+    expect(await run(env, { fetchImpl })).toBe(0)
+    expect(out).toEqual([
+      'content: environment VERCEL=set VERCEL_ENV=production CONTENT_SOURCE=none GITHUB_ACTIONS=unset platform=linux',
+      'content: skipped (CONTENT_SOURCE=none; VERCEL_ENV=production)',
+    ])
     expect(fetchImpl).not.toHaveBeenCalled()
     expectNoOutputs()
   })
@@ -558,7 +1600,7 @@ describe('loadContent: Vercel Production needs a production pointer', () => {
       'content gate failed: CONTENT_POINTER must be a production pointer when VERCEL_ENV=production',
     ])
     expect(fetchImpl).not.toHaveBeenCalled()
-    expect(seen).toHaveLength(0)
+    expect(seen()).toHaveLength(0)
   })
 
   it('loads a production pointer in Production and a staging pointer in a Preview', async () => {
@@ -577,24 +1619,42 @@ describe('loadContent: a Storage pointer can never select fixtures mode', () => 
     async (extra) => {
       // Even if such an object were uploaded, it must not skip the approval gate.
       const pub = await publish({ mode: 'staging' })
-      routes.set('catalogue/fixtures.json', [json(pub.pointerBytes)])
+      stub.put('catalogue/fixtures.json', pub.pointerBytes, 'application/json')
       expect(await run(storageEnv('catalogue/fixtures.json', extra))).toBe(1)
       expect(errors).toEqual([
         'content gate failed: pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json',
       ])
-      expect(seen).toHaveLength(0)
+      expect(seen()).toHaveLength(0)
       expectNoOutputs()
     },
   )
 })
 
+describe('loadContent: the committed base URL rule', () => {
+  it('refuses any other https base before the first request, naming only the committed constant', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    const env = storageEnv('catalogue/production.json', {
+      CONTENT_BASE_URL: 'https://other-ref.supabase.co/storage/v1/object/public/content',
+    })
+    expect(await run(env, { fetchImpl })).toBe(1)
+    expect(errors).toEqual([`content gate failed: ${BASE_URL_REFUSED}`])
+    expect(errors[0]).not.toContain('other-ref')
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expectNoOutputs()
+  })
+
+  it('loads from a loopback server (the stub)', async () => {
+    await publish()
+    expect(await run(storageEnv())).toBe(0)
+  })
+})
+
 // ---- fixtures mode ----
 
-type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
-
-const storyboardDir = join(dirname(fileURLToPath(import.meta.url)), '..')
-const FIXTURE_IDS = ['lantern-walk', 'river-stones', 'two-paths']
 const fixturesEnv: Env = { CONTENT_SOURCE: 'fixtures' }
+/** Fixtures runs say platform win32 (this PC), so they pass on Linux CI too (design §10.1). */
+const runFixtures = (env: Env = fixturesEnv, extra: Partial<LoaderOptions> = {}) =>
+  run(env, { platform: 'win32', ...extra })
 
 const fixtures = () => join(root, 'fixtures')
 const fixturePath = (path: string) => join(fixtures(), ...path.split('/'))
@@ -640,10 +1700,10 @@ describe('loadContent: fixtures mode, committed fixtures', () => {
     copyFixtures()
     plantStaleOutputs()
     const fetchImpl = vi.fn<typeof fetch>()
-    expect(await run(fixturesEnv, { fetchImpl })).toBe(0)
+    expect(await runFixtures(fixturesEnv, { fetchImpl })).toBe(0)
     expect(errors).toEqual([])
     expect(fetchImpl).not.toHaveBeenCalled()
-    expect(seen).toHaveLength(0)
+    expect(seen()).toHaveLength(0)
 
     const entries = await readFixtureEntries(fixtures())
     const snapshotBytes = fixtureBytes('catalogue/snapshots/1.json')
@@ -684,10 +1744,11 @@ describe('loadContent: fixtures mode, committed fixtures', () => {
     expect(readFileSync(join(root, 'public', 'keep.txt'), 'utf8')).toBe('not ours')
   })
 
-  it('logs each file read, each package, the skipped word-list checks and a final line', async () => {
+  it('logs the environment line, each file read, each package, the skipped checks, featured and a final line', async () => {
     copyFixtures()
-    expect(await run(fixturesEnv)).toBe(0)
+    expect(await runFixtures()).toBe(0)
     const expected: unknown[] = [
+      FIXTURES_ENV_LINE,
       `content: read path=catalogue/fixtures.json sha=${await sha12Of('catalogue/fixtures.json')} seq=1`,
       `content: read path=catalogue/snapshots/1.json sha=${await sha12Of('catalogue/snapshots/1.json')} seq=1`,
     ]
@@ -697,13 +1758,16 @@ describe('loadContent: fixtures mode, committed fixtures', () => {
         `content: read path=packages/${id}.json sha=${sha} seq=-`,
         expect.stringMatching(
           new RegExp(
-            `^content: package story=${id} version=1 sha=${sha} errors=0 warnings=\\d+ info=\\d+$`,
+            `^content: package story=${id} version=1 sha=${sha} errors=0 waived=0 warnings=\\d+ info=\\d+$`,
           ),
         ),
-        `content: validator skipped E016,E017,E018 for story=${id} (private word lists not loaded)`,
+        skippedLine(id),
       )
     }
-    expected.push('content: mode=fixtures seq=1 snapshot=catalogue/snapshots/1.json')
+    expected.push(
+      'content: featured none',
+      'content: mode=fixtures seq=1 snapshot=catalogue/snapshots/1.json stories=3 excluded=0 featured=none',
+    )
     expect(out).toEqual(expected)
   })
 
@@ -715,25 +1779,35 @@ describe('loadContent: fixtures mode, committed fixtures', () => {
       CONTENT_BASE_URL: baseUrl,
       CONTENT_POINTER: 'catalogue/production.json',
     }
-    expect(await run(env)).toBe(0)
-    expect(seen).toHaveLength(0)
+    expect(await runFixtures(env)).toBe(0)
+    expect(seen()).toHaveLength(0)
     expect(readBuildInfo().mode).toBe('fixtures')
   })
 
-  it('never names a featured story, and logs the one the snapshot names', async () => {
+  it('runs in GitHub Actions on Linux', async () => {
+    copyFixtures()
+    expect(await run({ ...fixturesEnv, GITHUB_ACTIONS: 'true' }, { platform: 'linux' })).toBe(0)
+    expect(out[0]).toBe(
+      'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=true platform=linux',
+    )
+    expect(readBuildInfo().mode).toBe('fixtures')
+  })
+
+  it('drops the featured story the snapshot names: fixtures have no pictures or narration', async () => {
     copyFixtures()
     await rewriteCatalogue((stories) => stories, 'river-stones')
-    expect(await run(fixturesEnv)).toBe(0)
+    expect(await runFixtures()).toBe(0)
     expect(readBuildInfo().featuredStoryId).toBeNull()
+    // river-stones: 8 nodes in 2 locales.
     expect(out).toContain(
-      'content: featured story=river-stones is not featured in fixtures mode; featuredStoryId=null',
+      'content: featured story=river-stones dropped (reason=media-incomplete A001=0 A005=16 A006=8); featuredStoryId=null',
     )
   })
 
   it('follows snapshot order, not file-name order, in build-info and the log', async () => {
     copyFixtures()
     await rewriteCatalogue((stories) => [...stories].reverse())
-    expect(await run(fixturesEnv)).toBe(0)
+    expect(await runFixtures()).toBe(0)
     const reversed = ['two-paths', 'river-stones', 'lantern-walk']
     expect(readBuildInfo().stories.map((s) => s.storyId)).toEqual(reversed)
     const packageLines = out.filter((line) => line.startsWith('content: package story='))
@@ -754,7 +1828,7 @@ describe('loadContent: fixtures mode, committed fixtures', () => {
       }
       return NOW
     }
-    expect(await run(fixturesEnv, { now })).toBe(1)
+    expect(await runFixtures(fixturesEnv, { now })).toBe(1)
     expect(planted).toBe(true)
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatch(/^content gate failed: writing outputs failed: /)
@@ -772,7 +1846,9 @@ describe('loadPackages (the shared package step)', () => {
   it('refuses a duplicate storyId among entries that are not built, before reading any package', async () => {
     const [a, b, c] = await entries()
     const readBytes = vi.fn(readEntry)
-    const result = await loadPackages([a!, b!, c!, { ...a! }], [b!, c!], readBytes, () => {})
+    const result = await loadPackages([a!, b!, c!, { ...a! }], [b!, c!], readBytes, () => {}, {
+      requireJcs: false,
+    })
     expect(result).toEqual({
       ok: false,
       reason: 'snapshot lists story lantern-walk more than once',
@@ -783,7 +1859,9 @@ describe('loadPackages (the shared package step)', () => {
   it('reads and checks only the included entries, in the order given', async () => {
     const [a, b, c] = await entries()
     const readBytes = vi.fn(readEntry)
-    const result = await loadPackages([a!, b!, c!], [a!, c!], readBytes, () => {})
+    const result = await loadPackages([a!, b!, c!], [a!, c!], readBytes, () => {}, {
+      requireJcs: false,
+    })
     expect(result.ok && result.value.map((p) => p.entry.storyId)).toEqual([
       'lantern-walk',
       'two-paths',
@@ -793,48 +1871,89 @@ describe('loadPackages (the shared package step)', () => {
       'two-paths',
     ])
   })
+
+  it('requires canonical JCS only when asked (Storage)', async () => {
+    const [a] = await entries()
+    expect((await loadPackages([a!], [a!], readEntry, () => {}, { requireJcs: true })).ok).toBe(
+      false,
+    )
+    expect((await loadPackages([a!], [a!], readEntry, () => {}, { requireJcs: false })).ok).toBe(
+      true,
+    )
+  })
 })
 
 describe('loadContent: fixtures mode is refused on Vercel', () => {
-  it.each(['production', 'preview', 'development', '', 'staging', 'other'])(
+  it.each([
+    ['production', 'production'],
+    ['preview', 'preview'],
+    ['development', 'development'],
+    ['', 'empty'],
+    ['staging', 'other'],
+    ['other', 'other'],
+  ])(
     'refuses VERCEL_ENV=%j without reading, fetching or writing anything',
-    async (vercelEnv) => {
+    async (vercelEnv, name) => {
       copyFixtures()
       const fetchImpl = vi.fn<typeof fetch>()
-      expect(await run({ ...fixturesEnv, VERCEL_ENV: vercelEnv }, { fetchImpl })).toBe(1)
+      expect(await runFixtures({ ...fixturesEnv, VERCEL_ENV: vercelEnv }, { fetchImpl })).toBe(1)
       expect(errors).toEqual([
         'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
       ])
-      expect(out).toEqual([])
+      expect(out).toEqual([
+        `content: environment VERCEL=unset VERCEL_ENV=${name} CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=win32`,
+      ])
       expect(fetchImpl).not.toHaveBeenCalled()
       expectNoOutputs()
     },
   )
 
-  it.each(['1', '', 'other'])(
+  it.each([
+    ['1', 'set'],
+    ['', 'empty'],
+    ['other', 'set'],
+  ])(
     'refuses VERCEL=%j with no VERCEL_ENV, without reading, fetching or writing anything',
-    async (vercel) => {
+    async (vercel, name) => {
       copyFixtures()
       const fetchImpl = vi.fn<typeof fetch>()
-      expect(await run({ ...fixturesEnv, VERCEL: vercel }, { fetchImpl })).toBe(1)
+      expect(await runFixtures({ ...fixturesEnv, VERCEL: vercel }, { fetchImpl })).toBe(1)
       expect(errors).toEqual([
         'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
       ])
-      expect(out).toEqual([])
+      expect(out).toEqual([
+        `content: environment VERCEL=${name} VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=win32`,
+      ])
       expect(fetchImpl).not.toHaveBeenCalled()
       expectNoOutputs()
+    },
+  )
+
+  it.each(['linux', 'darwin', 'freebsd'])(
+    'refuses fixtures on %s outside GitHub Actions (R4) without touching anything',
+    async (platform) => {
+      copyFixtures()
+      plantStaleOutputs()
+      expect(await run(fixturesEnv, { platform })).toBe(1)
+      expect(errors).toEqual([`content gate failed: ${FIXTURES_REFUSED_HERE}`])
+      expect(out).toEqual([
+        `content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=${platform === 'freebsd' ? 'other' : platform}`,
+      ])
+      // A refused configuration touches no output (the stale ones stay as they were).
+      expect(readFileSync(paths().publicInfo, 'utf8')).toBe('stale')
     },
   )
 })
 
 describe('loadContent: fixtures mode gates fail closed', () => {
   /** Runs the loader over stale outputs and expects one named failure and no outputs at all. */
-  async function expectGateFailure(reason: string | RegExp): Promise<void> {
+  async function expectGateFailure(reason: string | RegExp, details: string[] = []): Promise<void> {
     plantStaleOutputs()
-    expect(await run(fixturesEnv)).toBe(1)
-    expect(errors).toHaveLength(1)
-    if (typeof reason === 'string') expect(errors[0]).toBe(`content gate failed: ${reason}`)
-    else expect(errors[0]).toMatch(reason)
+    expect(await runFixtures()).toBe(1)
+    expect(errors.slice(0, -1)).toEqual(details)
+    const last = errors.at(-1) ?? ''
+    if (typeof reason === 'string') expect(last).toBe(`content gate failed: ${reason}`)
+    else expect(last).toMatch(reason)
     expectNoOutputs()
   }
 
@@ -867,13 +1986,16 @@ describe('loadContent: fixtures mode gates fail closed', () => {
     await expectGateFailure(/^content gate failed: package two-paths failed strict parse: /)
   })
 
-  it('fails on an unwaived validator error and names it', async () => {
+  it('fails on an unwaived validator error and names it, with its detail line first', async () => {
     copyFixtures()
     await changePackage('two-paths', (pkg) => {
       pkg.text.en.nodes.start.question = 'Which way? Left or right?'
     })
     await expectGateFailure(
-      'package two-paths failed the validator with 1 error(s); first: E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+      'package two-paths failed the validator with 1 unwaived error(s); first: E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+      [
+        'content: unwaived story=two-paths check=E005 node=start locale=en: 2 question marks (exactly 1 expected)',
+      ],
     )
   })
 
@@ -887,9 +2009,15 @@ describe('loadContent: fixtures mode gates fail closed', () => {
 
   it('fails when the snapshot storyId differs from the package', async () => {
     copyFixtures()
-    await rewriteCatalogue((stories) =>
-      stories.map((s) => (s.storyId === 'two-paths' ? { ...s, storyId: 'other-story' } : s)),
+    // The file is named after the entry, so the packagePath rule passes and the id check runs.
+    const entries = await readFixtureEntries(fixtures())
+    cpSync(fixturePath('packages/two-paths.json'), fixturePath('packages/other-story.json'))
+    const stories = entries.map((s) =>
+      s.storyId === 'two-paths'
+        ? { ...s, storyId: 'other-story', packagePath: 'packages/other-story.json' }
+        : s,
     )
+    writeCatalogue(fixtures(), await buildCatalogue(stories))
     await expectGateFailure(
       'package other-story has storyId two-paths, but the snapshot names other-story',
     )
@@ -909,37 +2037,46 @@ describe('loadContent: fixtures mode gates fail closed', () => {
     'packages\\two-paths.json',
     '%2e%2e/two-paths.json',
     'packages/./two-paths.json',
-  ])('refuses the package path %j, which could leave fixtures/', async (packagePath) => {
-    copyFixtures()
-    await moveTwoPaths(packagePath)
-    await expectGateFailure('package two-paths path is unsafe')
-  })
+    'packages/missing.json',
+    'packages',
+  ])(
+    'refuses the package path %j by the packagePath rule, before any read',
+    async (packagePath) => {
+      copyFixtures()
+      await moveTwoPaths(packagePath)
+      await expectGateFailure(
+        'snapshot entry two-paths: packagePath must be packages/two-paths.json',
+      )
+      expect(out.some((line) => line.startsWith('content: read path=packages/'))).toBe(false)
+    },
+  )
 
-  it('refuses a package path that leaves fixtures/ through a link', async () => {
+  it('refuses a package that leaves fixtures/ through a link (the file source, a second lock)', async () => {
     copyFixtures()
     const outside = mkdtempSync(join(tmpdir(), 'load-content-outside-'))
-    const link = fixturePath('packages/linked')
-    cpSync(fixturePath('packages/two-paths.json'), join(outside, 'two-paths.json'))
-    symlinkSync(outside, link, 'junction')
+    const packages = fixturePath('packages')
+    cpSync(packages, outside, { recursive: true })
+    rmSync(packages, { recursive: true, force: true })
+    symlinkSync(outside, packages, 'junction')
     try {
-      await moveTwoPaths('packages/linked/two-paths.json')
-      await expectGateFailure('package two-paths path leaves the fixtures folder')
+      await expectGateFailure('package lantern-walk path leaves the fixtures folder')
     } finally {
-      unlinkSync(link) // only the link; then the outside folder itself
+      unlinkSync(packages) // only the link; then the outside folder itself
       rmSync(outside, { recursive: true, force: true })
     }
   })
 
   it('fails when a package file is missing', async () => {
     copyFixtures()
-    await moveTwoPaths('packages/missing.json')
-    await expectGateFailure('package two-paths file not found: packages/missing.json')
+    rmSync(fixturePath('packages/two-paths.json'))
+    await expectGateFailure('package two-paths file not found: packages/two-paths.json')
   })
 
   it('fails when a package path names a folder', async () => {
     copyFixtures()
-    await moveTwoPaths('packages')
-    await expectGateFailure('package two-paths is not a file: packages')
+    rmSync(fixturePath('packages/two-paths.json'))
+    mkdirSync(fixturePath('packages/two-paths.json'))
+    await expectGateFailure('package two-paths is not a file: packages/two-paths.json')
   })
 
   it('fails on a package file larger than 1 MiB', async () => {
@@ -952,9 +2089,18 @@ describe('loadContent: fixtures mode gates fail closed', () => {
 
   it.each([
     [
+      // The picture names a matching image asset, or A001 would fail first (design §10.1).
       'a node picture',
       (pkg: Json) => {
         pkg.nodes[0].image = SHA
+        pkg.assets.push({
+          kind: 'image',
+          id: SHA,
+          width: 800,
+          height: 600,
+          variants: [{ path: `media/two-paths/${SHA}-w800.webp`, mime: 'image/webp', bytes: 1000 }],
+          provenance: { origin: 'human' },
+        })
       },
     ],
     [
@@ -986,23 +2132,67 @@ describe('loadContent: fixtures mode gates fail closed', () => {
   })
 })
 
+describe('createFileSource (the file source)', () => {
+  const read = (path: string) => createFileSource(fixtures(), 'fixtures')(path, 'package x')
+
+  it('reads a file by a safe path inside the folder', () => {
+    copyFixtures()
+    expect(read('packages/two-paths.json')).toEqual({
+      ok: true,
+      value: fixtureBytes('packages/two-paths.json'),
+    })
+  })
+
+  it.each(['../x.json', 'packages/../../x.json', '/x.json', 'a\\b.json', '%2e%2e/x.json', ''])(
+    'refuses the unsafe path %j',
+    (path) => {
+      copyFixtures()
+      expect(read(path)).toEqual({ ok: false, reason: 'package x path is unsafe' })
+    },
+  )
+
+  it('refuses a path that leaves the folder through a link', () => {
+    copyFixtures()
+    const outside = mkdtempSync(join(tmpdir(), 'load-content-outside-'))
+    writeFileSync(join(outside, 'x.json'), '{}')
+    const link = fixturePath('packages/linked')
+    symlinkSync(outside, link, 'junction')
+    try {
+      expect(read('packages/linked/x.json')).toEqual({
+        ok: false,
+        reason: 'package x path leaves the fixtures folder',
+      })
+    } finally {
+      unlinkSync(link)
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('names a missing file, a folder, an oversized file and a missing folder', () => {
+    expect(read('packages/x.json')).toEqual({ ok: false, reason: 'fixtures folder not found' })
+    copyFixtures()
+    expect(read('packages/missing.json')).toEqual({
+      ok: false,
+      reason: 'package x file not found: packages/missing.json',
+    })
+    expect(read('packages')).toEqual({ ok: false, reason: 'package x is not a file: packages' })
+    writeFileSync(fixturePath('big.json'), ' '.repeat(MAX_BODY_BYTES + 1))
+    expect(read('big.json')).toEqual({
+      ok: false,
+      reason: `package x is larger than ${MAX_BODY_BYTES} bytes`,
+    })
+  })
+})
+
 describe('resolveConfig', () => {
+  const COMMITTED = CONTENT_PUBLIC_BASE
+
   it.each([
     [{ CONTENT_SOURCE: 'remote' }, 'CONTENT_SOURCE must be "storage", "fixtures" or "none"'],
-    ...['production', 'preview', 'development', '', 'staging', 'other'].map(
-      (VERCEL_ENV): [Env, string] => [
-        { CONTENT_SOURCE: 'fixtures', VERCEL_ENV },
-        'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
-      ],
-    ),
-    ...['1', '', 'other'].map((VERCEL): [Env, string] => [
-      { CONTENT_SOURCE: 'fixtures', VERCEL },
-      'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
-    ]),
     [
       {
         CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_BASE_URL: COMMITTED,
         CONTENT_POINTER: 'catalogue/fixtures.json',
       },
       'pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json',
@@ -1032,14 +2222,11 @@ describe('resolveConfig', () => {
       { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: 'https://example.supabase.co/x#frag' },
       'CONTENT_BASE_URL must not carry a fragment',
     ],
-    [
-      { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: 'https://example.supabase.co/x' },
-      'CONTENT_POINTER is not set',
-    ],
+    [{ CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: COMMITTED }, 'CONTENT_POINTER is not set'],
     [
       {
         CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_BASE_URL: COMMITTED,
         CONTENT_POINTER: 'x/catalogue/production.json',
       },
       'pointer path must be <root>catalogue/production.json or <root>catalogue/staging.json',
@@ -1048,7 +2235,7 @@ describe('resolveConfig', () => {
       {
         VERCEL_ENV: 'production',
         CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_BASE_URL: COMMITTED,
         CONTENT_POINTER: 'catalogue/staging.json',
       },
       'CONTENT_POINTER must be a production pointer when VERCEL_ENV=production',
@@ -1057,15 +2244,61 @@ describe('resolveConfig', () => {
     expect(resolveConfig(env)).toEqual({ ok: false, reason })
   })
 
+  describe('the R4 allowlist for fixtures (VERCEL and VERCEL_ENV refused first)', () => {
+    const VERCEL_REFUSED =
+      'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)'
+    const FIXTURES = { ok: true, value: { kind: 'fixtures' } }
+    it.each<[Env, string, unknown]>([
+      [{}, 'win32', FIXTURES],
+      [{}, 'linux', { ok: false, reason: FIXTURES_REFUSED_HERE }],
+      [{}, 'darwin', { ok: false, reason: FIXTURES_REFUSED_HERE }],
+      [{ GITHUB_ACTIONS: 'true' }, 'linux', FIXTURES],
+      [{ GITHUB_ACTIONS: 'true' }, 'darwin', FIXTURES],
+      [{ GITHUB_ACTIONS: '1' }, 'linux', { ok: false, reason: FIXTURES_REFUSED_HERE }],
+      [{ GITHUB_ACTIONS: 'TRUE' }, 'linux', { ok: false, reason: FIXTURES_REFUSED_HERE }],
+      [{ GITHUB_ACTIONS: '' }, 'linux', { ok: false, reason: FIXTURES_REFUSED_HERE }],
+      [{ VERCEL: '1' }, 'win32', { ok: false, reason: VERCEL_REFUSED }],
+      [{ VERCEL: '' }, 'win32', { ok: false, reason: VERCEL_REFUSED }],
+      [{ VERCEL: '1' }, 'linux', { ok: false, reason: VERCEL_REFUSED }],
+      [{ VERCEL_ENV: 'production' }, 'win32', { ok: false, reason: VERCEL_REFUSED }],
+      [{ VERCEL_ENV: '' }, 'win32', { ok: false, reason: VERCEL_REFUSED }],
+      [{ VERCEL: '1', GITHUB_ACTIONS: 'true' }, 'linux', { ok: false, reason: VERCEL_REFUSED }],
+      [
+        { VERCEL_ENV: 'preview', GITHUB_ACTIONS: 'true' },
+        'linux',
+        { ok: false, reason: VERCEL_REFUSED },
+      ],
+    ])('%j on %s', (extra, platform, expected) => {
+      expect(
+        resolveConfig({ CONTENT_SOURCE: 'fixtures', ...extra }, POINTER_ROOTS, platform),
+      ).toEqual(expected)
+    })
+
+    it.each(['production', 'preview', 'development', '', 'staging', 'other'])(
+      'keeps the VERCEL_ENV=%j message on every platform',
+      (VERCEL_ENV) => {
+        for (const platform of ['win32', 'linux']) {
+          expect(
+            resolveConfig({ CONTENT_SOURCE: 'fixtures', VERCEL_ENV }, POINTER_ROOTS, platform),
+          ).toEqual({ ok: false, reason: VERCEL_REFUSED })
+        }
+      },
+    )
+  })
+
   it('accepts CONTENT_SOURCE=fixtures outside Vercel and ignores any Storage settings', () => {
     const fixtures = { ok: true, value: { kind: 'fixtures' } }
-    expect(resolveConfig({ CONTENT_SOURCE: 'fixtures' })).toEqual(fixtures)
+    expect(resolveConfig({ CONTENT_SOURCE: 'fixtures' }, POINTER_ROOTS, 'win32')).toEqual(fixtures)
     expect(
-      resolveConfig({
-        CONTENT_SOURCE: 'fixtures',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
-        CONTENT_POINTER: 'catalogue/production.json',
-      }),
+      resolveConfig(
+        {
+          CONTENT_SOURCE: 'fixtures',
+          CONTENT_BASE_URL: 'https://example.supabase.co/x',
+          CONTENT_POINTER: 'catalogue/production.json',
+        },
+        POINTER_ROOTS,
+        'win32',
+      ),
     ).toEqual(fixtures)
   })
 
@@ -1079,7 +2312,7 @@ describe('resolveConfig', () => {
       const r = resolveConfig({
         VERCEL_ENV: vercelEnv,
         CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_BASE_URL: COMMITTED,
         CONTENT_POINTER: pointer,
       })
       expect(r.ok && r.value.kind === 'storage' && r.value.location.mode).toBe(mode)
@@ -1091,9 +2324,11 @@ describe('resolveConfig', () => {
     for (const env of [
       { CONTENT_SOURCE: secretish },
       { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: secretish },
+      { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: `https://${secretish}.supabase.co/x` },
+      { CONTENT_SOURCE: 'storage', CONTENT_BASE_URL: `${COMMITTED}?k=${secretish}` },
       {
         CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: 'https://example.supabase.co/x',
+        CONTENT_BASE_URL: COMMITTED,
         CONTENT_POINTER: secretish,
       },
     ]) {
@@ -1103,15 +2338,539 @@ describe('resolveConfig', () => {
     }
   })
 
-  it('accepts an https base URL with or without a trailing slash', () => {
-    for (const base of ['https://example.supabase.co/x', 'https://example.supabase.co/x/']) {
-      const r = resolveConfig({
+  describe('the committed base URL rule', () => {
+    const storage = (base: string) =>
+      resolveConfig({
         CONTENT_SOURCE: 'storage',
         CONTENT_BASE_URL: base,
         CONTENT_POINTER: 'catalogue/production.json',
       })
+
+    it('is the committed constant, named in the refusal', () => {
+      expect(COMMITTED).toBe(
+        'https://wlunxatrekiqygwphkgy.supabase.co/storage/v1/object/public/content',
+      )
+      expect(BASE_URL_REFUSED).toBe(
+        'CONTENT_BASE_URL must be the committed public base https://wlunxatrekiqygwphkgy.supabase.co/storage/v1/object/public/content (spec §3.5, D3)',
+      )
+    })
+
+    it.each([
+      COMMITTED,
+      `${COMMITTED}/`,
+      `${COMMITTED}//`,
+      'https://WLUNXATREKIQYGWPHKGY.supabase.co/storage/v1/object/public/content',
+      'https://wlunxatrekiqygwphkgy.supabase.co:443/storage/v1/object/public/content/',
+      'http://127.0.0.1:54321/storage/v1/object/public/content',
+      'http://localhost:8080/x',
+      'http://[::1]:9000/storage/v1/object/public/content/',
+      'https://127.0.0.1/anything',
+    ])('accepts %s', (base) => {
+      const r = storage(base)
       expect(r.ok && r.value.kind).toBe('storage')
+    })
+
+    it.each([
+      'https://example.supabase.co/x',
+      'https://wlunxatrekiqygwphkgy.supabase.co',
+      'https://wlunxatrekiqygwphkgy.supabase.co/storage/v1/object/public/masters',
+      `${COMMITTED}/catalogue`,
+      'https://wlunxatrekiqygwphkgy.supabase.co/storage/v1/object/public/%63ontent',
+      'https://wlunxatrekiqygwphkgy.supabase.co:8443/storage/v1/object/public/content',
+      'https://wlunxatrekiqygwphkgy.supabase.co.evil.test/storage/v1/object/public/content',
+      `${COMMITTED}?`,
+      `${COMMITTED}#`,
+      'https://127.0.0.2/storage/v1/object/public/content',
+    ])('refuses %s with the constant only', (base) => {
+      expect(storage(base)).toEqual({ ok: false, reason: BASE_URL_REFUSED })
+    })
+  })
+})
+
+describe('the environment line (design §4.5)', () => {
+  it.each<[Env, string, string]>([
+    [
+      {},
+      'win32',
+      'VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=unset GITHUB_ACTIONS=unset platform=win32',
+    ],
+    [
+      { VERCEL: '', VERCEL_ENV: '', CONTENT_SOURCE: '', GITHUB_ACTIONS: '' },
+      'linux',
+      'VERCEL=empty VERCEL_ENV=empty CONTENT_SOURCE=empty GITHUB_ACTIONS=empty platform=linux',
+    ],
+    [
+      { VERCEL: '1', VERCEL_ENV: 'production', CONTENT_SOURCE: 'none', GITHUB_ACTIONS: 'true' },
+      'linux',
+      'VERCEL=set VERCEL_ENV=production CONTENT_SOURCE=none GITHUB_ACTIONS=true platform=linux',
+    ],
+    [
+      { VERCEL: SECRETISH, VERCEL_ENV: 'preview', CONTENT_SOURCE: 'storage', GITHUB_ACTIONS: '1' },
+      'darwin',
+      'VERCEL=set VERCEL_ENV=preview CONTENT_SOURCE=storage GITHUB_ACTIONS=other platform=darwin',
+    ],
+    [
+      { VERCEL_ENV: 'development', CONTENT_SOURCE: 'fixtures', GITHUB_ACTIONS: 'TRUE' },
+      'aix',
+      'VERCEL=unset VERCEL_ENV=development CONTENT_SOURCE=fixtures GITHUB_ACTIONS=other platform=other',
+    ],
+    [
+      { VERCEL_ENV: SECRETISH, CONTENT_SOURCE: SECRETISH, GITHUB_ACTIONS: SECRETISH },
+      SECRETISH,
+      'VERCEL=unset VERCEL_ENV=other CONTENT_SOURCE=other GITHUB_ACTIONS=other platform=other',
+    ],
+  ])('%j on %s', (env, platform, names) => {
+    expect(environmentLine(env, platform)).toBe(`content: environment ${names}`)
+  })
+
+  it('is the first line of every run, failing ones included, on stdout', async () => {
+    expect(await run({ CONTENT_SOURCE: 'remote' })).toBe(1)
+    expect(out).toEqual([
+      'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=other GITHUB_ACTIONS=unset platform=linux',
+    ])
+    expect(errors).toEqual([
+      'content gate failed: CONTENT_SOURCE must be "storage", "fixtures" or "none"',
+    ])
+  })
+})
+
+// ---- secret safety (design §10.1) ----
+
+const CANARIES: Env = {
+  READER_DB_URL: `postgres://reader:${SECRETISH}@db.example.test:5432/reader`,
+  SUPABASE_SECRET_KEY: SECRETISH,
+  VERCEL_OIDC_TOKEN: SECRETISH,
+  VERCEL_AUTOMATION_BYPASS_SECRET: SECRETISH,
+}
+
+/** Every file the loader wrote under the root (.content/ and public/build-info.json), as text. */
+function writtenText(): string {
+  const parts: string[] = []
+  const visit = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const file = join(dir, entry.name)
+      if (entry.isDirectory()) visit(file)
+      else parts.push(readFileSync(file, 'utf8'))
     }
+  }
+  if (existsSync(paths().contentDir)) visit(paths().contentDir)
+  if (existsSync(paths().publicInfo)) parts.push(readFileSync(paths().publicInfo, 'utf8'))
+  return parts.join('\n')
+}
+
+function expectNoSecret(): void {
+  const lines = [...out, ...errors]
+  expect(lines.length).toBeGreaterThan(0)
+  for (const text of [...lines, writtenText()]) {
+    expect(text).not.toContain(SECRETISH)
+    expect(text).not.toContain('127.0.0.1') // never a host or base URL
+    expect(text).not.toContain(baseUrl)
+  }
+}
+
+describe('secret safety: canary values never reach a log line or an output', () => {
+  it('a passing storage run', async () => {
+    const media: MediaVariant[] = []
+    const two = await servePackage('two-paths', {
+      mutate: (pkg) => void media.push(...addImage(pkg, 1, [['w800', 'image/webp', 100]])),
+    })
+    serveMedia(media)
+    await publish({ mode: 'staging', stories: [two.entry] })
+    expect(await run({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(0)
+    expect(requestList()).toEqual([...stagingGets(two), ['HEAD', media[0]!.path]])
+    expect(existsSync(paths().publicInfo)).toBe(true)
+    expectNoSecret()
+  })
+
+  it('a passing fixtures run, with a canary query on CONTENT_BASE_URL', async () => {
+    copyFixtures()
+    const env = { ...fixturesEnv, ...CANARIES, CONTENT_BASE_URL: `${baseUrl}?token=${SECRETISH}` }
+    expect(await runFixtures(env)).toBe(0)
+    expect(existsSync(paths().publicInfo)).toBe(true)
+    expectNoSecret()
+  })
+
+  it('a failing run on a canary query on CONTENT_BASE_URL', async () => {
+    const env = {
+      ...storageEnv(),
+      ...CANARIES,
+      CONTENT_BASE_URL: `${baseUrl}?token=${SECRETISH}`,
+    }
+    expect(await run(env)).toBe(1)
+    expect(errors).toEqual(['content gate failed: CONTENT_BASE_URL must not carry a query'])
+    expectNoSecret()
+  })
+
+  it('a failing run after requests (a tampered package)', async () => {
+    const two = await servePackage('two-paths')
+    route(two.entry.packagePath, json(jcsBytes({ ...two.pkg, emoji: SECRETISH.slice(0, 2) })))
+    await publish({ mode: 'staging', stories: [two.entry] })
+    expect(await run({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(1)
+    expect(errors).toEqual(['content gate failed: package two-paths sha256 mismatch'])
+    expect(requestList()).toEqual(stagingGets(two))
+    expectNoSecret()
+  })
+})
+
+// ---- the env names the loader reads (design §4.2, §9 item 34) ----
+
+const LOADER_ENV_NAMES = [
+  'CONTENT_BASE_URL',
+  'CONTENT_POINTER',
+  'CONTENT_SOURCE',
+  'GITHUB_ACTIONS',
+  'VERCEL',
+  'VERCEL_DEPLOYMENT_ID',
+  'VERCEL_ENV',
+  'VERCEL_GIT_COMMIT_SHA',
+  'VERCEL_URL',
+]
+
+interface Source {
+  readonly file: string
+  readonly text: string
+}
+
+/** Wrappers that leave the value unchanged: `(env)`, `env!`, `env as Env`, `env satisfies Env`. */
+const transparent = (node: ts.Node) =>
+  ts.isParenthesizedExpression(node) ||
+  ts.isNonNullExpression(node) ||
+  ts.isAsExpression(node) ||
+  ts.isSatisfiesExpression(node) ||
+  ts.isTypeAssertionExpression(node)
+
+/** The identifier is the name being declared, not a use: `env: Env`, `{ env: … }`, `const env`. */
+function declaresName(parent: ts.Node, id: ts.Identifier): boolean {
+  return (
+    ((ts.isParameter(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isPropertyAssignment(parent) ||
+      ts.isVariableDeclaration(parent) ||
+      ts.isFunctionDeclaration(parent) ||
+      ts.isMethodDeclaration(parent)) &&
+      parent.name === id) ||
+    (ts.isBindingElement(parent) && (parent.name === id || parent.propertyName === id))
+  )
+}
+
+/** The node sits inside the left side of a destructuring assignment: `({ … } = x)`. */
+function inAssignmentTarget(node: ts.Node): boolean {
+  let child = node
+  for (let p = node.parent; p; child = p, p = p.parent) {
+    if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      return p.left === child
+    }
+    if (ts.isForOfStatement(p) || ts.isForInStatement(p)) return p.initializer === child
+    const pattern =
+      ts.isObjectLiteralExpression(p) ||
+      ts.isArrayLiteralExpression(p) ||
+      ts.isPropertyAssignment(p) ||
+      ts.isShorthandPropertyAssignment(p) ||
+      ts.isSpreadAssignment(p) ||
+      ts.isSpreadElement(p) ||
+      transparent(p)
+    if (!pattern) return false
+  }
+  return false
+}
+
+/**
+ * `{ env: e }` or `{ env: { X } }`, in a binding pattern or a destructuring assignment: env taken
+ * out under another name, so its reads would no longer be seen. `{ env }` and `{ env: env }` keep
+ * the name and stay visible. null when `id` is not such a property name.
+ */
+function renamesEnv(parent: ts.Node, id: ts.Identifier): string | null {
+  let target: ts.Node | undefined
+  if (ts.isBindingElement(parent) && parent.propertyName === id) target = parent.name
+  else if (ts.isPropertyAssignment(parent) && parent.name === id && inAssignmentTarget(parent)) {
+    target = parent.initializer
+    // `{ env: e = fallback } = x`
+    if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      target = target.left
+    }
+  }
+  if (!target) return null
+  if (ts.isIdentifier(target) && target.text === 'env') return null
+  const pattern =
+    ts.isObjectBindingPattern(target) ||
+    ts.isArrayBindingPattern(target) ||
+    ts.isObjectLiteralExpression(target) ||
+    ts.isArrayLiteralExpression(target)
+  return pattern ? 'destructures env' : 'aliases env'
+}
+
+/**
+ * Every env name the sources read, from their syntax trees (design §10.1 secret safety, §9 item
+ * 34): property reads on an env expression (`env`, `options.env`, `process.env`) and the literal
+ * names passed as `vercelValue(env, '<NAME>')`. Every other use of an env expression is a problem,
+ * so a read cannot hide from the list: destructuring, spreading, enumerating or aliasing it (also
+ * as `{ env: e }` or `{ env: { X } }` in a binding pattern or a destructuring assignment), a
+ * computed `env[...]` outside vercelValue, any other vercelValue call, and passing it to a
+ * function unless that function is declared in these sources with the parameter named `env`
+ * (whose reads this scan then sees). The one value use allowed is `{ env: <env> }` handed to such
+ * a function (the entry point's `loadContent({ env: process.env, root })`).
+ */
+function scanEnvReads(sources: readonly Source[]): { names: string[]; problems: string[] } {
+  const names = new Set<string>()
+  const problems: string[] = []
+  const trees = sources.map(({ file, text }) => ({
+    file,
+    tree: ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS),
+  }))
+  const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => {
+    visit(node)
+    ts.forEachChild(node, (child) => walk(child, visit))
+  }
+
+  // The functions these sources declare, with their parameter names.
+  const params = new Map<string, readonly string[]>()
+  const parameterNames = (fn: ts.SignatureDeclarationBase) =>
+    fn.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : ''))
+  for (const { tree } of trees) {
+    walk(tree, (node) => {
+      if (ts.isFunctionDeclaration(node) && node.name) {
+        params.set(node.name.text, parameterNames(node))
+      }
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+      ) {
+        params.set(node.name.text, parameterNames(node.initializer))
+      }
+    })
+  }
+  const insideVercelValue = (node: ts.Node) => {
+    for (let p = node.parent; p; p = p.parent) {
+      if (ts.isFunctionDeclaration(p) && p.name?.text === 'vercelValue') return true
+    }
+    return false
+  }
+
+  /** null when this use of an env expression is allowed, else the problem. */
+  const judge = (expression: ts.Node): string | null => {
+    let top = expression
+    while (top.parent && transparent(top.parent)) top = top.parent
+    const p = top.parent
+    if (ts.isPropertyAccessExpression(p) && p.expression === top) {
+      names.add(p.name.text)
+      return null
+    }
+    if (ts.isElementAccessExpression(p) && p.expression === top) {
+      return insideVercelValue(p) ? null : 'computed env[...] outside vercelValue'
+    }
+    if (ts.isCallExpression(p) && p.arguments.some((a) => a === top)) {
+      const callee = p.expression
+      if (ts.isIdentifier(callee) && callee.text === 'vercelValue') {
+        const [first, second] = p.arguments
+        if (p.arguments.length === 2 && first === top && ts.isIdentifier(top)) {
+          if (second && ts.isStringLiteralLike(second)) {
+            names.add(second.text)
+            return null
+          }
+        }
+        return "vercelValue called other than as vercelValue(env, '<NAME>')"
+      }
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        ['Object', 'Reflect'].includes(callee.expression.text)
+      ) {
+        return 'enumerates env'
+      }
+      const index = p.arguments.findIndex((a) => a === top)
+      if (ts.isIdentifier(callee) && params.get(callee.text)?.[index] === 'env') return null
+      return `passes env to ${callee.getText()}`
+    }
+    if (
+      (ts.isPropertyAssignment(p) && p.initializer === top) ||
+      ts.isShorthandPropertyAssignment(p)
+    ) {
+      const literal = p.parent
+      const call = literal.parent
+      const keyed = ts.isIdentifier(p.name) && p.name.text === 'env'
+      const handedToLocal =
+        ts.isCallExpression(call) &&
+        call.arguments.some((a) => a === literal) &&
+        ts.isIdentifier(call.expression) &&
+        params.has(call.expression.text)
+      return keyed && handedToLocal ? null : 'uses env as a value'
+    }
+    if (ts.isSpreadAssignment(p) || ts.isSpreadElement(p)) return 'spreads env'
+    if (ts.isVariableDeclaration(p) && p.initializer === top) {
+      return ts.isIdentifier(p.name) ? 'aliases env' : 'destructures env'
+    }
+    if (
+      ts.isBinaryExpression(p) &&
+      p.right === top &&
+      p.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      return ts.isObjectLiteralExpression(p.left) || ts.isArrayLiteralExpression(p.left)
+        ? 'destructures env'
+        : 'aliases env'
+    }
+    if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.expression === top) {
+      return 'enumerates env'
+    }
+    return 'uses env as a value'
+  }
+
+  for (const { file, tree } of trees) {
+    walk(tree, (node) => {
+      let problem: string | null = null
+      if (ts.isIdentifier(node) && node.text === 'env') {
+        const p = node.parent
+        const renamed = renamesEnv(p, node)
+        if (renamed) problem = renamed
+        else if (ts.isPropertyAccessExpression(p) && p.name === node) problem = judge(p)
+        else if (!declaresName(p, node)) problem = judge(node)
+      } else if (
+        ts.isElementAccessExpression(node) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        node.argumentExpression.text === 'env'
+      ) {
+        problem = 'computed access to env'
+      } else if (
+        (ts.isParameter(node) || ts.isVariableDeclaration(node)) &&
+        !ts.isIdentifier(node.name) &&
+        node.type &&
+        ts.isTypeReferenceNode(node.type) &&
+        node.type.typeName.getText() === 'Env'
+      ) {
+        problem = 'destructures env'
+      }
+      if (problem) problems.push(`${file}: ${problem}`)
+    })
+  }
+  return { names: [...names].sort(), problems }
+}
+
+describe('the loader reads only the 9 public env names', () => {
+  const loaderSources = (): Source[] => {
+    const contentDir = join(storyboardDir, 'scripts', 'content')
+    const files = [
+      'scripts/load-content.ts',
+      ...readdirSync(contentDir)
+        .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+        .map((name) => `scripts/content/${name}`),
+    ]
+    return files.map((file) => ({
+      file,
+      text: readFileSync(join(storyboardDir, ...file.split('/')), 'utf8'),
+    }))
+  }
+
+  it('in load-content.ts and scripts/content/*.ts', () => {
+    const sources = loaderSources()
+    expect(sources.map((s) => s.file)).toEqual(
+      expect.arrayContaining([
+        'scripts/load-content.ts',
+        'scripts/content/request.ts',
+        'scripts/content/file-source.ts',
+        'scripts/content/media-gate.ts',
+      ]),
+    )
+    expect(scanEnvReads(sources)).toEqual({ names: LOADER_ENV_NAMES, problems: [] })
+  })
+
+  it.each([
+    ['a destructuring', 'const { READER_DB_URL } = options.env', 'destructures env'],
+    ['a spread', 'const copy = { ...env }', 'spreads env'],
+    ['an enumeration', 'for (const k of Object.keys(env)) log(k)', 'enumerates env'],
+    ['a computed read', "const x = env['READER_DB_URL']", 'computed env[...] outside vercelValue'],
+    [
+      'vercelValue on process.env',
+      "export const leak = () => vercelValue(process.env, 'READER_DB_URL')",
+      "vercelValue called other than as vercelValue(env, '<NAME>')",
+    ],
+    [
+      'vercelValue on options.env',
+      "const leak = (options: LoaderOptions) => vercelValue(options.env, 'READER_DB_URL')",
+      "vercelValue called other than as vercelValue(env, '<NAME>')",
+    ],
+    [
+      'vercelValue with a variable name',
+      'const leak = (n: string) => vercelValue(env, n)',
+      "vercelValue called other than as vercelValue(env, '<NAME>')",
+    ],
+    ['an alias', 'const e = options.env\nconst x = e.READER_DB_URL', 'aliases env'],
+    [
+      'a renamed destructuring',
+      'const { env: e } = options\nconst x = e.READER_DB_URL',
+      'aliases env',
+    ],
+    [
+      'a renamed destructured parameter',
+      'function f({ env: e }: LoaderOptions) {\n  return e.SUPABASE_SECRET_KEY\n}',
+      'aliases env',
+    ],
+    ['a nested destructuring', 'const { env: { READER_DB_URL } } = options', 'destructures env'],
+    [
+      'a renamed destructuring assignment',
+      'let e: Env\n;({ env: e } = options)\nconst x = e.READER_DB_URL',
+      'aliases env',
+    ],
+    [
+      'a renamed destructuring assignment with a default',
+      'let e: Env\n;({ env: e = {} } = options)\nconst x = e.READER_DB_URL',
+      'aliases env',
+    ],
+    [
+      'a function returning env',
+      'const source = (o: LoaderOptions) => o.env\nexport const x = (o: LoaderOptions) => source(o).READER_DB_URL',
+      'uses env as a value',
+    ],
+    [
+      'a destructured Env parameter',
+      'function f({ READER_DB_URL }: Env) {\n  return READER_DB_URL\n}',
+      'destructures env',
+    ],
+    [
+      'env passed to a parameter with another name',
+      'function leak(e: Env) {\n  return e.READER_DB_URL\n}\nleak(env)',
+      'passes env to leak',
+    ],
+    [
+      'env passed to an outside function',
+      'log(JSON.stringify(env))',
+      'passes env to JSON.stringify',
+    ],
+    ['a computed process.env', "const x = process['env']", 'computed access to env'],
+  ])('catches %s', (_what, line, problem) => {
+    const text = `function vercelValue(env: Env, name: string): string | null {\n  return env[name] ?? null\n}\n${line}\n`
+    expect(scanEnvReads([{ file: 'seed.ts', text }]).problems).toEqual([`seed.ts: ${problem}`])
+  })
+
+  it('catches a hidden read appended to the real loader source', () => {
+    const [loader, ...rest] = loaderSources()
+    expect(loader!.file).toBe('scripts/load-content.ts')
+    for (const [line, problem] of [
+      [
+        "export const leak = () => vercelValue(process.env, 'READER_DB_URL')",
+        "vercelValue called other than as vercelValue(env, '<NAME>')",
+      ],
+      [
+        'const source = (o: LoaderOptions) => o.env\nexport const leak = (o: LoaderOptions) => source(o).READER_DB_URL',
+        'uses env as a value',
+      ],
+      ['export const leak = ({ env: e }: LoaderOptions) => e.READER_DB_URL', 'aliases env'],
+    ] as const) {
+      const seeded = { file: loader!.file, text: `${loader!.text}\n${line}\n` }
+      expect(scanEnvReads([seeded, ...rest])).toEqual({
+        names: LOADER_ENV_NAMES,
+        problems: [`scripts/load-content.ts: ${problem}`],
+      })
+    }
+  })
+
+  it('lists a property read and a vercelValue name', () => {
+    const text = "const a = env.READER_DB_URL\nconst b = vercelValue(env, 'VERCEL_OIDC_TOKEN')\n"
+    expect(scanEnvReads([{ file: 'seed.ts', text }]).names).toEqual([
+      'READER_DB_URL',
+      'VERCEL_OIDC_TOKEN',
+    ])
   })
 })
 
@@ -1163,34 +2922,44 @@ describe('load-content (real process, exit code)', () => {
   const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
 
   /** Runs the loader as `pnpm build` does, in Production with CONTENT_SOURCE unset. */
-  function runInProductionWithoutSource(script: string) {
+  function productionWithoutSource(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...process.env, VERCEL_ENV: 'production' }
     for (const name of ['CONTENT_SOURCE', 'CONTENT_BASE_URL', 'CONTENT_POINTER']) delete env[name]
-    return spawnSync(
-      process.execPath,
-      [join(storyboard, 'node_modules/tsx/dist/cli.mjs'), script],
-      {
-        env,
-        encoding: 'utf8',
-      },
+    return env
+  }
+
+  const spawnLoader = (script: string, env: NodeJS.ProcessEnv) =>
+    spawnSync(process.execPath, [join(storyboard, 'node_modules/tsx/dist/cli.mjs'), script], {
+      env,
+      encoding: 'utf8',
+    })
+
+  /** stdout holds exactly the environment line (enums of this process's environment). */
+  function expectOnlyEnvironmentLine(stdout: string, env: NodeJS.ProcessEnv): void {
+    expect(stdout).toBe(`${environmentLine(env, process.platform)}\n`)
+    expect(stdout).toMatch(
+      /^content: environment VERCEL=(unset|empty|set) VERCEL_ENV=\w+ CONTENT_SOURCE=\w+ GITHUB_ACTIONS=\w+ platform=\w+\n$/,
     )
   }
 
-  function expectGateFailure(result: ReturnType<typeof runInProductionWithoutSource>): void {
+  function expectGateFailure(result: ReturnType<typeof spawnLoader>, env: NodeJS.ProcessEnv): void {
     expect(result.status).toBe(1)
     expect(result.stderr).toContain(
       'content gate failed: CONTENT_SOURCE is not set; it is required when VERCEL_ENV=production',
     )
-    expect(result.stdout).toBe('')
+    expectOnlyEnvironmentLine(result.stdout, env)
+    expect(result.stdout).toContain('VERCEL_ENV=production CONTENT_SOURCE=unset')
   }
 
   it('exits 1 with the gate message in Production when CONTENT_SOURCE is unset', () => {
-    expectGateFailure(runInProductionWithoutSource(join(storyboard, 'scripts/load-content.ts')))
+    const env = productionWithoutSource()
+    expectGateFailure(spawnLoader(join(storyboard, 'scripts/load-content.ts'), env), env)
   }, 30_000)
 
   it('fails closed the same way when started through a symlinked or junctioned folder', () => {
+    const env = productionWithoutSource()
     withLinkedFolder(join(storyboard, 'scripts'), (link) => {
-      expectGateFailure(runInProductionWithoutSource(join(link, 'load-content.ts')))
+      expectGateFailure(spawnLoader(join(link, 'load-content.ts'), env), env)
     })
   }, 30_000)
 
@@ -1208,19 +2977,13 @@ describe('load-content (real process, exit code)', () => {
       VERCEL_ENV: 'preview',
       CONTENT_SOURCE: 'fixtures',
     }
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(storyboard, 'node_modules/tsx/dist/cli.mjs'),
-        join(storyboard, 'scripts/load-content.ts'),
-      ],
-      { env, encoding: 'utf8' },
-    )
+    const result = spawnLoader(join(storyboard, 'scripts/load-content.ts'), env)
     expect(result.status).toBe(1)
     expect(result.stderr).toContain(
       'content gate failed: CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',
     )
-    expect(result.stdout).toBe('')
+    expectOnlyEnvironmentLine(result.stdout, env)
+    expect(result.stdout).toContain('VERCEL_ENV=preview CONTENT_SOURCE=fixtures')
     expect(outputsNow()).toEqual(before)
   }, 30_000)
 })

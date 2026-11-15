@@ -10,6 +10,7 @@ test-results
 migration-input
 .content
 fixtures/catalogue
+tools/migrate/legacy-waiver-keys.json
 # Local-only private rule data (gitignored)
 .rules-private
 # Supabase CLI private link state (gitignored)

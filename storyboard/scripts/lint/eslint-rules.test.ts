@@ -323,6 +323,52 @@ describe('reader fence: env, cookies and Web Storage (design §8.2)', () => {
   })
 })
 
+// P1-2b (design p1-step8-design.md §2, §8): src/content joins READER_FILES, so the reader fence and
+// NO_ENV reach the content reader; node:fs, node:crypto and process.cwd() stay allowed there.
+describe('reader fence: src/content (P1-2b)', () => {
+  const SAMPLE = 'src/content/lint-sample.ts'
+
+  it.each([
+    ['export const source = process.env.CONTENT_SOURCE', NO_ENV],
+    ['const { env } = process\nexport const source = env.CONTENT_SOURCE', NO_ENV],
+    ["document.cookie = 'a=b'", NO_COOKIES],
+  ])('rejects %s', async (code, message) => {
+    expect(await ruleErrors(SAMPLE, code, 'no-restricted-properties')).toEqual([
+      expect.stringContaining(message),
+    ])
+  })
+
+  it.each([
+    ["import '../../scripts/load-content'", 'Reader code must not import scripts/.'],
+    ["import { outputPaths } from '../../scripts/load-content'\nvoid outputPaths", 'scripts/'],
+    ["import '../../tools/migrate/waiver-keys-cli'", 'Reader code must not import tools/.'],
+    ["import '../../tools/publisher/cli'", 'Reader code must not import tools/.'],
+    ["import '@supabase/supabase-js'", 'Reader code must not import Supabase clients.'],
+    ["import 'next/headers'", STATIC_ONLY],
+  ])('rejects %s', async (line, message) => {
+    expect(await importErrors(SAMPLE, line)).toEqual([expect.stringContaining(message)])
+  })
+
+  it('keeps the import fence in its tests too', async () => {
+    expect(
+      await importErrors('src/content/lint-sample.test.ts', "import '../../scripts/load-content'"),
+    ).toEqual([expect.stringContaining('Reader code must not import scripts/.')])
+  })
+
+  it("allows server-only, node:fs, node:crypto and process.cwd() (the reader's own needs)", async () => {
+    const code = [
+      "import 'server-only'",
+      "import { createHash } from 'node:crypto'",
+      "import { readFileSync } from 'node:fs'",
+      "import { join } from 'node:path'",
+      "import { CONTENT_DIR } from '../core/content/output-layout'",
+      "export const read = () => createHash('sha256').update(readFileSync(join(process.cwd(), CONTENT_DIR))).digest('hex')",
+    ].join('\n')
+    const errors = (await lint(SAMPLE, `${code}\n`)).filter((m) => m.severity === 2)
+    expect(errors).toEqual([])
+  })
+})
+
 describe('eslint-config-next is still applied', () => {
   it('fires a typescript-eslint rule on a .ts sample', async () => {
     const messages = await lint('src/reader/lint-sample.ts', 'export const value: any = 1\n')

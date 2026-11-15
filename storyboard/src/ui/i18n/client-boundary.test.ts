@@ -3,7 +3,8 @@
 // - No file whose first statement is 'use client' reaches src/ui/i18n/messages.ts, messages/*.json
 //   or src/config/launch.ts, directly or through relative or @/ imports (type-only imports count
 //   too). The catalogue stays on the server, and the launch decision is never computed in a
-//   browser, where process.env.READER_LAUNCH would be undefined.
+//   browser, where process.env.READER_LAUNCH would be undefined. Every file under src/content (the
+//   server-only content reader, design p1-step8-design.md §8; P1-2b) counts as server-only too.
 // - Under app/, src/, scripts/ and e2e/, the string READER_LAUNCH appears only in
 //   src/config/launch.ts and *.test.ts files (buildLaunch is its only reader).
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
@@ -19,8 +20,12 @@ const toPosix = (path: string): string => path.split(sep).join('/')
 
 /** The files a client component must never reach. */
 const SERVER_ONLY = ['src/ui/i18n/messages.ts', 'src/config/launch.ts']
+/** Folders whose every file is server-only: the content reader (P1-2b, design §8). */
+const SERVER_ONLY_DIRS = ['src/content/']
 const isServerOnly = (path: string): boolean =>
-  SERVER_ONLY.includes(path) || /^messages\/[^/]+\.json$/.test(path)
+  SERVER_ONLY.includes(path) ||
+  SERVER_ONLY_DIRS.some((dir) => path.startsWith(dir)) ||
+  /^messages\/[^/]+\.json$/.test(path)
 
 /** Every file under `dir` (relative to the storyboard root) whose name passes `keep`. */
 function walk(dir: string, keep: (name: string) => boolean): string[] {
@@ -187,6 +192,40 @@ describe('the client boundary scanner', () => {
   })
 })
 
+describe('src/content is server-only (P1-2b, design p1-step8-design.md §8)', () => {
+  it('counts every file under src/content, and nothing that only starts with the name', () => {
+    expect(isServerOnly('src/content/index.ts')).toBe(true)
+    expect(isServerOnly('src/content/reader.ts')).toBe(true)
+    expect(isServerOnly('src/content/later/more.ts')).toBe(true)
+    expect(isServerOnly('src/contentious.ts')).toBe(false)
+    expect(isServerOnly('src/core/content/output-layout.ts')).toBe(false)
+  })
+
+  it('catches a client component that reaches src/content, directly or through other files', () => {
+    const files = new Map([
+      ['src/content/index.ts', "import 'server-only'\nexport { listStories } from './reader'"],
+      ['src/content/reader.ts', "import 'server-only'\nexport const listStories = () => []"],
+      ['src/content/later/more.ts', "import 'server-only'\nexport const more = 1"],
+      ['src/ui/shelf.tsx', "'use client'\nimport { listStories } from '@/content'"],
+      ['src/ui/helper.ts', "export { more } from '../content/later/more'"],
+      ['src/ui/indirect.tsx', "'use client'\nimport { more } from './helper'"],
+      ['app/page.tsx', "import { listStories } from '@/content'"],
+      [
+        'src/ui/clean.tsx',
+        "'use client'\nimport { MEDIA_ORIGIN } from '../config/security-headers'",
+      ],
+      ['src/config/security-headers.ts', 'export const MEDIA_ORIGIN = 1'],
+    ])
+    expect(clientViolations(files)).toEqual([
+      { client: 'src/ui/shelf.tsx', chain: ['src/ui/shelf.tsx', 'src/content/index.ts'] },
+      {
+        client: 'src/ui/indirect.tsx',
+        chain: ['src/ui/indirect.tsx', 'src/ui/helper.ts', 'src/content/later/more.ts'],
+      },
+    ])
+  })
+})
+
 describe('the client boundary in the repo', () => {
   const graph = repoGraph()
   const clients = [...graph].filter(([, source]) => isClientFile(source)).map(([path]) => path)
@@ -211,6 +250,14 @@ describe('the client boundary in the repo', () => {
     for (const path of ['src/ui/i18n/messages.ts', 'src/config/launch.ts']) {
       expect(isClientFile(graph.get(path) ?? ''), path).toBe(false)
     }
+  })
+
+  it('scans the content reader, and none of its files is a client file (P1-2b)', () => {
+    const content = [...graph.keys()].filter((path) => path.startsWith('src/content/'))
+    expect(content).toEqual(
+      expect.arrayContaining(['src/content/index.ts', 'src/content/reader.ts']),
+    )
+    expect(content.filter((path) => isClientFile(graph.get(path) ?? ''))).toEqual([])
   })
 })
 

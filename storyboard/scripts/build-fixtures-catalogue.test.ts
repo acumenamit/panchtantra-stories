@@ -83,7 +83,9 @@ describe('fixtures catalogue (contents)', () => {
     if (!checked.ok) throw new Error(checked.reason)
     expect(checked.value.excluded).toEqual([])
     for (const entry of checked.value.included) {
-      const r = await checkPackage(readFixture(entry.packagePath), entry, PANCHATANTRA_RULESET)
+      const r = await checkPackage(readFixture(entry.packagePath), entry, PANCHATANTRA_RULESET, {
+        requireJcs: false,
+      })
       expect(r.ok, r.ok ? '' : r.reason).toBe(true)
     }
   })

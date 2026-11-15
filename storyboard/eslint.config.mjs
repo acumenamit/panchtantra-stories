@@ -76,7 +76,14 @@ const NO_STORAGE_GLOBALS = ['localStorage', 'sessionStorage'].map((name) => ({
   name,
   message: STORAGE_ONLY_IN_DEVICE_STORAGE,
 }))
-const READER_FILES = ['src/reader/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'src/ui/**/*.{ts,tsx}']
+// P1-2b (design p1-step8-design.md §8): the server-only content reader (src/content) is reader
+// code too, so the fence and NO_ENV apply; node:fs, node:crypto and process.cwd() stay allowed.
+const READER_FILES = [
+  'src/reader/**/*.{ts,tsx}',
+  'app/**/*.{ts,tsx}',
+  'src/ui/**/*.{ts,tsx}',
+  'src/content/**/*.{ts,tsx}',
+]
 const TEST_FILES = ['**/*.test.ts']
 
 const eslintConfig = defineConfig([

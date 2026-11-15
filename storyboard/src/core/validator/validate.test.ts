@@ -5,6 +5,7 @@ import { PANCHATANTRA_RULESET } from '../rules/panchatantra'
 import type { PrivateRuleData } from '../rules/types'
 import { validatePackage } from './index'
 import type { ValidateOptions } from './index'
+import { RENDERED_SCRIPTS, scriptProblem } from './text'
 
 type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 const base = (): Json => structuredClone(fixture) as Json
@@ -289,6 +290,206 @@ describe('validator: one failing case per check', () => {
 
   it('A005/A006 become errors for a story about to be featured', () => {
     expect(hasCheck(fixture, 'A006', 'error', { ...opts, forFeature: true })).toBe(true)
+  })
+})
+
+// P1-2b (design p1-step8-design.md §5.5, §10.1): A001, asset references resolve; error in every
+// mode. The existing A009 case above declares an image asset that no node names, which A001 allows
+// (it checks references, not use), so it needed no change.
+describe('validator: A001 asset references', () => {
+  const SHA_IMAGE = '1'.repeat(64)
+  const SHA_AUDIO = '2'.repeat(64)
+  const image = (id = SHA_IMAGE): Json => ({
+    kind: 'image',
+    id,
+    width: 800,
+    height: 600,
+    variants: [{ path: `media/two-paths/${id}-w800.webp`, mime: 'image/webp', bytes: 1000 }],
+    provenance: { origin: 'human' },
+  })
+  const audio = (nodeId: string, locale: string, id = SHA_AUDIO): Json => ({
+    kind: 'audio',
+    id,
+    nodeId,
+    locale,
+    durationMs: 1000,
+    variants: [{ path: `media/two-paths/${id}-a.mp3`, mime: 'audio/mpeg', bytes: 1000 }],
+    provenance: { origin: 'human' },
+    narratedTextSha256: '3'.repeat(64),
+  })
+  const consistent = (): Json => {
+    const p = base()
+    p.nodes[0].image = SHA_IMAGE
+    p.assets = [image(), audio('start', 'en'), audio('start', 'hi', '4'.repeat(64))]
+    return p
+  }
+  const a001 = (p: unknown, o: ValidateOptions = opts) =>
+    validatePackage(p, o).findings.filter((f) => f.checkId === 'A001')
+  const modes: ValidateOptions[] = [
+    opts,
+    { ...opts, mode: 'stage' },
+    { ...opts, mode: 'publish' },
+    { ...opts, forFeature: true },
+  ]
+
+  it('passes the fixture (no assets, no pictures) and a package whose references resolve', () => {
+    for (const o of modes) {
+      expect(a001(base(), o)).toEqual([])
+      expect(a001(consistent(), o)).toEqual([])
+    }
+    expect(validatePackage(consistent(), opts).ok).toBe(true)
+  })
+
+  const cases: [string, (p: Json) => void, { nodeId: string | null; locale: string | null }][] = [
+    [
+      'two assets share an id',
+      (p) => {
+        p.assets.push(image('4'.repeat(64)))
+      },
+      { nodeId: null, locale: null },
+    ],
+    [
+      'a node picture names no asset',
+      (p) => {
+        p.nodes[1].image = '9'.repeat(64)
+      },
+      { nodeId: 'wise_path', locale: null },
+    ],
+    [
+      'a node picture names an audio asset',
+      (p) => {
+        p.nodes[1].image = SHA_AUDIO
+      },
+      { nodeId: 'wise_path', locale: null },
+    ],
+    [
+      'a narration names a missing node',
+      (p) => {
+        p.assets.push(audio('nowhere', 'en', '5'.repeat(64)))
+      },
+      { nodeId: 'nowhere', locale: 'en' },
+    ],
+    [
+      'a narration is in a language the package lacks',
+      (p) => {
+        p.assets.push(audio('start', 'ar', '5'.repeat(64)))
+      },
+      { nodeId: 'start', locale: 'ar' },
+    ],
+    [
+      'two narrations for one node and language',
+      (p) => {
+        p.assets.push(audio('start', 'en', '5'.repeat(64)))
+      },
+      { nodeId: 'start', locale: 'en' },
+    ],
+  ]
+
+  it.each(cases)('fails when %s, as one error in every mode', (_why, mutate, where) => {
+    const p = consistent()
+    mutate(p)
+    for (const o of modes) {
+      const found = a001(p, o)
+      expect(
+        found.map((f) => ({ severity: f.severity, nodeId: f.nodeId, locale: f.locale })),
+      ).toEqual([{ severity: 'error', ...where }])
+      expect(found[0]?.ruleId).toBeNull()
+      expect(validatePackage(p, o).ok).toBe(false)
+    }
+  })
+
+  it('names short ids in its messages', () => {
+    const p = consistent()
+    p.nodes[1].image = '9'.repeat(64)
+    expect(a001(p)[0]?.message).toBe('Picture 999999999999 names no image asset')
+  })
+})
+
+// P1-2b (design §5.6, §10.1): T006, letters outside the rendered scripts; a warning in every mode.
+describe('validator: T006 rendered scripts', () => {
+  const t006 = (p: unknown, o: ValidateOptions = opts) =>
+    validatePackage(p, o).findings.filter((f) => f.checkId === 'T006')
+
+  it('RENDERED_SCRIPTS is Latin and Devanagari', () => {
+    expect(RENDERED_SCRIPTS).toEqual(['Latn', 'Deva'])
+  })
+
+  it('the fixture passes', () => {
+    expect(t006(base())).toEqual([])
+  })
+
+  it('warns once on Han letters in Hindi text, listing the code points; ok stays true', () => {
+    const p = base()
+    p.text.hi.nodes.start.text = 'उसकी琥珀रंगी आँखें चमकीं। 琥珀'
+    for (const o of [opts, { ...opts, mode: 'publish' as const }, { ...opts, forFeature: true }]) {
+      expect(t006(p, o)).toEqual([
+        {
+          checkId: 'T006',
+          ruleId: null,
+          severity: 'warn',
+          nodeId: 'start',
+          locale: 'hi',
+          message: 'Letters outside the rendered scripts: U+7425 U+73C0',
+        },
+      ])
+      // forFeature turns the fixture's missing media into errors; T006 itself never fails.
+      if (!o.forFeature) expect(validatePackage(p, o).ok).toBe(true)
+    }
+  })
+
+  it('warns on Cyrillic in English, story-level fields included (nodeId null)', () => {
+    const p = base()
+    p.text.en.title = 'The Fox and the Мост'
+    expect(t006(p).map((f) => [f.nodeId, f.locale, f.message])).toEqual([
+      [null, 'en', 'Letters outside the rendered scripts: U+041C U+043E U+0441 U+0442'],
+    ])
+  })
+
+  it('gives one finding per string: question, lesson and choices each count', () => {
+    const p = base()
+    p.text.en.nodes.start.question = 'Which way, Ωmega?'
+    p.text.en.nodes.start.choices.c1 = 'Go Ωmega'
+    p.text.en.nodes.ending_wise.lesson = 'Patience Ω'
+    expect(t006(p).map((f) => [f.nodeId, f.locale])).toEqual([
+      ['start', 'en'],
+      ['start', 'en'],
+      ['ending_wise', 'en'],
+    ])
+  })
+
+  it.each([
+    ['Devanagari in English', 'en', 'The word is धैर्य.'],
+    ['a Roman numeral in a Hindi book label', 'hi', 'पञ्चतन्त्र — पुस्तक III'],
+    [
+      'emoji with ZWJ and VS16',
+      'en',
+      'Family \u{1F468}‍\u{1F469}‍\u{1F467}, a heart ❤️, a keycap 1️⃣',
+    ],
+    ['Devanagari digits', 'hi', 'दिन ०१२३४५६७८९'],
+    ['Latin-1 letters and Common punctuation', 'en', 'Café — naïve “quotes” … ½'],
+  ])('passes %s', (_why, locale, text) => {
+    const p = base()
+    p.text[locale].book = text
+    expect(t006(p)).toEqual([])
+  })
+})
+
+describe('scriptProblem', () => {
+  it('lists distinct code points in order of appearance, at most 5', () => {
+    expect(scriptProblem('abc')).toBeNull()
+    expect(scriptProblem('')).toBeNull()
+    expect(scriptProblem('琥珀琥')).toBe('Letters outside the rendered scripts: U+7425 U+73C0')
+    expect(scriptProblem('αβγδεζη')).toBe(
+      'Letters outside the rendered scripts: U+03B1 U+03B2 U+03B3 U+03B4 U+03B5',
+    )
+    expect(scriptProblem('𠀀')).toBe('Letters outside the rendered scripts: U+20000')
+  })
+
+  it('checks letters, marks and digits only', () => {
+    expect(scriptProblem('→ ★ ♥ ‍ ️ ¶ ₹ ।')).toBeNull() // symbols, joiners, danda
+    expect(scriptProblem('́')).toBeNull() // combining acute: Inherited
+    expect(scriptProblem('١٢٣')).toBe('Letters outside the rendered scripts: U+0661 U+0662 U+0663')
+    expect(scriptProblem('\ud800')).toBeNull() // a lone surrogate is no letter
   })
 })
 
