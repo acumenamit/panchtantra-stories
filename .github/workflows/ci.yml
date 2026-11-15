@@ -79,6 +79,17 @@ jobs:
           cache-dependency-path: storyboard/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium webkit
+      # Vercel builds with its own deployment adapter, which moves prerendered pages to
+      # .next/server/route-cache; a local no-op adapter gives the same layout, so the Production
+      # build and check-build are proven on it before Vercel builds (P1 retrospective item M8). The
+      # next step rebuilds without it for the e2e run.
+      - name: Build (gated, Production code path, deployment-adapter output layout)
+        if: matrix.launch == 'gated'
+        run: pnpm build
+        env:
+          CONTENT_SOURCE: none
+          VERCEL_ENV: production
+          NEXT_ADAPTER_PATH: ${{ github.workspace }}/storyboard/scripts/testing/noop-adapter.cjs
       - name: Build (gated, Production code path)
         if: matrix.launch == 'gated'
         run: pnpm build
