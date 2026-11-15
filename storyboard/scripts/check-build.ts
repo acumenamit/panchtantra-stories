@@ -1,7 +1,8 @@
 // Post-build check (P1 D4; design p1-step7-design.md §5.7 item 2, §8.1 item 11; P1-1c). `pnpm build`
 // runs it right after `next build`, so it also runs inside Vercel's build: exit 1 fails the build
 // and Vercel keeps the last good deployment (spec §3.2). It reads .next/prerender-manifest.json,
-// the prerendered HTML under .next/server/app and the client JS under .next/static:
+// the prerendered HTML (under .next/server/app, or under .next/server/route-cache when a deployment
+// adapter such as Vercel's is set; see readPrerenderedHtml) and the client JS under .next/static:
 // - State agreement first: the launch state is derived from the output alone (locale pages and
 //   the gate's redirect script present, or absent) and compared with the decision recomputed from
 //   this process's environment. next build loads .env* files and this tsx script does not, so a
@@ -76,7 +77,7 @@ export type LaunchState = 'gated' | 'open'
 export interface BuildOutput {
   /** .next/prerender-manifest.json as text; undefined when the file is missing. */
   readonly manifest: string | undefined
-  /** Every .html under .next/server/app, keyed by its posix path there ("en/grown-ups.html"). */
+  /** Every prerendered page's .html, keyed by its posix path as under .next/server/app ("en/grown-ups.html"). */
   readonly html: ReadonlyMap<string, string>
   /** Every .js under .next/static, keyed by its posix path there ("chunks/x.js"). */
   readonly staticJs: ReadonlyMap<string, string>
@@ -177,7 +178,7 @@ export function checkBuild(
   if (output.manifest === undefined) fail('files', 'missing .next/prerender-manifest.json')
   else if (typeof manifest === 'string') fail('manifest', manifest)
   const index = output.html.get('index.html')
-  if (index === undefined) fail('files', 'missing .next/server/app/index.html')
+  if (index === undefined) fail('files', 'missing the prerendered index.html')
   if (manifest === undefined || typeof manifest === 'string' || index === undefined) return report()
   const routes = Object.keys(manifest.routes)
 
@@ -263,7 +264,7 @@ export function checkBuild(
   }
 
   // Robots, in every build (spec §10.3): noindex is never tied to the launch flag.
-  if (!output.html.has('_not-found.html')) fail('files', 'missing .next/server/app/_not-found.html')
+  if (!output.html.has('_not-found.html')) fail('files', 'missing the prerendered _not-found.html')
   for (const [path, html] of output.html) {
     if (path === '_global-error.html') continue // Next's own 500 page carries none (design §5.7)
     const metas = robotsMetas(html)
@@ -316,13 +317,49 @@ function readTree(dir: string, suffix: string): Map<string, string> {
   return new Map([...found].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
+/**
+ * The prerendered App Router HTML, keyed as under .next/server/app ("index.html", "en.html",
+ * "en/grown-ups.html"), from either layout Next 16.4.5 writes:
+ * - no adapter (local, CI): .next/server/app/<path>.html;
+ * - with a deployment adapter (NEXT_ADAPTER_PATH; Vercel sets it, its log says "Running
+ *   onBuildComplete from Vercel"): .next/server/route-cache/APP_PAGE/<sha256 of the source
+ *   route>/$/<path>.html (next/dist/server/lib/route-cache-key.js getRouteCacheKey).
+ * Two different files for one page (both layouts, or two source routes) throw, so the check
+ * reports it; a byte-identical copy (next start writes served pages into route-cache) is one page.
+ */
+export function readPrerenderedHtml(next: string): Map<string, string> {
+  const found = new Map<string, string>()
+  const add = (key: string, html: string, from: string): void => {
+    const earlier = found.get(key)
+    // `next start` also writes served pages into route-cache, so a byte-identical second copy is
+    // the same page; two different files for one page fail.
+    if (earlier !== undefined && earlier !== html) {
+      throw new Error(`two different prerendered files for ${key} (${from})`)
+    }
+    found.set(key, html)
+  }
+  for (const [path, html] of readTree(join(next, 'server', 'app'), '.html')) {
+    add(path, html, 'server/app')
+  }
+  const routeCache = join(next, 'server', 'route-cache', 'APP_PAGE')
+  if (existsSync(routeCache)) {
+    for (const entry of readdirSync(routeCache, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      for (const [path, html] of readTree(join(routeCache, entry.name, '$'), '.html')) {
+        add(path, html, 'server/route-cache')
+      }
+    }
+  }
+  return new Map([...found].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+}
+
 /** Reads the build output under <root>/.next; missing files are left for the check to report. */
 export function readBuildOutput(root: string): BuildOutput {
   const next = join(root, '.next')
   const manifestPath = join(next, 'prerender-manifest.json')
   return {
     manifest: existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : undefined,
-    html: readTree(join(next, 'server', 'app'), '.html'),
+    html: readPrerenderedHtml(next),
     staticJs: readTree(join(next, 'static'), '.js'),
   }
 }

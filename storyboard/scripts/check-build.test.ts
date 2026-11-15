@@ -427,13 +427,13 @@ describe('the rules for both states', () => {
       const html = new Map(output().html)
       html.delete('index.html')
       expect(failuresOf({ ...output(), html }, decision)).toEqual([
-        '[files] missing .next/server/app/index.html',
+        '[files] missing the prerendered index.html',
       ])
       expect(
         failuresOf({ manifest: undefined, html: new Map(), staticJs: new Map() }, decision),
       ).toEqual([
         '[files] missing .next/prerender-manifest.json',
-        '[files] missing .next/server/app/index.html',
+        '[files] missing the prerendered index.html',
       ])
     })
 
@@ -441,7 +441,7 @@ describe('the rules for both states', () => {
       const html = new Map(output().html)
       html.delete('_not-found.html')
       expect(failuresOf({ ...output(), html }, decision)).toEqual([
-        '[files] missing .next/server/app/_not-found.html',
+        '[files] missing the prerendered _not-found.html',
       ])
     })
 
@@ -561,7 +561,15 @@ describe('runCheckBuild on files', () => {
   })
 
   /** A storyboard-shaped folder holding `output` under .next and the real catalogues. */
-  function writeRoot(output: BuildOutput, catalogues = true): string {
+  /**
+   * `layout` 'route-cache' writes each page the way Next 16.4.5 does when a deployment adapter is
+   * set (Vercel): .next/server/route-cache/APP_PAGE/<one folder per source route>/$/<path>.html.
+   */
+  function writeRoot(
+    output: BuildOutput,
+    catalogues = true,
+    layout: 'app' | 'route-cache' = 'app',
+  ): string {
     const root = mkdtempSync(join(tmpdir(), 'check-build-'))
     dirs.push(root)
     const write = (path: string, text: string) => {
@@ -570,7 +578,15 @@ describe('runCheckBuild on files', () => {
     }
     if (output.manifest !== undefined)
       write(join(root, '.next', 'prerender-manifest.json'), output.manifest)
-    for (const [path, html] of output.html) write(join(root, '.next', 'server', 'app', path), html)
+    for (const [path, html] of output.html) {
+      const source = `source-${path.replace(/\.html$/, '').replace(/\//g, '-')}`
+      write(
+        layout === 'app'
+          ? join(root, '.next', 'server', 'app', path)
+          : join(root, '.next', 'server', 'route-cache', 'APP_PAGE', source, '$', path),
+        html,
+      )
+    }
     for (const [path, js] of output.staticJs) write(join(root, '.next', 'static', path), js)
     write(join(root, '.next', 'server', 'app', 'index.rsc'), 'not html')
     if (catalogues) {
@@ -615,6 +631,77 @@ describe('runCheckBuild on files', () => {
     ])
   })
 
+  it('reads the route-cache layout a deployment adapter produces (Vercel), gated and open', () => {
+    const gated = run(writeRoot(gatedOutput(), true, 'route-cache'), {
+      VERCEL: '1',
+      VERCEL_ENV: 'production',
+      CONTENT_SOURCE: 'none',
+    })
+    expect(gated).toEqual({
+      code: 0,
+      out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
+      err: [],
+    })
+    const open = run(writeRoot(openOutput(), true, 'route-cache'), {
+      CONTENT_SOURCE: 'fixtures',
+      READER_LAUNCH: 'review',
+    })
+    expect(open.code).toBe(0)
+    // The rules still run on route-cache pages: a gate link on the otherwise valid gated "/" fails
+    // with exactly that rule.
+    const linked = gatedOutput()
+    const root = writeRoot(
+      {
+        ...linked,
+        html: new Map([
+          ...linked.html,
+          ['index.html', `${linked.html.get('index.html') ?? ''}<a href="/en">English</a>`],
+        ]),
+      },
+      true,
+      'route-cache',
+    )
+    expect(run(root, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' }).err).toEqual([
+      'check-build failed [gate] index.html links to /en',
+    ])
+  })
+
+  /** Writes `html` as <path> in a route-cache source folder `source` under `root`. */
+  function writeRouteCache(root: string, source: string, path: string, html: string): void {
+    const dir = join(root, '.next', 'server', 'route-cache', 'APP_PAGE', source, '$')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, path), html)
+  }
+
+  it('reads a byte-identical copy as one page (next start writes served pages to route-cache)', () => {
+    const output = gatedOutput()
+    const root = writeRoot(output)
+    for (const name of ['index.html', '_not-found.html']) {
+      writeRouteCache(root, `copy-${name}`, name, output.html.get(name) ?? '')
+    }
+    writeRouteCache(root, 'second-copy', 'index.html', output.html.get('index.html') ?? '')
+    expect(run(root, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })).toEqual({
+      code: 0,
+      out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
+      err: [],
+    })
+  })
+
+  it('fails when one page has two different files, across layouts or route-cache folders', () => {
+    const across = writeRoot(gatedOutput())
+    writeRouteCache(across, 'other', 'index.html', '<main></main>')
+    const acrossResult = run(across, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })
+    expect(acrossResult.code).toBe(1)
+    expect(acrossResult.err).toEqual([
+      'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
+    ])
+    const within = writeRoot(gatedOutput(), true, 'route-cache')
+    writeRouteCache(within, 'zz-second-source', 'index.html', '<main></main>')
+    expect(run(within, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' }).err).toEqual([
+      'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
+    ])
+  })
+
   it('exits 1 naming the rule when the environment disagrees with the output', () => {
     const result = run(writeRoot(gatedOutput()), {
       CONTENT_SOURCE: 'fixtures',
@@ -636,7 +723,7 @@ describe('runCheckBuild on files', () => {
     expect(result.err).toEqual([
       'check-build failed [catalogue] messages/ is missing',
       'check-build failed [files] missing .next/prerender-manifest.json',
-      'check-build failed [files] missing .next/server/app/index.html',
+      'check-build failed [files] missing the prerendered index.html',
     ])
   })
 
