@@ -1,0 +1,18 @@
+/*
+ * The staging banner (spec §3.2 staging row, §6.6; design p1-step9-design.md §3.6 rows 7-8, §4.4;
+ * P1-2c): one English line, dark text on the amber fill (the declared text-on-fill pair), in
+ * normal flow. Token names only; logical properties only (RC-12). F3: on /hi the line is an
+ * English island, so it sets font-size and line-height from tokens on itself and the :lang(en)
+ * leading reaches it. Unlayered, so its margin beats the p margin of base.css (@layer base).
+ */
+.banner {
+  margin-block: 0;
+  padding-block: var(--space-2);
+  padding-inline: var(--gutter);
+  background-color: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  font-weight: var(--fw-bold);
+  text-align: center;
+}

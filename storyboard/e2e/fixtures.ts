@@ -10,15 +10,19 @@
 //   cookie headers. After the test, the context's cookies for the test server's host must be
 //   none (this also catches document.cookie, on both engines; other hosts are not ours).
 // - Before any test, each worker GETs /en from the project's baseURL and fails fast unless the
-//   status matches E2E_LAUNCH (404 gated, 200 review): outside CI, Playwright reuses whatever
-//   server already listens on the port, which may be another build. It also GETs "/" and fails
-//   unless the page carries this checkout's build id (.next/BUILD_ID), so an older build of the
-//   same leg, or another app on the port, is caught too.
+//   status matches E2E_LAUNCH (404 gated, 200 review and staging): outside CI, Playwright reuses
+//   whatever server already listens on the port, which may be another build. It also GETs "/" and
+//   fails unless the page carries this checkout's build id (.next/BUILD_ID), so an older build of
+//   the same leg, or another app on the port, is caught too.
+// P1-2c (design p1-step9-design.md §2, §6.3, R13): the same GET of "/" must hold the staging
+// banner's marker exactly when E2E_LAUNCH is staging, so a review build is never tested as the
+// staging leg, nor a staging build as the review leg. The marker comes from src/ui/root/staging.ts.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test as base, expect, type Page } from '@playwright/test'
 import { MEDIA_ORIGIN } from '../src/config/security-headers'
-import { EN_STATUS, launchLeg } from './launch-leg'
+import { STAGING_BANNER_MARKER } from '../src/ui/root/staging'
+import { EN_STATUS, launchLeg, legHasBanner } from './launch-leg'
 
 /** What the page reports for one CSP violation. */
 interface CspViolation {
@@ -71,6 +75,14 @@ export const test = base.extend<{ securityGuard: void }, { buildIdentity: void }
         throw new Error(
           `build identity: "/" on ${origin} does not carry this checkout's build id ` +
             '(.next/BUILD_ID). The server there is another build: stop it, then run again.',
+        )
+      }
+      const hasBanner = startHtml.includes(STAGING_BANNER_MARKER)
+      if (hasBanner !== legHasBanner(leg)) {
+        throw new Error(
+          `build identity: "/" on ${origin} ${hasBanner ? 'shows' : 'does not show'} the staging ` +
+            `banner, but E2E_LAUNCH=${leg} needs ${legHasBanner(leg) ? 'it' : 'none'}. The ` +
+            `server there is not a ${leg} build: rebuild for this leg, or stop the other server.`,
         )
       }
       await use()

@@ -6,8 +6,12 @@
 // even after res.end(bytes) (critic probe, Node 24.18.0), and a stub relying on it would fail every
 // HEAD with "content-length missing". Per-path handler queues inject failures; a request log and an
 // in-flight counter let tests assert exact request lists and concurrency.
-// It drives only in-process loadContent with a temp root, never the entry point (which writes the
+// Tests drive only in-process loadContent with a temp root, never the entry point (which writes the
 // real storyboard/.content) and never `pnpm build` (next build refuses a base off MEDIA_ORIGIN).
+// The staging harness, scripts/testing/staging-build.ts (P1-2c; design p1-step9-design.md §6.8),
+// also loads in-process against this stub, but into the real storyboard/.content (in CI and in the
+// lead's local proofs); it keeps the loopback base away from next build, whose env has no
+// CONTENT_BASE_URL, and closes the stub right after the loader step.
 import { readdirSync, readFileSync } from 'node:fs'
 import {
   createServer,

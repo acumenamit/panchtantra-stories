@@ -5,12 +5,17 @@
 // stylesheets in order, the shared viewport, lang and dir from the registry, the text-size boot
 // script once in <head>). The page is English with the Hindi parts in lang="hi". Its metadata is
 // the title only: Next adds noindex to every 404 itself.
+// P1-2c (design p1-step9-design.md §3.6 rows 1-6, §4.3, §9 item 4): it bypasses every layout, so
+// it renders the staging banner itself, as the first child of <body>, from contentMode() (the mode
+// the loader wrote; null without .content/, so it renders nothing then).
 import type { Metadata } from 'next'
+import { contentMode } from '@/content'
 import { getLocaleDef } from '@/core/locales'
 import { TEXT_SCALE_BOOT_SCRIPT } from '@/core/progress/text-scale-boot'
 import { NotFoundContent } from '@/ui/not-found/not-found-content'
 import { htmlAttributes } from '@/ui/root/document'
 import { FONT_CLASSES } from '@/ui/root/font-classes'
+import { StagingBanner } from '@/ui/root/staging-banner'
 import { ROOT_VIEWPORT } from '@/ui/viewport'
 import '@/ui/styles/tokens.css'
 import '@/ui/styles/base.css'
@@ -30,6 +35,7 @@ export default function GlobalNotFound() {
         <script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT_SCRIPT }} />
       </head>
       <body>
+        <StagingBanner mode={contentMode()} />
         <NotFoundContent />
       </body>
     </html>

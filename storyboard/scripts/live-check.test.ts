@@ -2,10 +2,18 @@
 // recorded responses are the Step 7 build's own pages (the gated "/" and the 404 from the gated
 // build, the gate and /en, /hi from the review build), cut down to the parts the checker reads, with
 // the headers next.config sends plus the ones Vercel adds. Nothing here touches the network.
+// P1-2c (design p1-step9-design.md §4.5, §10.1): the "no staging banner" rule on every probe that
+// reads a body; the banner's marker, attribute and text come from src/ui/root/staging.ts.
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
+import {
+  STAGING_BANNER_ATTRIBUTE,
+  STAGING_BANNER_MARKER,
+  STAGING_BANNER_TEXT,
+} from '../src/ui/root/staging'
+import { escapeNonAscii } from './check-build'
 import {
   checkResponse,
   checkRound,
@@ -194,6 +202,20 @@ describe('the committed expectation', () => {
   it('reads the 404 h1 from the committed catalogues', () => {
     expect(TITLES).toEqual({ en: 'Page not found', hi: 'पेज नहीं मिला' })
   })
+
+  it('checks "no staging banner" on every probe that reads a body, never on /build-info.json', () => {
+    for (const list of [GATED_PROBES, LAUNCHED_PROBES, probes('gated', true, TITLES)]) {
+      for (const p of list) {
+        const names = p.rules.map((r) => r.name)
+        if (p.path === '/build-info.json') expect(names, p.path).toEqual([])
+        else
+          expect(
+            names.filter((n) => n === 'no staging banner'),
+            p.path,
+          ).toHaveLength(1)
+      }
+    }
+  })
 })
 
 describe('the response checker on recorded responses', () => {
@@ -329,6 +351,90 @@ describe('the response checker on recorded responses', () => {
       '/ 200: gate links',
       '/hi 200: html lang hi',
     ])
+  })
+
+  describe('no staging banner (P1-2c)', () => {
+    const BANNER = `<p ${STAGING_BANNER_MARKER} lang="en" class="x_banner">${STAGING_BANNER_TEXT}</p>`
+    const FORMS: [string, string][] = [
+      ['the banner element', BANNER],
+      ['the marker alone', `<b ${STAGING_BANNER_MARKER}></b>`],
+      [
+        'the flight copy of the attribute',
+        `<script>x({\\"${STAGING_BANNER_ATTRIBUTE}\\":\\"\\"})</script>`,
+      ],
+      ['the raw text', `<b>${STAGING_BANNER_TEXT}</b>`],
+      [
+        'the \\u2013-escaped text',
+        `<script>var t="${escapeNonAscii(STAGING_BANNER_TEXT, false)}"</script>`,
+      ],
+    ]
+    /** The body with `extra` first in <body>, after Next's hidden div, where the banner sits. */
+    const plus = (body: string, extra: string) =>
+      body.replace('<!--/$--></div>', `<!--/$--></div>${extra}`)
+
+    it.each(FORMS)('fails %s on the gated "/" and on every gated 404', (_what, extra) => {
+      const site = gatedSite()
+      for (const path of [
+        '/',
+        '/en',
+        '/hi',
+        '/en/grown-ups',
+        '/hi/grown-ups',
+        '/ar',
+        '/no-such-page',
+      ]) {
+        const recorded = site.get(path)
+        if (!recorded?.body) throw new Error(`no body for ${path}`)
+        site.set(path, { ...recorded, body: plus(recorded.body, extra) })
+      }
+      expect(checkRound(GATED_PROBES, site)).toEqual([
+        '/ 200: no staging banner',
+        '/en 404: no staging banner',
+        '/hi 404: no staging banner',
+        '/en/grown-ups 404: no staging banner',
+        '/hi/grown-ups 404: no staging banner',
+        '/ar 404: no staging banner',
+        '/no-such-page 404: no staging banner',
+      ])
+    })
+
+    it.each(FORMS)('fails %s on the launched "/", /en, /hi and both 404s', (_what, extra) => {
+      const site = launchedSite()
+      for (const path of ['/', '/en', '/hi', '/ar', '/no-such-page']) {
+        const recorded = site.get(path)
+        if (!recorded?.body) throw new Error(`no body for ${path}`)
+        site.set(path, { ...recorded, body: plus(recorded.body, extra) })
+      }
+      expect(checkRound(LAUNCHED_PROBES, site)).toEqual([
+        '/ 200: no staging banner',
+        '/en 200: no staging banner',
+        '/hi 200: no staging banner',
+        '/ar 404: no staging banner',
+        '/no-such-page 404: no staging banner',
+      ])
+    })
+
+    it('passes the clean recorded bodies, and reads no body rule on /build-info.json', () => {
+      expect(checkRound(GATED_PROBES, gatedSite())).toEqual([])
+      expect(checkRound(LAUNCHED_PROBES, launchedSite())).toEqual([])
+      const site = launchedSite()
+      site.set(
+        '/build-info.json',
+        ok(`{"note":"${STAGING_BANNER_MARKER} ${STAGING_BANNER_TEXT}"}`, 200, [
+          ...SECURITY,
+          ['content-type', 'application/json'],
+        ]),
+      )
+      expect(checkRound(LAUNCHED_PROBES, site)).toEqual([])
+    })
+
+    it('names only the rule, never the text it found', () => {
+      const site = gatedSite()
+      site.set('/', ok(plus(GATED_HOME, BANNER)))
+      const problems = checkRound(GATED_PROBES, site)
+      expect(problems).toEqual(['/ 200: no staging banner'])
+      expect(problems.join('\n')).not.toContain('UNAPPROVED')
+    })
   })
 
   it('fails no response, or a body it cannot read', () => {

@@ -12,6 +12,9 @@
 //   unmatched URLs 404.
 // - always: the exact spec CSP and the 3 other security headers on every response, and no
 //   Set-Cookie anywhere (spec §9).
+// - no staging banner (design p1-step9-design.md §4.5; P1-2c): on "/" in both states, on /en and
+//   /hi when launched, and on every 404 probe, the body holds neither the banner attribute (in any
+//   form) nor the banner text (raw or \u-escaped); /build-info.json has no body rule.
 // It passes only after ROUNDS_IN_A_ROW matching rounds in a row, ROUND_INTERVAL_MS apart: any
 // mismatch resets the count, because one matching round can be followed by a brief read of the
 // previous deployment (owner D2, the publisher's verify). Reaching the deadline first fails.
@@ -28,9 +31,10 @@ import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boo
 import { gateOptions } from '../src/reader/routing'
 import { THEME_COLOR } from '../src/ui/brand'
 import { ROOT_METADATA } from '../src/ui/root/metadata'
+import { STAGING_BANNER_ATTRIBUTE, STAGING_BANNER_TEXT } from '../src/ui/root/staging'
 import { ROOT_VIEWPORT } from '../src/ui/viewport'
 import { checkServiceUrl, readCapped } from '../tools/publisher/http'
-import { COMING_SOON_MAIN, ROBOTS_META } from './check-build'
+import { COMING_SOON_MAIN, leakForms, ROBOTS_META } from './check-build'
 import { isEntryPoint } from './load-content'
 
 /** The production domain (a committed constant until Step 12's NEXT_PUBLIC_SITE_URL). */
@@ -119,6 +123,14 @@ const ROBOTS_404 = rule('robots meta (noindex)', (body) => {
   return metas.length > 0 && metas.every((meta) => meta.includes('noindex'))
 })
 
+/** Production never shows the staging banner (P1-2c): no attribute in any form, no text form. */
+const NO_STAGING_BANNER = rule(
+  'no staging banner',
+  (body) =>
+    !body.includes(STAGING_BANNER_ATTRIBUTE) &&
+    leakForms(STAGING_BANNER_TEXT).every((form) => !body.includes(form)),
+)
+
 function bilingualH1(titles: NotFoundTitles): BodyRule {
   const hiPart = new RegExp(`<(\\w+)\\b[^>]*\\blang="hi"[^>]*>${escapeRegExp(titles.hi)}</\\1>`)
   return rule('bilingual h1', (body) => {
@@ -136,7 +148,7 @@ export function probes(
   const notFound = (path: string): Probe => ({
     path,
     status: 404,
-    rules: [bilingualH1(titles), ROBOTS_404],
+    rules: [bilingualH1(titles), ROBOTS_404, NO_STAGING_BANNER],
   })
   const buildInfo: Probe = {
     path: '/build-info.json',
@@ -168,6 +180,7 @@ export function probes(
             'no redirect script',
             (body) => !body.includes(LOCALE_REDIRECT_SCRIPT) && !body.includes(REDIRECT_MARKER),
           ),
+          NO_STAGING_BANNER,
         ],
       },
       ...['/en', '/hi', '/en/grown-ups', '/hi/grown-ups', ...UNMATCHED].map(notFound),
@@ -183,6 +196,7 @@ export function probes(
           gateOptions().every((option) => body.includes(`href="${option.href}"`)),
         ),
         ROBOTS_200,
+        NO_STAGING_BANNER,
       ],
     },
     ...ENABLED_LOCALE_CODES.map((code): Probe => ({
@@ -191,6 +205,7 @@ export function probes(
       rules: [
         rule(`html lang ${code}`, (body) => body.includes(`<html lang="${code}"`)),
         ROBOTS_200,
+        NO_STAGING_BANNER,
       ],
     })),
     ...UNMATCHED.map(notFound),

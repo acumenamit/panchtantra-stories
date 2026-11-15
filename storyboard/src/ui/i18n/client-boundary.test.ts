@@ -6,7 +6,11 @@
 //   browser, where process.env.READER_LAUNCH would be undefined. Every file under src/content (the
 //   server-only content reader, design p1-step8-design.md §8; P1-2b) counts as server-only too.
 // - Under app/, src/, scripts/ and e2e/, the string READER_LAUNCH appears only in
-//   src/config/launch.ts and *.test.ts files (buildLaunch is its only reader).
+//   src/config/launch.ts and *.test.ts files (buildLaunch is its only reader), and in exactly two
+//   scripts that never read it (P1-2c; design p1-step9-design.md §3.6 row 35): scripts/preview-staging.ts
+//   and scripts/testing/staging-build.ts set it for a child `next build` and refuse a preset one,
+//   naming it only in a name list and the build-env literal (design §9 item 16); the decision is
+//   still computed only by launch.ts.
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
 //   which turns zod's eval probe off before any schema is built (spec §9 CSP: no 'unsafe-eval';
 //   the stores and zod reach every reader page, design §11 R10). Type-only imports are fine.
@@ -261,14 +265,162 @@ describe('the client boundary in the repo', () => {
   })
 })
 
+/** The one reader of READER_LAUNCH (buildLaunch). */
+const READER_LAUNCH_READER = 'src/config/launch.ts'
+/**
+ * The two scripts that may hold the string READER_LAUNCH without reading it (P1-2c; design
+ * p1-step9-design.md §3.6 row 35): they set the variable for a child `next build` and refuse a
+ * preset one; the decision is still computed only by launch.ts. Exact paths, never a pattern.
+ */
+const READER_LAUNCH_SETTERS: readonly string[] = [
+  'scripts/preview-staging.ts',
+  'scripts/testing/staging-build.ts',
+]
+/** A property read of the variable: env.READER_LAUNCH, env['READER_LAUNCH'] or env["READER_LAUNCH"]. */
+const READER_LAUNCH_READ = /\benv(\.READER_LAUNCH\b|\[['"]READER_LAUNCH['"]\])/
+/**
+ * The two places a setter may name the variable (design p1-step9-design.md §9 item 16): an entry
+ * of a name list (after `[` that starts a list, or after a comma, and before a comma or `]`), and
+ * the build env's key `READER_LAUNCH: 'review'` (after `{` or a comma, before a comma or `}`).
+ */
+const READER_LAUNCH_LIST_ENTRY =
+  /(?<=(?:(?:^|[=(,:{[])\s*\[|,)\s*)(['"])READER_LAUNCH\1(?=\s*[,\]])/gm
+const READER_LAUNCH_ENV_KEY = /(?<=[{,]\s*)READER_LAUNCH: (['"])review\1(?=\s*[,}])/g
+
+/**
+ * True when a setter names READER_LAUNCH anywhere else: a read through any name (`parent.`,
+ * `parent[...]`, `?.`, destructuring, `in`), a comment or any other use.
+ */
+const readerLaunchElsewhere = (text: string): boolean =>
+  text
+    .replace(READER_LAUNCH_LIST_ENTRY, '')
+    .replace(READER_LAUNCH_ENV_KEY, '')
+    .includes('READER_LAUNCH')
+
+/**
+ * The files, of these (path, text) pairs, that break the READER_LAUNCH rule: any non-test file
+ * other than launch.ts that holds the string, except the two setters while they do not read it
+ * and name it only in a name list and the build-env literal.
+ */
+function readerLaunchOffenders(files: Iterable<readonly [string, string]>): string[] {
+  const offenders: string[] = []
+  for (const [path, text] of files) {
+    if (path === READER_LAUNCH_READER || path.endsWith('.test.ts')) continue
+    if (!text.includes('READER_LAUNCH')) continue
+    if (
+      READER_LAUNCH_SETTERS.includes(path) &&
+      !READER_LAUNCH_READ.test(text) &&
+      !readerLaunchElsewhere(text)
+    ) {
+      continue
+    }
+    offenders.push(path)
+  }
+  return offenders
+}
+
 describe('READER_LAUNCH', () => {
-  it('appears under app/, src/, scripts/ and e2e/ only in src/config/launch.ts and tests', () => {
+  it('the guard passes launch.ts, tests and the two setters, and fails anything else', () => {
+    const literal = "const env = { CONTENT_SOURCE: 'storage', READER_LAUNCH: 'review' }"
+    const nameList = "const PRESET = ['VERCEL', 'READER_LAUNCH'] as const"
+    expect(
+      readerLaunchOffenders([
+        [READER_LAUNCH_READER, 'const value = env.READER_LAUNCH'],
+        ['scripts/preview-staging.test.ts', "expect(env.READER_LAUNCH).toBe('review')"],
+        ['e2e/gate.spec.ts', 'no such string here'],
+        ['scripts/preview-staging.ts', `${nameList}\n${literal}`],
+        ['scripts/testing/staging-build.ts', nameList],
+      ]),
+    ).toEqual([])
+    expect(
+      readerLaunchOffenders([
+        ['scripts/third.ts', literal],
+        ['src/ui/flag.tsx', '// READER_LAUNCH in a comment counts too'],
+        ['scripts/other/preview-staging.ts', nameList],
+        ['e2e/leg.spec.ts.bak', nameList],
+        ['scripts/preview-staging.ts', 'const open = env.READER_LAUNCH === "review"'],
+        ['scripts/testing/staging-build.ts', "const value = process.env['READER_LAUNCH']"],
+        ['scripts/testing/staging-build.ts', 'const value = env["READER_LAUNCH"]'],
+      ]),
+    ).toEqual([
+      'scripts/third.ts',
+      'src/ui/flag.tsx',
+      'scripts/other/preview-staging.ts',
+      'e2e/leg.spec.ts.bak',
+      'scripts/preview-staging.ts',
+      'scripts/testing/staging-build.ts',
+      'scripts/testing/staging-build.ts',
+    ])
+  })
+
+  it('a setter may name it only in a name list and the build-env key (design §9 item 16)', () => {
+    const multiLine = [
+      'const PRESET_NAMES = [',
+      "  'VERCEL',",
+      "  'READER_LAUNCH',",
+      "  'CONTENT_SOURCE',",
+      '] as const',
+      'const build = {',
+      '  ...inherited,',
+      "  VERCEL_ENV: 'preview',",
+      "  READER_LAUNCH: 'review',",
+      '}',
+    ].join('\n')
+    const nameList = "const PRESET = ['READER_LAUNCH', 'VERCEL'] as const"
+    expect(
+      readerLaunchOffenders([
+        ['scripts/preview-staging.ts', multiLine],
+        ['scripts/testing/staging-build.ts', nameList],
+      ]),
+    ).toEqual([])
+    const elsewhere = [
+      'const launch = parent.READER_LAUNCH',
+      "const launch = parent['READER_LAUNCH']",
+      'const launch = process.env?.READER_LAUNCH',
+      "const launch = parent?.['READER_LAUNCH']",
+      'const { READER_LAUNCH } = parent',
+      'const { READER_LAUNCH: launch } = parent',
+      "const set = 'READER_LAUNCH' in parent",
+      "const build = { ...parent, READER_LAUNCH: parent.VERCEL_ENV === 'preview' ? 'review' : '' }",
+      '// next build gets READER_LAUNCH=review',
+    ]
+    for (const line of elsewhere) {
+      expect(
+        readerLaunchOffenders([
+          ['scripts/preview-staging.ts', `${multiLine}\n${line}`],
+          ['scripts/testing/staging-build.ts', `${nameList}\n${line}`],
+        ]),
+        line,
+      ).toEqual(['scripts/preview-staging.ts', 'scripts/testing/staging-build.ts'])
+    }
+  })
+
+  it('finds every property read, and not a list entry or a key', () => {
+    expect(READER_LAUNCH_READ.test('process.env.READER_LAUNCH')).toBe(true)
+    expect(READER_LAUNCH_READ.test("env['READER_LAUNCH']")).toBe(true)
+    expect(READER_LAUNCH_READ.test('env["READER_LAUNCH"]')).toBe(true)
+    expect(READER_LAUNCH_READ.test("['VERCEL', 'READER_LAUNCH']")).toBe(false)
+    expect(READER_LAUNCH_READ.test("{ READER_LAUNCH: 'review' }")).toBe(false)
+    expect(READER_LAUNCH_READ.test('env.READER_LAUNCHED')).toBe(false)
+  })
+
+  it('appears under app/, src/, scripts/ and e2e/ only in launch.ts, tests and the two setters', () => {
     const text = (name: string): boolean => /\.(ts|tsx|mts|mjs|js|json|css)$/.test(name)
-    const offenders = ['app', 'src', 'scripts', 'e2e']
-      .flatMap((dir) => walk(dir, text))
-      .filter((path) => path !== 'src/config/launch.ts' && !path.endsWith('.test.ts'))
-      .filter((path) => readFileSync(join(storyboard, path), 'utf8').includes('READER_LAUNCH'))
-    expect(offenders).toEqual([])
+    const paths = ['app', 'src', 'scripts', 'e2e'].flatMap((dir) => walk(dir, text))
+    const files = paths.map((path): [string, string] => [
+      path,
+      readFileSync(join(storyboard, path), 'utf8'),
+    ])
+    expect(readerLaunchOffenders(files)).toEqual([])
+  })
+
+  it('both setters exist, hold the string (so the exception is not stale) and never read it', () => {
+    for (const path of READER_LAUNCH_SETTERS) {
+      const source = readFileSync(join(storyboard, path), 'utf8')
+      expect(source.includes('READER_LAUNCH'), path).toBe(true)
+      expect(READER_LAUNCH_READ.test(source), path).toBe(false)
+      expect(readerLaunchElsewhere(source), path).toBe(false)
+    }
   })
 })
 

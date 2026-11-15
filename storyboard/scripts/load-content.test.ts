@@ -5,6 +5,9 @@
 // HEAD property tests run over exactly N > 0 HEADs; deadline tests set the per-attempt timeout above
 // the deadline; Storage tests serve jcsBytes of the fixture packages (the committed files are not
 // canonical JCS) with the matching sha256 and packagePath.
+// P1-2c (design p1-step9-design.md §3.3 A, §10.1): the staging-pointer allowlist and its
+// stagingPointerAllowed truth table. Staging-pointer runs say platform win32 (this PC), as fixtures
+// runs do, so they pass on Linux CI too; Production-pointer runs keep platform linux (Vercel).
 import { spawnSync } from 'node:child_process'
 import {
   cpSync,
@@ -55,6 +58,8 @@ import {
   popFromCfRay,
   POINTER_ROOTS,
   resolveConfig,
+  STAGING_REFUSED_HERE,
+  stagingPointerAllowed,
   vercelEnvName,
   type Env,
   type LoaderOptions,
@@ -84,6 +89,9 @@ const SECRETISH = ['sb', 'secret', 'should_never_print'].join('_')
 
 const STORAGE_ENV_LINE =
   'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=linux'
+/** A staging-pointer run on this PC (P1-2c): outside a Preview it loads only here or in CI. */
+const STAGING_ENV_LINE =
+  'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=win32'
 const FIXTURES_ENV_LINE =
   'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=win32'
 
@@ -182,6 +190,14 @@ const run = (env: Env, extra: Partial<LoaderOptions> = {}) =>
     timeoutMs: 2_000,
     ...extra,
   })
+
+/**
+ * Staging-pointer runs say platform win32 (this PC), as fixtures runs do (runFixtures): outside a
+ * Vercel Preview a staging pointer loads only in GitHub Actions or on Windows (P1-2c, design
+ * p1-step9-design.md §3.3 A, §10.1), so they pass on Linux CI too.
+ */
+const runStaging = (env: Env, extra: Partial<LoaderOptions> = {}) =>
+  run(env, { platform: 'win32', ...extra })
 
 const paths = () => ({
   contentDir: join(root, '.content'),
@@ -468,7 +484,7 @@ describe('loadContent: storage mode, good content', () => {
 
   it('maps a staging pointer to staging mode and leaves Vercel values null outside Vercel', async () => {
     await publish({ mode: 'staging', seq: 4 })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     const info = readBuildInfo()
     expect(info.mode).toBe('staging')
     expect(info.seq).toBe(4)
@@ -503,7 +519,7 @@ describe('loadContent: storage mode, good content', () => {
     serveMedia(media)
     const served = [lantern, river, two]
     const pub = await publish({ mode: 'staging', stories: served.map((s) => s.entry) })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(errors).toEqual([])
 
     // GETs one at a time in snapshot order, then exactly one HEAD per declared variant.
@@ -547,7 +563,7 @@ describe('loadContent: storage mode, good content', () => {
     }
 
     const expected: unknown[] = [
-      STORAGE_ENV_LINE,
+      STAGING_ENV_LINE,
       await fetchLine('catalogue/staging.json', pub.pointerBytes, '1'),
       await fetchLine('catalogue/snapshots/1.json', pub.snapshotBytes, '1'),
     ]
@@ -639,7 +655,7 @@ describe('loadContent: storage mode, good content', () => {
     }
     const two = await servePackage('two-paths', { mutate, waivers: keys })
     await publish({ mode: 'staging', stories: [two.entry] })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(errors).toEqual([])
     expect(requestList()).toEqual(stagingGets(two))
     const at = out.findIndex((line) => line.startsWith('content: package story=two-paths'))
@@ -662,7 +678,7 @@ describe('loadContent: storage packages fail closed', () => {
 
   async function expectFailure(lines: readonly string[]): Promise<void> {
     plantStaleOutputs()
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(1)
     expect(errors).toEqual(lines)
     expectNoOutputs()
   }
@@ -679,7 +695,7 @@ describe('loadContent: storage packages fail closed', () => {
   it('retries a 5xx package answer, then loads it', async () => {
     const two = await oneStory()
     route(two.entry.packagePath, status(503), json(two.bytes))
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(requestList()).toEqual([...GETS(two), ['GET', two.entry.packagePath]])
     expect(sleeps).toEqual([1_000])
     expect(readBuildInfo().fetches.map((f) => f.status)).toEqual([200, 200, 503, 200])
@@ -688,7 +704,7 @@ describe('loadContent: storage packages fail closed', () => {
   it('retries a 429 after its Retry-After of 2 s, then loads it', async () => {
     const two = await oneStory()
     route(two.entry.packagePath, status(429, { 'retry-after': '2' }), json(two.bytes))
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(requestList()).toEqual([...GETS(two), ['GET', two.entry.packagePath]])
     expect(sleeps).toEqual([2_000])
   })
@@ -929,7 +945,7 @@ describe('loadContent: the media HEAD gate', () => {
   ])('fails on %s, naming the variant', async (_what, handlers, reason, attempts, extra = {}) => {
     const { path, two } = await oneVariant(handlers)
     plantStaleOutputs()
-    expect(await run(storageEnv('catalogue/staging.json'), extra)).toBe(1)
+    expect(await runStaging(storageEnv('catalogue/staging.json'), extra)).toBe(1)
     expect(errors).toEqual([
       `content: media failed story=two-paths path=${path} reason=${reason}`,
       `content gate failed: media HEAD failed for 1 of 1 variants; first: ${path} ${reason}`,
@@ -953,7 +969,7 @@ describe('loadContent: the media HEAD gate', () => {
     })
     await publish({ mode: 'staging', stories: [two.entry] })
     plantStaleOutputs()
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(1)
     expect(errors).toEqual([
       `content: media failed story=two-paths path=${path} reason=status 400`,
       `content gate failed: media HEAD failed for 1 of 1 variants; first: ${path} status 400`,
@@ -987,7 +1003,7 @@ describe('loadContent: the media HEAD gate', () => {
   ])('passes on %s', async (what, handlers, expectedSleeps, headLines) => {
     const mime = what.startsWith('audio') ? 'audio/mpeg' : 'image/webp'
     const { path, two } = await oneVariant(handlers, mime)
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(errors).toEqual([])
     expect(sleeps).toEqual(expectedSleeps)
     const logged = out.filter((line) => line.startsWith('content: media head '))
@@ -1005,7 +1021,7 @@ describe('loadContent: the media HEAD gate', () => {
 
   it('records a missing Accept-Ranges in a note line only', async () => {
     const { path, two } = await oneVariant([serveObject({ acceptRanges: false })])
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(requestList()).toEqual([...stagingGets(two), ['HEAD', path]])
     expect(out.slice(-4)).toEqual([
       summaryLine(1, 1),
@@ -1030,7 +1046,7 @@ describe('loadContent: the media HEAD gate', () => {
     serveMedia(media)
     await publish({ mode: 'staging', stories: [two.entry] })
     stub.setCookie('__cf_bm=stub-cookie; Path=/; HttpOnly')
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(
       heads()
         .map((r) => r.path)
@@ -1056,7 +1072,7 @@ describe('loadContent: the media HEAD gate', () => {
     serveMedia(media)
     for (const v of media) route(v.path, slow(150, serveObject()))
     await publish({ mode: 'staging', stories: [two.entry] })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(heads()).toHaveLength(12)
     expect(stub.maxInFlight).toBe(6)
   })
@@ -1074,7 +1090,7 @@ describe('loadContent: the media HEAD gate', () => {
     media.forEach((v, i) => route(v.path, slow((20 - i) * 4, status(404))))
     await publish({ mode: 'staging', stories: [two.entry] })
     plantStaleOutputs()
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(1)
     expect(errors).toHaveLength(11)
     const failed = errors.slice(0, 10).map((line) => {
       const match = /^content: media failed story=two-paths path=(\S+) reason=status 404$/.exec(
@@ -1110,7 +1126,7 @@ describe('loadContent: the media HEAD gate', () => {
     await publish({ mode: 'staging', stories: [two.entry] })
     plantStaleOutputs()
     const started = performance.now()
-    expect(await run(storageEnv('catalogue/staging.json'), { timeoutMs: 20_000 })).toBe(1)
+    expect(await runStaging(storageEnv('catalogue/staging.json'), { timeoutMs: 20_000 })).toBe(1)
     expect(performance.now() - started).toBeLessThan(5_000)
     const failing = media.slice(2, 12).map((v) => v.path)
     expect(errors).toEqual([
@@ -1135,7 +1151,7 @@ describe('loadContent: the media HEAD gate', () => {
     const bytes = 2 * 1024 * 1024
     expect(bytes).toBeGreaterThan(MAX_BODY_BYTES)
     const { path, two } = await oneVariant([], 'audio/mpeg', bytes)
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(errors).toEqual([])
     expect(out).toContain(`content: media story=two-paths variants=1 bytes=${bytes} ok`)
     expect(out).toContainEqual(summaryLine(1, 1))
@@ -1163,7 +1179,10 @@ describe('loadContent: the media HEAD gate', () => {
     const started = performance.now()
     // The per-attempt timeout is far above the deadline, so only the deadline can end the run.
     expect(
-      await run(storageEnv('catalogue/staging.json'), { mediaDeadlineMs: 500, timeoutMs: 20_000 }),
+      await runStaging(storageEnv('catalogue/staging.json'), {
+        mediaDeadlineMs: 500,
+        timeoutMs: 20_000,
+      }),
     ).toBe(1)
     expect(performance.now() - started).toBeLessThan(5_000)
     expect(errors).toEqual(['content gate failed: media HEAD stopped after 0.5 s (1 of 3 checked)'])
@@ -1180,7 +1199,7 @@ describe('loadContent: the media HEAD gate', () => {
     const { path, two } = await oneVariant([neverAnswer])
     plantStaleOutputs()
     expect(
-      await run(storageEnv('catalogue/staging.json'), {
+      await runStaging(storageEnv('catalogue/staging.json'), {
         loadDeadlineMs: 2_000,
         mediaDeadlineMs: 20_000,
         timeoutMs: 20_000,
@@ -1500,7 +1519,7 @@ describe('loadContent: the featured rule', () => {
   it('drops a built story without its pictures and narration, counting them', async () => {
     const two = await servePackage('two-paths')
     await publish({ mode: 'staging', stories: [two.entry], featuredStoryId: 'two-paths' })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(requestList()).toEqual(stagingGets(two))
     expect(readBuildInfo().featuredStoryId).toBeNull()
     // two-paths: 5 nodes in 2 locales, no picture and no narration.
@@ -1516,7 +1535,7 @@ describe('loadContent: the featured rule', () => {
     })
     serveMedia(media)
     await publish({ mode: 'staging', stories: [lantern.entry], featuredStoryId: 'lantern-walk' })
-    expect(await run(storageEnv('catalogue/staging.json'))).toBe(0)
+    expect(await runStaging(storageEnv('catalogue/staging.json'))).toBe(0)
     expect(errors).toEqual([])
     expect(media).toHaveLength(12) // 4 pictures, 8 narrations
     const list = requestList()
@@ -1610,6 +1629,113 @@ describe('loadContent: Vercel Production needs a production pointer', () => {
     await publish({ mode: 'staging' })
     expect(await run(storageEnv('catalogue/staging.json', { VERCEL_ENV: 'preview' }))).toBe(0)
     expect(readBuildInfo().mode).toBe('staging')
+  })
+})
+
+describe('loadContent: a staging pointer loads only in a Preview, GitHub Actions or on Windows (P1-2c)', () => {
+  it.each<[string, Env, string, string]>([
+    [
+      'a Vercel Preview on Linux',
+      { VERCEL: '1', VERCEL_ENV: 'preview' },
+      'linux',
+      'VERCEL=set VERCEL_ENV=preview CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=linux',
+    ],
+    [
+      'GitHub Actions on Linux',
+      { GITHUB_ACTIONS: 'true' },
+      'linux',
+      'VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=true platform=linux',
+    ],
+    [
+      'this PC (win32)',
+      {},
+      'win32',
+      'VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=win32',
+    ],
+  ])('loads it in %s', async (_where, extra, platform, names) => {
+    const pub = await publish({ mode: 'staging' })
+    expect(await run(storageEnv('catalogue/staging.json', extra), { platform })).toBe(0)
+    expect(errors).toEqual([])
+    expect(requestList()).toEqual(stagingGets())
+    expect(readBuildInfo().mode).toBe('staging')
+    expect(out[0]).toBe(`content: environment ${names}`)
+    expect(out.at(-1)).toBe(
+      `content: mode=staging seq=1 snapshot=${pub.snapshotPath} stories=0 excluded=0 featured=none`,
+    )
+  })
+
+  it.each<[string, Env, string]>([
+    ['Linux with no Vercel variables and no GitHub Actions (the Step 8 blind spot)', {}, 'linux'],
+    ['darwin with no Vercel variables and no GitHub Actions', {}, 'darwin'],
+    ['VERCEL set and VERCEL_ENV unset', { VERCEL: '1' }, 'linux'],
+    ['VERCEL set and VERCEL_ENV unset, on win32', { VERCEL: '1' }, 'win32'],
+    ['VERCEL_ENV=development', { VERCEL_ENV: 'development' }, 'win32'],
+    ['an empty VERCEL_ENV', { VERCEL_ENV: '' }, 'win32'],
+  ])('refuses it on %s: no request, and no output touched', async (_where, extra, platform) => {
+    plantStaleOutputs()
+    await publish({ mode: 'staging' })
+    const fetchImpl = vi.fn<typeof fetch>()
+    const env = storageEnv('catalogue/staging.json', extra)
+    expect(await run(env, { platform, fetchImpl })).toBe(1)
+    expect(errors).toEqual([`content gate failed: ${STAGING_REFUSED_HERE}`])
+    expect(out).toEqual([environmentLine(env, platform)])
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(seen()).toHaveLength(0)
+    // The refusal comes before stale outputs are removed: everything is as it was.
+    expect(readFileSync(paths().contentInfo, 'utf8')).toBe('stale')
+    expect(readFileSync(paths().publicInfo, 'utf8')).toBe('stale')
+    expect(readFileSync(join(root, 'public', 'keep.txt'), 'utf8')).toBe('not ours')
+  })
+
+  it('prints the blind-spot environment line before the refusal', async () => {
+    await publish({ mode: 'staging' })
+    expect(await run(storageEnv('catalogue/staging.json'))).toBe(1)
+    expect(out).toEqual([STORAGE_ENV_LINE])
+    expect(errors).toEqual([`content gate failed: ${STAGING_REFUSED_HERE}`])
+  })
+})
+
+describe('stagingPointerAllowed (P1-2c, design p1-step9-design.md §3.3 A)', () => {
+  it.each<[Env, string, boolean]>([
+    [{}, 'win32', true],
+    [{}, 'linux', false],
+    [{}, 'darwin', false],
+    [{}, 'other', false],
+    [{ GITHUB_ACTIONS: 'true' }, 'linux', true],
+    [{ GITHUB_ACTIONS: 'true' }, 'darwin', true],
+    [{ GITHUB_ACTIONS: 'true' }, 'win32', true],
+    [{ GITHUB_ACTIONS: '1' }, 'linux', false],
+    [{ GITHUB_ACTIONS: 'TRUE' }, 'linux', false],
+    [{ GITHUB_ACTIONS: '' }, 'linux', false],
+    [{ VERCEL_ENV: 'preview' }, 'linux', true],
+    [{ VERCEL: '1', VERCEL_ENV: 'preview' }, 'linux', true],
+    [{ VERCEL: '', VERCEL_ENV: 'preview' }, 'darwin', true],
+    [{ VERCEL_ENV: 'Preview' }, 'linux', false],
+    [{ VERCEL_ENV: 'production' }, 'win32', false],
+    [{ VERCEL_ENV: 'production' }, 'linux', false],
+    [{ VERCEL_ENV: 'production', GITHUB_ACTIONS: 'true' }, 'linux', false],
+    [{ VERCEL: '1', VERCEL_ENV: 'production' }, 'linux', false],
+    [{ VERCEL_ENV: 'development' }, 'win32', false],
+    [{ VERCEL_ENV: '' }, 'win32', false],
+    [{ VERCEL_ENV: '' }, 'linux', false],
+    [{ VERCEL: '1' }, 'win32', false],
+    [{ VERCEL: '1' }, 'linux', false],
+    [{ VERCEL: '' }, 'win32', false],
+    [{ VERCEL: '1', GITHUB_ACTIONS: 'true' }, 'linux', false],
+    [{ VERCEL_ENV: undefined, VERCEL: undefined }, 'win32', true],
+  ])('%j on %s is %s', (env, platform, allowed) => {
+    expect(stagingPointerAllowed(env, platform)).toBe(allowed)
+  })
+
+  it('reads no other variable', () => {
+    const unrelated: Env = {
+      CONTENT_SOURCE: 'storage',
+      CONTENT_POINTER: 'catalogue/staging.json',
+      NODE_ENV: 'production',
+      CI: 'true',
+    }
+    expect(stagingPointerAllowed(unrelated, 'linux')).toBe(false)
+    expect(stagingPointerAllowed(unrelated, 'win32')).toBe(true)
   })
 })
 
@@ -2303,20 +2429,105 @@ describe('resolveConfig', () => {
   })
 
   it('takes the gate mode from the pointer outside Vercel Production', () => {
+    // win32 (this PC): with no VERCEL_ENV a staging pointer loads only here or in CI (P1-2c).
     for (const [vercelEnv, pointer, mode] of [
       ['production', 'catalogue/production.json', 'production'],
       ['preview', 'catalogue/staging.json', 'staging'],
       ['preview', 'catalogue/production.json', 'production'],
       [undefined, 'catalogue/staging.json', 'staging'],
     ] as const) {
-      const r = resolveConfig({
-        VERCEL_ENV: vercelEnv,
-        CONTENT_SOURCE: 'storage',
-        CONTENT_BASE_URL: COMMITTED,
-        CONTENT_POINTER: pointer,
-      })
+      const r = resolveConfig(
+        {
+          VERCEL_ENV: vercelEnv,
+          CONTENT_SOURCE: 'storage',
+          CONTENT_BASE_URL: COMMITTED,
+          CONTENT_POINTER: pointer,
+        },
+        POINTER_ROOTS,
+        'win32',
+      )
       expect(r.ok && r.value.kind === 'storage' && r.value.location.mode).toBe(mode)
     }
+  })
+
+  describe('the staging-pointer allowlist (P1-2c, design p1-step9-design.md §3.3 A)', () => {
+    const storageWith = (pointer: string, extra: Env = {}): Env => ({
+      CONTENT_SOURCE: 'storage',
+      CONTENT_BASE_URL: COMMITTED,
+      CONTENT_POINTER: pointer,
+      ...extra,
+    })
+    const modeOf = (r: ReturnType<typeof resolveConfig>) =>
+      r.ok && r.value.kind === 'storage' ? r.value.location.mode : r
+
+    it('is the design sentence, word for word', () => {
+      expect(STAGING_REFUSED_HERE).toBe(
+        'a staging pointer loads only in a Vercel Preview, in GitHub Actions or on Windows (this PC); refused here (spec §3.2)',
+      )
+    })
+
+    it.each<[string, Env, string]>([
+      ['a Vercel Preview on Linux', { VERCEL: '1', VERCEL_ENV: 'preview' }, 'linux'],
+      ['VERCEL_ENV=preview alone on Linux', { VERCEL_ENV: 'preview' }, 'linux'],
+      ['GitHub Actions on Linux', { GITHUB_ACTIONS: 'true' }, 'linux'],
+      ['this PC (win32)', {}, 'win32'],
+    ])('loads a staging pointer in %s', (_where, extra, platform) => {
+      const r = resolveConfig(storageWith('catalogue/staging.json', extra), POINTER_ROOTS, platform)
+      expect(modeOf(r)).toBe('staging')
+    })
+
+    it.each<[string, Env, string]>([
+      ['Linux without a Preview or GitHub Actions', {}, 'linux'],
+      ['darwin without a Preview or GitHub Actions', {}, 'darwin'],
+      ['an unknown platform', {}, 'freebsd'],
+      ['GITHUB_ACTIONS=1', { GITHUB_ACTIONS: '1' }, 'linux'],
+      ['GITHUB_ACTIONS=TRUE', { GITHUB_ACTIONS: 'TRUE' }, 'linux'],
+      ['VERCEL set and VERCEL_ENV unset (Linux)', { VERCEL: '1' }, 'linux'],
+      ['VERCEL set and VERCEL_ENV unset (win32)', { VERCEL: '1' }, 'win32'],
+      ['VERCEL empty (win32)', { VERCEL: '' }, 'win32'],
+      ['VERCEL set in GitHub Actions', { VERCEL: '1', GITHUB_ACTIONS: 'true' }, 'linux'],
+      ['VERCEL_ENV=development', { VERCEL_ENV: 'development' }, 'win32'],
+      ['VERCEL_ENV empty', { VERCEL_ENV: '' }, 'win32'],
+      ['VERCEL_ENV=Preview (case matters)', { VERCEL_ENV: 'Preview' }, 'linux'],
+      [
+        'VERCEL_ENV=other in GitHub Actions',
+        { VERCEL_ENV: 'other', GITHUB_ACTIONS: 'true' },
+        'linux',
+      ],
+    ])('refuses a staging pointer with %s', (_where, extra, platform) => {
+      const r = resolveConfig(storageWith('catalogue/staging.json', extra), POINTER_ROOTS, platform)
+      expect(r).toEqual({ ok: false, reason: STAGING_REFUSED_HERE })
+    })
+
+    it('keeps the VERCEL_ENV=production message on every platform, GitHub Actions included', () => {
+      for (const platform of ['win32', 'linux']) {
+        for (const extra of [{}, { GITHUB_ACTIONS: 'true' }, { VERCEL: '1' }]) {
+          const env = storageWith('catalogue/staging.json', { VERCEL_ENV: 'production', ...extra })
+          expect(resolveConfig(env, POINTER_ROOTS, platform)).toEqual({
+            ok: false,
+            reason: 'CONTENT_POINTER must be a production pointer when VERCEL_ENV=production',
+          })
+        }
+      }
+    })
+
+    it('leaves a production pointer alone on every platform', () => {
+      for (const platform of ['win32', 'linux', 'darwin']) {
+        for (const extra of [{}, { VERCEL: '1' }, { VERCEL_ENV: 'production' }]) {
+          const env = storageWith('catalogue/production.json', extra)
+          expect(modeOf(resolveConfig(env, POINTER_ROOTS, platform))).toBe('production')
+        }
+      }
+    })
+
+    it('applies to a staging pointer under a root too, and never echoes a value', () => {
+      const roots = ['', 'spikes/run/']
+      const env = storageWith('spikes/run/catalogue/staging.json', { VERCEL: SECRETISH })
+      const r = resolveConfig(env, roots, 'linux')
+      expect(r).toEqual({ ok: false, reason: STAGING_REFUSED_HERE })
+      expect(JSON.stringify(r)).not.toContain(SECRETISH)
+      expect(modeOf(resolveConfig({ ...env, VERCEL: undefined }, roots, 'win32'))).toBe('staging')
+    })
   })
 
   it('never echoes a configured value in a reason', () => {
@@ -2476,7 +2687,7 @@ describe('secret safety: canary values never reach a log line or an output', () 
     })
     serveMedia(media)
     await publish({ mode: 'staging', stories: [two.entry] })
-    expect(await run({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(0)
+    expect(await runStaging({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(0)
     expect(requestList()).toEqual([...stagingGets(two), ['HEAD', media[0]!.path]])
     expect(existsSync(paths().publicInfo)).toBe(true)
     expectNoSecret()
@@ -2505,7 +2716,7 @@ describe('secret safety: canary values never reach a log line or an output', () 
     const two = await servePackage('two-paths')
     route(two.entry.packagePath, json(jcsBytes({ ...two.pkg, emoji: SECRETISH.slice(0, 2) })))
     await publish({ mode: 'staging', stories: [two.entry] })
-    expect(await run({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(1)
+    expect(await runStaging({ ...storageEnv('catalogue/staging.json'), ...CANARIES })).toBe(1)
     expect(errors).toEqual(['content gate failed: package two-paths sha256 mismatch'])
     expect(requestList()).toEqual(stagingGets(two))
     expectNoSecret()

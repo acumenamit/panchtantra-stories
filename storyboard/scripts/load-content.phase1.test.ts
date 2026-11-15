@@ -5,7 +5,9 @@
 //   1. the fixtures file source; 2. the local Storage stub, staging pointer, spec layout;
 //   3. the stub, production pointer, one story unapproved; 4. negatives (tampered byte, edited
 //   waived node, keys under another rule set); 5. a control run without the keys that must fail.
-//   Fixtures runs pass platform 'win32' (R4), so Proof A also runs on Linux CI.
+//   Fixtures runs pass platform 'win32' (R4), so Proof A also runs on Linux CI; so do the stub's
+//   staging-pointer runs (P1-2c, design p1-step9-design.md §3.3 A, §10.1: outside a Vercel Preview
+//   a staging pointer loads only in GitHub Actions or on Windows). Production runs keep 'linux'.
 // Proof B (local only): the real git-ignored phase-1 files and private waiver files. It compares
 // derived keys, hashes and counts only, never a whole waiver file, so a failure cannot print a
 // private field; it prints counts only. CI skips it: migration-input/ is git-ignored.
@@ -52,6 +54,8 @@ const FIXTURES_ENV_LINE =
   'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=fixtures GITHUB_ACTIONS=unset platform=win32'
 const STORAGE_ENV_LINE =
   'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=linux'
+const STAGING_ENV_LINE =
+  'content: environment VERCEL=unset VERCEL_ENV=unset CONTENT_SOURCE=storage GITHUB_ACTIONS=unset platform=win32'
 const FEATURED_LINE = `content: featured story=${FEATURED} dropped (reason=media-incomplete A001=0 A005=16 A006=8); featuredStoryId=null`
 const SUMMARY_LINE = /^content: media heads=0 ok=0 failed=0 retried=0 ms=\d+$/
 
@@ -227,8 +231,10 @@ async function runStub(
     CONTENT_BASE_URL: stub.baseUrl,
     CONTENT_POINTER: pointerPath,
   }
+  // A staging pointer loads outside a Preview only in GitHub Actions or on Windows (P1-2c).
+  const platform = mode === 'staging' ? 'win32' : 'linux'
   return {
-    ...(await run(tempRoot(), env, 'linux')),
+    ...(await run(tempRoot(), env, platform)),
     pointerPath,
     pointerBytes: pointer.bytes,
     snapshotBytes: snapshot.bytes,
@@ -401,7 +407,7 @@ describe('Proof A: the 11 phase-1 packages, re-converted from pt/, with the comm
     expect(r.stub.requests.filter((q) => q.method === 'HEAD')).toEqual([])
 
     expect(r.out.filter((line) => !isWaived(line))).toEqual([
-      STORAGE_ENV_LINE,
+      STAGING_ENV_LINE,
       fetchLine('catalogue/staging.json', r.pointerBytes, '1'),
       fetchLine('catalogue/snapshots/1.json', r.snapshotBytes, '1'),
       ...phase1.flatMap((p, i) => [

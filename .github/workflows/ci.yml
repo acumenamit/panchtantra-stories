@@ -48,17 +48,23 @@ jobs:
         env:
           CONTENT_SOURCE: fixtures
 
-  # P1-1c (design p1-step7-design.md §8.4): two builds of the reader launch flag. gated runs the
-  # Production code path (VERCEL_ENV=production, CONTENT_SOURCE=none); review opens the reader with
-  # fixtures. Each leg has its own env block: never a ternary that yields '', because an empty
-  # VERCEL_ENV counts as set and refuses review and fixtures.
+  # P1-1c (design p1-step7-design.md §8.4) and P1-2c (design p1-step9-design.md §3.5, §10.4): three
+  # builds of the reader launch flag. gated runs the Production code path (VERCEL_ENV=production,
+  # CONTENT_SOURCE=none); review opens the reader with fixtures; staging serves the 3 fixtures as a
+  # staging catalogue from a Storage stub on 127.0.0.1 and builds a simulated Preview with the
+  # reader open and the staging banner on every page. Each leg has its own env: never a ternary
+  # that yields '', because an empty VERCEL_ENV counts as set and refuses review, fixtures and the
+  # staging harness. The staging step has no env block: the harness sets what it needs, refuses any
+  # preset VERCEL*, CONTENT_* or READER_LAUNCH, and runs here because GitHub sets
+  # GITHUB_ACTIONS=true. No leg's build output is uploaded or deployed (only the Playwright report,
+  # on failure).
   e2e:
     needs: checks
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        launch: [gated, review]
+        launch: [gated, review, staging]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,6 +91,9 @@ jobs:
         env:
           CONTENT_SOURCE: fixtures
           READER_LAUNCH: review
+      - name: 'Build (staging: content from a local Storage stub on 127.0.0.1, simulated Preview)'
+        if: matrix.launch == 'staging'
+        run: pnpm exec tsx scripts/testing/staging-build.ts
       - run: pnpm test:e2e
         env:
           E2E_LAUNCH: ${{ matrix.launch }}

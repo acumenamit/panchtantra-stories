@@ -1,13 +1,17 @@
 import 'server-only'
 // The content API pages use (design p1-step8-design.md §8; spec §3.2; P1-2b): one lazy reader per
-// process over join(process.cwd(), CONTENT_DIR), the folder scripts/load-content.ts writes before
-// `next build`. No page uses it in Step 8. Launch gating stays with the caller: storyParams() is
-// content only, and Step 10 combines it with the launch state. Under `next dev` the folder may be
-// stale or absent: run `pnpm content:load` first.
+// process over join(process.cwd(), '.content'), the folder scripts/load-content.ts writes before
+// `next build`. The path is a string literal on purpose (P1-2c, design p1-step9-design.md R2):
+// with the imported CONTENT_DIR, Turbopack cannot resolve it at build time, warns "Dynamic
+// filesystem access causes tracing of the whole project" and traces every project file into each
+// root page; with the literal it traces exactly the .content/ files. reader.test.ts pins the
+// literal to CONTENT_DIR. The three root files read `contentMode()` for the staging banner (P1-2c); Step 10
+// adds content pages. Launch gating stays with the caller: storyParams() is content only, and Step
+// 10 combines it with the launch state. Under `next dev` the folder may be stale or absent: run
+// `pnpm content:load` first.
 import { join } from 'node:path'
 import type { BuildInfo } from '../core/content/build-info'
 import type { GateMode } from '../core/content/gates'
-import { CONTENT_DIR } from '../core/content/output-layout'
 import type { LocaleCode } from '../core/locales'
 import {
   createContentReader,
@@ -31,7 +35,7 @@ let reader: ContentReader | undefined
 
 /** The process's reader, created on first use; it reads the folder on its first query. */
 function current(): ContentReader {
-  reader ??= createContentReader(join(process.cwd(), CONTENT_DIR))
+  reader ??= createContentReader(join(process.cwd(), '.content'))
   return reader
 }
 

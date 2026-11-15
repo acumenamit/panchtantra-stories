@@ -9,10 +9,14 @@
 //   viewport, lang and dir from the URL's locale and the registry (never from storage), and the
 //   text-size boot script once in <head>.
 // - ChoiceRecorder saves uiLocale only when the URL carries ?remember=1 (gate and header links).
+// - P1-2c (design p1-step9-design.md §3.6 rows 1-6, §4.3, §9 item 4): the staging banner is the
+//   first child of <body>, before ChoiceRecorder, from contentMode() (the mode the loader wrote;
+//   null without .content/, so it renders nothing then). Step 10's player sits under this layout.
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { buildLaunch } from '@/config/launch'
+import { contentMode } from '@/content'
 import { getLocaleDef, parseEnabledLocale, type LocaleCode } from '@/core/locales'
 import { TEXT_SCALE_BOOT_SCRIPT } from '@/core/progress/text-scale-boot'
 import { readerLocaleParams } from '@/reader/routing'
@@ -20,6 +24,7 @@ import { translator } from '@/ui/i18n/messages'
 import { htmlAttributes } from '@/ui/root/document'
 import { FONT_CLASSES } from '@/ui/root/font-classes'
 import { readerRootMetadata } from '@/ui/root/metadata'
+import { StagingBanner } from '@/ui/root/staging-banner'
 import { ChoiceRecorder } from '@/ui/shell/choice-recorder'
 import { ROOT_VIEWPORT } from '@/ui/viewport'
 import '@/ui/styles/tokens.css'
@@ -64,6 +69,7 @@ export default async function ReaderRootLayout({
         <script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT_SCRIPT }} />
       </head>
       <body>
+        <StagingBanner mode={contentMode()} />
         <ChoiceRecorder locale={code} />
         {children}
       </body>

@@ -23,6 +23,16 @@
 //   unset, empty or none neither exists, so a gated build proves /build-info.json cannot be
 //   served; with fixtures or storage both build-info copies exist, are byte-equal and name a mode
 //   that agrees with CONTENT_SOURCE.
+// - [staging-banner] (design p1-step9-design.md §3.6 rows 12-15, §4.5, §9 item 7; P1-2c): the
+//   pages are every prerendered HTML file in both output layouts except _global-error.html. When
+//   .content/build-info.json names mode staging, every page holds exactly one banner: a <p> with
+//   lang="en" and exactly the committed text, before the first <main, <header and <a ; and the
+//   build fails wherever the loader would refuse a staging pointer (the shared
+//   stagingPointerAllowed, on this process's environment and platform: the second lock). Any
+//   other mode, or no content: no page holds the banner attribute in any form or the banner text
+//   (raw or \u-escaped). Every build: neither reaches .next/static JS. Right after the launch line,
+//   every run (pass or fail) prints one value-free line: "content mode: <none|fixtures|staging|
+//   production|invalid>; staging banner pages: <n> of <m>".
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +45,7 @@ import {
 } from '../src/config/launch'
 import { APP_NAME } from '../src/core/app-info'
 import { BuildInfo } from '../src/core/content/build-info'
+import type { GateMode } from '../src/core/content/gates'
 import {
   BUILD_INFO_FILE,
   CONTENT_DIR,
@@ -49,7 +60,12 @@ import {
 } from '../src/core/locales'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { gateOptions } from '../src/reader/routing'
-import { isEntryPoint } from './load-content'
+import {
+  STAGING_BANNER_ATTRIBUTE,
+  STAGING_BANNER_MARKER,
+  STAGING_BANNER_TEXT,
+} from '../src/ui/root/staging'
+import { isEntryPoint, STAGING_REFUSED_HERE, stagingPointerAllowed } from './load-content'
 
 /** The prerender manifest version Next 16.4.5 writes; an upgrade that changes it fails loudly (R18). */
 export const MANIFEST_VERSION = 4
@@ -62,6 +78,9 @@ export const ROBOTS_META = '<meta name="robots" content="noindex, nofollow"/>'
 
 /** Today's "/" body markup while gated (app/(reader)/(gate)/page.tsx, ComingSoon). */
 export const COMING_SOON_MAIN = `<main><h1>${APP_NAME}</h1><p>Coming soon.</p></main>`
+
+/** Next's own 500 page: no robots meta and no banner (design p1-step7-design.md §5.7; P1-2c R8). */
+const GLOBAL_ERROR_HTML = '_global-error.html'
 
 /** The gate's own language; every other locale may appear on "/" only as an island (open builds). */
 const GATE_LOCALE = 'en'
@@ -278,7 +297,7 @@ export function checkBuild(
   // Robots, in every build (spec §10.3): noindex is never tied to the launch flag.
   if (!output.html.has('_not-found.html')) fail('files', 'missing the prerendered _not-found.html')
   for (const [path, html] of output.html) {
-    if (path === '_global-error.html') continue // Next's own 500 page carries none (design §5.7)
+    if (path === GLOBAL_ERROR_HTML) continue // Next's own 500 page carries none (design §5.7)
     const metas = robotsMetas(html)
     if (path === '_not-found.html') {
       if (metas.length === 0 || metas.some((meta) => !meta.includes('noindex'))) {
@@ -419,6 +438,17 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((byte, i) => byte === b[i])
 }
 
+/** A build-info copy, strictly parsed; the failure names what is wrong, never a value. */
+function parseBuildInfo(bytes: Uint8Array): BuildInfo | 'not-json' | 'not-strict' {
+  let parsed: ReturnType<typeof BuildInfo.safeParse>
+  try {
+    parsed = BuildInfo.safeParse(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch {
+    return 'not-json'
+  }
+  return parsed.success ? parsed.data : 'not-strict'
+}
+
 /**
  * Rule [content-outputs] (C-2, design p1-step8-design.md §3.3). `contentSource` is this process's
  * CONTENT_SOURCE; an empty value counts as unset, as in the loader. Messages name enums and file
@@ -453,24 +483,144 @@ export function checkContentOutputs(
     fail('.content/build-info.json and public/build-info.json differ')
     return failures
   }
-  let parsed: ReturnType<typeof BuildInfo.safeParse>
-  try {
-    parsed = BuildInfo.safeParse(JSON.parse(new TextDecoder().decode(contentBuildInfo)))
-  } catch {
+  const parsed = parseBuildInfo(contentBuildInfo)
+  if (parsed === 'not-json') {
     fail('.content/build-info.json is not valid JSON')
     return failures
   }
-  if (!parsed.success) {
+  if (parsed === 'not-strict') {
     fail('.content/build-info.json failed strict parse')
     return failures
   }
   const expected = CONTENT_MODES[source]
-  if (!expected.includes(parsed.data.mode)) {
+  if (!expected.includes(parsed.mode)) {
     fail(
-      `build-info mode is ${parsed.data.mode}, but CONTENT_SOURCE=${source} needs ${expected.join(' or ')}`,
+      `build-info mode is ${parsed.mode}, but CONTENT_SOURCE=${source} needs ${expected.join(' or ')}`,
     )
   }
   return failures
+}
+
+/**
+ * The content mode of a build (P1-2c): what the loader wrote to .content/build-info.json, which is
+ * what the pages read through contentMode(). null when there is no such file (no content was
+ * loaded), 'invalid' when it is not a valid build-info ([content-outputs] fails that build).
+ */
+export type ContentMode = GateMode | 'invalid' | null
+
+/** Reads the mode from the bytes of .content/build-info.json, or null when the file is missing. */
+export function readContentMode(bytes: Uint8Array | null): ContentMode {
+  if (bytes === null) return null
+  const parsed = parseBuildInfo(bytes)
+  return typeof parsed === 'string' ? 'invalid' : parsed.mode
+}
+
+/** The pages [staging-banner] counts, and how many of them hold the banner marker. */
+export interface StagingBannerCounts {
+  readonly pages: number
+  readonly withBanner: number
+}
+
+export interface StagingBannerReport extends StagingBannerCounts {
+  /** "[staging-banner] what failed", naming files, rules and counts only; empty when it holds. */
+  readonly failures: readonly string[]
+}
+
+/** The banner element: a <p> holding only text (design §4.5). */
+const BANNER_ELEMENT = new RegExp(`<p\\b[^>]*\\s${STAGING_BANNER_MARKER}[^>]*>([^<]*)</p>`, 'g')
+
+/** Each banner element must come before the first of these (design §3.6 row 12). */
+const BANNER_BEFORE = ['<main', '<header', '<a '] as const
+
+/**
+ * Rule [staging-banner] (design p1-step9-design.md §3.6 rows 12-15, §4.5; P1-2c). `mode` comes
+ * from readContentMode; `env` and `platform` are this process's, for the second lock, which is the
+ * loader's own stagingPointerAllowed. Messages name files, rules and counts, never a value.
+ */
+export function checkStagingBanner(
+  output: BuildOutput,
+  mode: ContentMode,
+  env: Env,
+  platform: string,
+): StagingBannerReport {
+  const failures: string[] = []
+  const fail = (message: string): void => {
+    failures.push(`[staging-banner] ${message}`)
+  }
+  const pages = [...output.html].filter(([path]) => path !== GLOBAL_ERROR_HTML)
+  const withBanner = pages.filter(([, html]) => html.includes(STAGING_BANNER_MARKER)).length
+  const textForms = leakForms(STAGING_BANNER_TEXT)
+  /** " (\u-escaped)" when the text was found only escaped, as [catalogue-leak] says it. */
+  const textFound = (text: string): string | null => {
+    const found = textForms.findIndex((form) => text.includes(form))
+    return found === -1 ? null : found === 0 ? '' : ' (\\u-escaped)'
+  }
+
+  if (mode === 'staging') {
+    if (!stagingPointerAllowed(env, platform)) {
+      fail(`content mode is staging, but ${STAGING_REFUSED_HERE}`)
+    }
+    for (const [path, html] of pages) {
+      const markers = count(html, STAGING_BANNER_MARKER)
+      if (markers !== 1) {
+        fail(`${path}: expected exactly one banner (found ${markers} ${STAGING_BANNER_MARKER})`)
+        continue
+      }
+      const elements = [...html.matchAll(BANNER_ELEMENT)]
+      const element = elements[0]
+      if (elements.length !== 1 || element === undefined) {
+        fail(
+          `${path}: the banner is not a <p> element holding only text (found ${elements.length} such elements)`,
+        )
+        continue
+      }
+      const openTag = element[0].slice(0, element[0].indexOf('>') + 1)
+      if (!/\slang="en"[\s/>]/.test(openTag)) fail(`${path}: the banner has no lang="en"`)
+      if (element[1] !== STAGING_BANNER_TEXT) {
+        fail(`${path}: the banner text is not STAGING_BANNER_TEXT (src/ui/root/staging.ts)`)
+      }
+      const at = html.indexOf(STAGING_BANNER_MARKER)
+      for (const tag of BANNER_BEFORE) {
+        const first = html.indexOf(tag)
+        if (first !== -1 && first < at) {
+          fail(`${path}: the banner comes after the first ${tag.trim()}`)
+        }
+      }
+    }
+  } else {
+    const name = mode ?? 'none'
+    for (const [path, html] of pages) {
+      const attributes = count(html, STAGING_BANNER_ATTRIBUTE)
+      if (attributes > 0) {
+        fail(
+          `${path}: holds ${STAGING_BANNER_ATTRIBUTE} ${attributes} time(s), but content mode is ${name} (only a staging build has the banner)`,
+        )
+      }
+      const text = textFound(html)
+      if (text !== null) {
+        fail(`${path}: holds the banner text${text}, but content mode is ${name}`)
+      }
+    }
+  }
+
+  // No build sends the banner in client JS: the component is a Server Component (design §4.2).
+  for (const [path, js] of output.staticJs) {
+    const text = textFound(js)
+    if (text !== null) fail(`.next/static/${path} holds the banner text${text}`)
+    if (js.includes(STAGING_BANNER_ATTRIBUTE)) {
+      fail(`.next/static/${path} holds ${STAGING_BANNER_ATTRIBUTE}`)
+    }
+  }
+  return { failures, pages: pages.length, withBanner }
+}
+
+/**
+ * The value-free summary line (design §3.6 row 13, §4.5): enums and counts only. `counts` is null
+ * when the build output could not be read (the [read] failure says why).
+ */
+export function contentModeLine(mode: ContentMode, counts: StagingBannerCounts | null): string {
+  const pages = counts === null ? 'unknown' : `${counts.withBanner} of ${counts.pages}`
+  return `content mode: ${mode ?? 'none'}; staging banner pages: ${pages}`
 }
 
 /** Reads the loader's outputs under <root> (output-layout.ts names), for [content-outputs]. */
@@ -494,16 +644,23 @@ export function readContentOutputs(root: string): ContentOutputs {
 export interface CheckBuildOptions {
   readonly root: string
   readonly env: Env
+  /** process.platform unless a test passes another; read by the [staging-banner] second lock. */
+  readonly platform?: string
   readonly log?: (line: string) => void
   readonly logError?: (line: string) => void
 }
+
+/** What [staging-banner] reads when the build output itself could not be read. */
+const NO_OUTPUT: BuildOutput = { manifest: undefined, html: new Map(), staticJs: new Map() }
 
 /** Returns the process exit code: 0 when every rule holds, else 1. Never throws. */
 export function runCheckBuild(options: CheckBuildOptions): number {
   const log = options.log ?? ((line: string) => console.log(line))
   const logError = options.logError ?? ((line: string) => console.error(line))
+  const platform = options.platform ?? process.platform
   const decision = resolveLaunch(options.env)
   let result: CheckReport
+  let output: BuildOutput | undefined
   try {
     let catalogue: CatalogueValue[] = []
     let catalogueError: string | undefined
@@ -512,7 +669,8 @@ export function runCheckBuild(options: CheckBuildOptions): number {
     } catch (error) {
       catalogueError = error instanceof Error ? error.message : 'unreadable'
     }
-    const report = checkBuild(readBuildOutput(options.root), decision, catalogue)
+    output = readBuildOutput(options.root)
+    const report = checkBuild(output, decision, catalogue)
     result = catalogueError
       ? { ...report, failures: [`[catalogue] ${catalogueError}`, ...report.failures] }
       : report
@@ -522,17 +680,24 @@ export function runCheckBuild(options: CheckBuildOptions): number {
   }
   // C-2 runs whatever the build output gave, so a gated build always proves its content outputs.
   let contentFailures: string[]
+  let mode: ContentMode
   try {
-    contentFailures = checkContentOutputs(
-      options.env.CONTENT_SOURCE,
-      readContentOutputs(options.root),
-    )
+    const outputs = readContentOutputs(options.root)
+    contentFailures = checkContentOutputs(options.env.CONTENT_SOURCE, outputs)
+    mode = readContentMode(outputs.contentBuildInfo)
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown'
     contentFailures = [`[content-outputs] unreadable: ${reason}`]
+    mode = 'invalid' // unreadable: no banner is allowed, and the build already fails
   }
-  result = { ...result, failures: [...result.failures, ...contentFailures] }
+  // [staging-banner] beside C-2 (P1-2c). Without a readable output its second lock still runs.
+  const banner = checkStagingBanner(output ?? NO_OUTPUT, mode, options.env, platform)
+  result = {
+    ...result,
+    failures: [...result.failures, ...contentFailures, ...banner.failures],
+  }
   log(result.launchLine)
+  log(contentModeLine(mode, output === undefined ? null : banner))
   if (result.failures.length === 0) {
     log('check-build: ok')
     return 0

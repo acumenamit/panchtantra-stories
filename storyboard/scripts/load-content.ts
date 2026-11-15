@@ -7,6 +7,10 @@
 //                     accepted only in GitHub Actions (GITHUB_ACTIONS=true) or on Windows (P1-2b, R4).
 //   CONTENT_BASE_URL  exactly the committed CONTENT_PUBLIC_BASE, or a loopback test server
 //   CONTENT_POINTER   <root>catalogue/production.json | <root>catalogue/staging.json (sets the gate mode)
+//                     A staging pointer loads only in a Vercel Preview (VERCEL_ENV=preview), or
+//                     with VERCEL and VERCEL_ENV unset in GitHub Actions or on Windows (this PC);
+//                     check-build reuses the predicate, stagingPointerAllowed (P1-2c; design
+//                     p1-step9-design.md §3.3 A).
 // Every run first prints a value-free `content: environment …` line (P1-2b; design
 // p1-step8-design.md §3.3, §4.5). Storage mode then runs the chain of design §4.1: pointer,
 // snapshot, packagePath rule, packages (sha256, JCS, strict parse, ids, validator with the
@@ -111,6 +115,25 @@ export const FIXTURES_REFUSED_HERE =
 /** The base rule's refusal: it names only the committed constant, never the configured value. */
 export const BASE_URL_REFUSED = `CONTENT_BASE_URL must be the committed public base ${CONTENT_PUBLIC_BASE} (spec §3.5, D3)`
 
+/** The staging allowlist's refusal (design p1-step9-design.md §3.3 A; P1-2c); echoes no value. */
+export const STAGING_REFUSED_HERE =
+  'a staging pointer loads only in a Vercel Preview, in GitHub Actions or on Windows (this PC); refused here (spec §3.2)'
+
+/**
+ * Where a staging pointer may load (design p1-step9-design.md §3.3 A; P1-2c). Staging skips the
+ * approval gate, so the allowlist is positive: a Vercel Preview (VERCEL_ENV=preview), or, with
+ * VERCEL and VERCEL_ENV both unset (any value, even empty, counts as set), GitHub Actions
+ * (GITHUB_ACTIONS=true) or Windows (this PC). Vercel builds run on Linux and do not set
+ * GITHUB_ACTIONS, so a Production build with system variables off is refused too (the Step 8 blind
+ * spot, p1-step8-design.md:200). Pure; check-build reuses it as the second lock of
+ * [staging-banner], so the two can never drift apart.
+ */
+export function stagingPointerAllowed(env: Env, platform: string): boolean {
+  if (env.VERCEL_ENV === 'preview') return true
+  if (env.VERCEL !== undefined || env.VERCEL_ENV !== undefined) return false
+  return env.GITHUB_ACTIONS === 'true' || platform === 'win32'
+}
+
 /** Reads the environment only; never echoes a value, so a misplaced secret is never printed. */
 export function resolveConfig(
   env: Env,
@@ -151,6 +174,11 @@ export function resolveConfig(
   // Staging skips the approval gate; it is for local preview and hosted Previews only (spec §3.2).
   if (env.VERCEL_ENV === 'production' && location.value.mode !== 'production') {
     return fail('CONTENT_POINTER must be a production pointer when VERCEL_ENV=production')
+  }
+  // Then the positive allowlist (P1-2c, design p1-step9-design.md §3.3 A). A refusal returns here,
+  // before any request and before stale outputs are removed.
+  if (location.value.mode === 'staging' && !stagingPointerAllowed(env, platform)) {
+    return fail(STAGING_REFUSED_HERE)
   }
   return ok({ kind: 'storage', baseUrl: baseUrl.value, pointerPath, location: location.value })
 }

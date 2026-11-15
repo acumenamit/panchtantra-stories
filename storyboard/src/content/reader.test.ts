@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CONTENT_PUBLIC_BASE, MEDIA_ORIGIN } from '../config/security-headers'
 import type { BuildInfo } from '../core/content/build-info'
+import { CONTENT_DIR } from '../core/content/output-layout'
 import { jcsBytes, toJcs } from '../core/hashing'
 import { makePointer, makeSnapshot } from '../core/package/catalogue-build'
 import { createContentReader, type ContentReader } from './reader'
@@ -611,5 +612,18 @@ describe('src/content: one lazy reader per process over <cwd>/.content', () => {
     expect(api.listStories()).toEqual([])
     expect(api.storyParams()).toEqual([])
     expect(api.mediaUrl('media/a.webp')).toBe(`${CONTENT_PUBLIC_BASE}/media/a.webp`)
+  })
+
+  // P1-2c (design p1-step9-design.md R2): Turbopack traces a literal path, but a computed one
+  // (join(process.cwd(), CONTENT_DIR)) makes it trace the whole project into every root page.
+  it('names the folder as the string literal CONTENT_DIR holds, so the build traces only .content/', () => {
+    const source = readFileSync(join(here, 'index.ts'), 'utf8')
+    const code = source.replace(/^\s*\/\/[^\n]*$/gm, '')
+    expect(CONTENT_DIR).toBe('.content')
+    expect(
+      code.match(/createContentReader\(join\(process\.cwd\(\), '\.content'\)\)/g),
+    ).toHaveLength(1)
+    expect(code).not.toMatch(/\bCONTENT_DIR\b/)
+    expect(code.match(/process\.cwd\(\)/g)).toHaveLength(1)
   })
 })

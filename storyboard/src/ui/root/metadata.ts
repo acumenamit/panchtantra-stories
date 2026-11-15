@@ -1,7 +1,8 @@
 // Root metadata shared by the root layouts (spec §10.3 noindex; design p1-step7-design.md §3.12
 // #17, #20, §4.1; P1-1c). The only file that sets robots: noindex, nofollow on every 200 page in
-// every build, never tied to the launch flag. Pages never set robots (metadata merges shallowly),
-// and the 404 sets none (Next adds noindex there itself).
+// every build, never tied to the launch flag. Production keeps it after the flag lift until the
+// owner's indexing commit after counsel's sign-off (P1 D10, Step 26). Pages never set robots
+// (metadata merges shallowly), and the 404 sets none (Next adds noindex there itself).
 import type { Metadata } from 'next'
 import { APP_NAME } from '../../core/app-info'
 

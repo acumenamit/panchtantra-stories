@@ -1,5 +1,5 @@
 // The shared document on every route of the leg, the 404 included (spec §6.6, §6.7, §9, §10.3;
-// design p1-step7-design.md §4.1, §8.3 document.spec, §11 R2; P1-1c). Both legs, over that leg's
+// design p1-step7-design.md §4.1, §8.3 document.spec, §11 R2; P1-1c). Every leg, over that leg's
 // routes (e2e/routes.ts): the status, the four security headers, <html lang dir>, the canvas colour,
 // the three font variables, the font preload, the boot script once in <head>, the redirect script
 // only on the open "/", the stored text size before first paint, the head metas, robots, the title
@@ -7,11 +7,20 @@
 // R2: on the 404 (app/global-not-found.tsx bypasses every layout) the font preload count,
 // theme-color, color-scheme and the icon and manifest links are reported as annotations, not
 // asserted; its viewport meta and noindex are asserted.
+// P1-2c (design p1-step9-design.md §2, §10.3, critic C6): the staging banner on every route, beside
+// robots: exactly one (a p with the exact text and lang="en") on the staging leg, none on the gated
+// and review legs, counted in the server HTML and in the DOM. The selector, marker and text come
+// from src/ui/root/staging.ts, so a typo cannot pass the 0 here without failing the staging leg.
 import type { APIRequestContext, Page } from '@playwright/test'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { TEXT_SCALE_BOOT_SCRIPT } from '../src/core/progress/text-scale-boot'
+import {
+  STAGING_BANNER_ATTRIBUTE,
+  STAGING_BANNER_MARKER,
+  STAGING_BANNER_TEXT,
+} from '../src/ui/root/staging'
 import { expect, test } from './fixtures'
-import { launchLeg } from './launch-leg'
+import { launchLeg, legHasBanner, legOpen } from './launch-leg'
 import {
   fontFamilies,
   prefsText,
@@ -121,7 +130,7 @@ for (const route of documentRoutes(LEG)) {
     const redirect = `<script>${LOCALE_REDIRECT_SCRIPT}</script>`
     expect(count(html, boot), 'boot script elements').toBe(1)
     expect(count(head, boot), 'boot script elements in <head>').toBe(1)
-    const redirects = LEG === 'review' && route.path === '/' ? 1 : 0
+    const redirects = legOpen(LEG) && route.path === '/' ? 1 : 0
     expect(count(html, redirect), 'redirect script elements').toBe(redirects)
     expect(count(head, redirect), 'redirect script elements in <head>').toBe(redirects)
     if (redirects === 1) expect(head.indexOf(redirect)).toBeGreaterThan(head.indexOf(boot))
@@ -159,6 +168,28 @@ for (const route of documentRoutes(LEG)) {
     expect(robots.length, 'robots metas').toBeGreaterThan(0)
     for (const content of robots) expect(content ?? '', 'a robots meta').toContain('noindex')
     if (route.status === 200) expect(robots, 'robots on a 200 page').toEqual(['noindex, nofollow'])
+
+    // The staging banner (P1-2c): one on the staging leg, none elsewhere, in the server HTML and in
+    // the DOM. The flight copy of the attribute is JSON-escaped, so the marker counts banners; any
+    // form of the attribute name and the raw text are also absent from the other legs' HTML.
+    const banners = legHasBanner(LEG) ? 1 : 0
+    expect(count(html, STAGING_BANNER_MARKER), 'staging banners in the server HTML').toBe(banners)
+    if (banners === 0) {
+      expect(count(html, STAGING_BANNER_ATTRIBUTE), 'the banner attribute in any form').toBe(0)
+      expect(count(html, STAGING_BANNER_TEXT), 'the banner text in the server HTML').toBe(0)
+    }
+    const banner = page.locator(`[${STAGING_BANNER_ATTRIBUTE}]`)
+    await expect(banner, 'staging banners in the DOM').toHaveCount(banners)
+    if (banners === 1) {
+      expect(
+        await banner.evaluate((element) => ({
+          element: element.localName,
+          lang: element.getAttribute('lang'),
+          text: element.textContent,
+        })),
+        'the staging banner in the DOM',
+      ).toEqual({ element: 'p', lang: 'en', text: STAGING_BANNER_TEXT })
+    }
 
     // The title.
     expect(await page.title(), 'title').not.toBe('')

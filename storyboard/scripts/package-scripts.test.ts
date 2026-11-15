@@ -3,9 +3,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { BUILD_STEPS, NEXT_BUILD_ARGS } from './preview-staging'
 
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PackageScripts = z.object({ scripts: z.record(z.string(), z.string()) })
+const readScripts = () =>
+  PackageScripts.parse(JSON.parse(readFileSync(join(storyboard, 'package.json'), 'utf8'))).scripts
 
 /** Each file a script runs with tsx: "tsx scripts/load-content.ts && next build" -> scripts/load-content.ts. */
 function tsxTargets(scripts: Readonly<Record<string, string>>): [string, string][] {
@@ -48,5 +51,20 @@ describe('package.json scripts', () => {
     expect(scripts.build).toBe(
       'tsx scripts/load-content.ts && next build && tsx scripts/check-build.ts',
     )
+  })
+
+  // P1-2c (design p1-step9-design.md §3.6 rows 22-24, §6.1, §10.1): the owner's LAN preview is a
+  // tsx wrapper (inline env fails under Windows cmd; no cross-env package), and it runs exactly the
+  // three steps of build, so the two cannot drift apart.
+  it('runs preview:staging through its tsx wrapper (P1-2c)', () => {
+    expect(readScripts()['preview:staging']).toBe('tsx scripts/preview-staging.ts')
+  })
+
+  it("preview:staging's BUILD_STEPS are build's steps, in order (P1-2c drift guard)", () => {
+    const build = readScripts().build ?? ''
+    expect(build.split(' && ')).toEqual([...BUILD_STEPS])
+    expect(BUILD_STEPS).toHaveLength(3)
+    // runStagingSteps spawns next with exactly the arguments of build's next step.
+    expect(['next', ...NEXT_BUILD_ARGS].join(' ')).toBe(build.split(' && ')[1])
   })
 })

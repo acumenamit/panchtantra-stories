@@ -2,6 +2,9 @@
 // 6-13, §8.1 item 6; P1-1c). The three root files are read as text (they import next/font through
 // src/ui/root/font-classes.ts, which only runs inside Next); only the pure document.ts and
 // metadata.ts are imported.
+// P1-2c (design p1-step9-design.md §3.6 rows 4, 17-20, §5.2, §9 item 4, §10.1): the staging banner
+// first in <body> of each root file, the only files that hold its marker, and the robots-file and
+// public/ guards (D10-B: no robots.txt, sitemap or other public file without a robots decision).
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,22 +31,33 @@ const BOOT_IMPORT = "import { TEXT_SCALE_BOOT_SCRIPT } from '@/core/progress/tex
 const BOOT_SCRIPT = '<script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT_SCRIPT }} />'
 const REDIRECT_SCRIPT = '<script dangerouslySetInnerHTML={{ __html: LOCALE_REDIRECT_SCRIPT }} />'
 
-/** Every source file under `dir` (relative to the storyboard root). */
-function sources(dir: string): string[] {
+// P1-2c: the staging banner line and its two imports, in each of the three root files.
+const BANNER_LINE = '<StagingBanner mode={contentMode()} />'
+const BANNER_IMPORTS = [
+  "import { contentMode } from '@/content'",
+  "import { StagingBanner } from '@/ui/root/staging-banner'",
+]
+/** The only app/ and src/ files (tests aside) that hold the banner's attribute name. */
+const BANNER_SOURCES = ['src/ui/root/staging-banner.tsx', 'src/ui/root/staging.ts']
+
+/** Every file under `dir` (relative to the storyboard root) whose name passes `keep`. */
+function files(dir: string, keep: (name: string) => boolean = () => true): string[] {
   const found: string[] = []
   const visit = (absolute: string): void => {
     if (!existsSync(absolute)) return
     for (const entry of readdirSync(absolute, { withFileTypes: true })) {
       const path = join(absolute, entry.name)
       if (entry.isDirectory()) visit(path)
-      else if (/\.(ts|tsx|mts|mjs|js|jsx)$/.test(entry.name)) {
-        found.push(toPosix(relative(storyboard, path)))
-      }
+      else if (keep(entry.name)) found.push(toPosix(relative(storyboard, path)))
     }
   }
   visit(join(storyboard, dir))
   return found.sort()
 }
+
+/** Every source file under `dir` (relative to the storyboard root). */
+const sources = (dir: string): string[] =>
+  files(dir, (name) => /\.(ts|tsx|mts|mjs|js|jsx)$/.test(name))
 
 const count = (text: string, part: string): number => text.split(part).length - 1
 
@@ -126,7 +140,31 @@ describe('the three root files (design §4.1)', () => {
     expect(source).toContain('params: Promise<{ locale: string }>')
     expect(source).toContain('parseEnabledLocale(')
     expect(source).toContain('if (!buildLaunch().readerRoutes || code === undefined) notFound()')
-    expect(source).toMatch(/<body>\s*<ChoiceRecorder locale=\{code\} \/>\s*\{children\}\s*<\/body>/)
+    expect(source).toMatch(
+      /<body>\s*<StagingBanner mode=\{contentMode\(\)\} \/>\s*<ChoiceRecorder locale=\{code\} \/>\s*\{children\}\s*<\/body>/,
+    )
+  })
+
+  it.each(ROOT_FILES)(
+    '%s renders the staging banner once, first in <body>, with both imports (P1-2c)',
+    (file) => {
+      const source = read(file)
+      const lines = source.split('\n')
+      for (const line of BANNER_IMPORTS) expect(lines).toContain(line)
+      expect(count(source, BANNER_LINE)).toBe(1)
+      expect(count(source, 'StagingBanner')).toBe(2)
+      expect(count(source, 'contentMode')).toBe(2)
+      expect(source).toMatch(/<body>\s*<StagingBanner mode=\{contentMode\(\)\} \/>/)
+    },
+  )
+
+  it('"/" and the 404 hold only the banner and their content in <body> (P1-2c)', () => {
+    expect(read(GATE_LAYOUT)).toMatch(
+      /<body>\s*<StagingBanner mode=\{contentMode\(\)\} \/>\s*\{children\}\s*<\/body>/,
+    )
+    expect(read(GLOBAL_NOT_FOUND)).toMatch(
+      /<body>\s*<StagingBanner mode=\{contentMode\(\)\} \/>\s*<NotFoundContent \/>\s*<\/body>/,
+    )
   })
 })
 
@@ -183,6 +221,16 @@ describe('the app/ tree (design §4, §7 items 6, 9-10)', () => {
     expect(source).toContain('<main><h1>{APP_NAME}</h1><p>Comingsoon.</p></main>')
     expect(source).not.toContain('className')
   })
+
+  it('only staging.ts and staging-banner.tsx hold data-staging-banner in app/ and src/ (tests aside; P1-2c)', () => {
+    const raw = (path: string): string => readFileSync(join(storyboard, path), 'utf8')
+    for (const file of BANNER_SOURCES) expect(raw(file), file).toContain('data-staging-banner')
+    const text = (name: string): boolean => /\.(ts|tsx|mts|mjs|js|jsx|css|json)$/.test(name)
+    const holders = [...files('app', text), ...files('src', text)]
+      .filter((file) => !file.endsWith('.test.ts') && !BANNER_SOURCES.includes(file))
+      .filter((file) => raw(file).includes('data-staging-banner'))
+    expect(holders).toEqual([])
+  })
 })
 
 describe('robots and packages (design §3.12 #20, §8.1 item 6)', () => {
@@ -202,6 +250,50 @@ describe('robots and packages (design §3.12 #20, §8.1 item 6)', () => {
       devDependencies?: Record<string, string>
     }
     expect(Object.keys({ ...dependencies, ...devDependencies })).not.toContain('next-intl')
+  })
+})
+
+describe('robots files and public/ (P1 D10-B; design p1-step9-design.md §3.6 rows 19-20, §5.2; P1-2c)', () => {
+  /** public/ holds only these; the loader writes the git-ignored build-info.json in content builds. */
+  const PUBLIC_FILE =
+    /^public\/(?:favicon\.ico|icons\/[^/]+\.png|licenses\/fonts\/[^/]+\.txt|build-info\.json)$/
+
+  /**
+   * A robots or sitemap file, or a Route Handler in a folder of that name (app/robots.txt/route.ts
+   * serves /robots.txt), at the app root or inside route groups for robots, anywhere for sitemaps.
+   */
+  const ROBOTS_PATH = /^app\/(?:\([^/]+\)\/)*robots\.[^/]+(?:\/|$)/
+  const SITEMAP_PATH = /\/sitemap\.[^/]+(?:\/|$)/
+
+  it('the robots and sitemap patterns catch files and Route Handler folders', () => {
+    for (const path of [
+      'app/robots.ts',
+      'app/robots.txt',
+      'app/robots.txt/route.ts',
+      'app/(reader)/robots.txt/route.ts',
+    ]) {
+      expect(ROBOTS_PATH.test(path), path).toBe(true)
+    }
+    for (const path of ['app/sitemap.ts', 'app/en/sitemap.xml', 'app/sitemap.xml/route.ts']) {
+      expect(SITEMAP_PATH.test(path), path).toBe(true)
+    }
+    for (const path of [GATE_LAYOUT, LOCALE_LAYOUT, GLOBAL_NOT_FOUND, 'app/robotsx/page.tsx']) {
+      expect(ROBOTS_PATH.test(path) || SITEMAP_PATH.test(path), path).toBe(false)
+    }
+  })
+
+  it('has no app/robots.*, no app/**/sitemap.* and no public/robots.txt', () => {
+    const app = files('app')
+    expect(app).toEqual(expect.arrayContaining([GATE_LAYOUT, LOCALE_LAYOUT, GLOBAL_NOT_FOUND]))
+    expect(app.filter((file) => ROBOTS_PATH.test(file))).toEqual([])
+    expect(app.filter((file) => SITEMAP_PATH.test(file))).toEqual([])
+    expect(existsSync(join(storyboard, 'public/robots.txt'))).toBe(false)
+  })
+
+  it('public/ holds only favicon.ico, icons/*.png, licenses/fonts/*.txt and build-info.json', () => {
+    const publicFiles = files('public')
+    expect(publicFiles).toContain('public/favicon.ico')
+    expect(publicFiles.filter((file) => !PUBLIC_FILE.test(file))).toEqual([])
   })
 })
 

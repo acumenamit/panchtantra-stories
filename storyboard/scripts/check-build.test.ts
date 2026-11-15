@@ -2,31 +2,44 @@
 // outputs are shaped on real Step 7 builds (Next 16.4.5, Turbopack): the prerender-manifest keys and
 // entries, and the head, <main> and script markup of index.html, the locale pages and the 404.
 // P1-2b (design p1-step8-design.md §3.3 C-2, §10.1): the [content-outputs] truth table.
+// P1-2c (design p1-step9-design.md §4.5, §10.1): [staging-banner], its second lock (the loader's
+// stagingPointerAllowed), readContentMode and the summary line every runCheckBuild run prints.
+// The banner's marker, attribute and text come from src/ui/root/staging.ts, never retyped.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveLaunch, type LaunchDecision } from '../src/config/launch'
+import { resolveLaunch, type Env, type LaunchDecision } from '../src/config/launch'
 import type { BuildInfo } from '../src/core/content/build-info'
-import type { GateMode } from '../src/core/content/gates'
+import { GATE_MODES, type GateMode } from '../src/core/content/gates'
 import { jcsBytes } from '../src/core/hashing'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import {
+  STAGING_BANNER_ATTRIBUTE,
+  STAGING_BANNER_MARKER,
+  STAGING_BANNER_TEXT,
+} from '../src/ui/root/staging'
+import {
   checkBuild,
   checkContentOutputs,
+  checkStagingBanner,
   COMING_SOON_MAIN,
+  contentModeLine,
   DISAGREEMENT_HINT,
   escapeNonAscii,
   leakForms,
   readCatalogues,
+  readContentMode,
   readContentOutputs,
   ROBOTS_META,
   runCheckBuild,
   type BuildOutput,
   type CatalogueValue,
+  type ContentMode,
   type ContentOutputs,
 } from './check-build'
+import { STAGING_REFUSED_HERE, stagingPointerAllowed } from './load-content'
 
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CATALOGUE = readCatalogues(storyboard)
@@ -188,6 +201,43 @@ const failuresOf = (
   decision: LaunchDecision,
   catalogue: readonly CatalogueValue[] = CATALOGUE,
 ) => checkBuild(output, decision, catalogue).failures
+
+// ---- the staging banner (P1-2c) ----
+
+/** The banner as React renders it (src/ui/root/staging-banner.tsx), with a module class. */
+const BANNER = `<p ${STAGING_BANNER_MARKER} lang="en" class="x_banner">${STAGING_BANNER_TEXT}</p>`
+
+/** The banner's flight copy: JSON-escaped, so it never matches the marker. */
+const BANNER_FLIGHT =
+  `<script>self.__next_f.push([1,"[\\"$\\",\\"p\\",null,{\\"${STAGING_BANNER_ATTRIBUTE}\\":\\"\\",` +
+  `\\"lang\\":\\"en\\",\\"className\\":\\"x_banner\\",\\"children\\":\\"${STAGING_BANNER_TEXT}\\"}]"])</script>`
+
+/** Next renders this first in <body> on every prerendered page; the banner follows it. */
+const HIDDEN_DIV = '<div hidden=""><!--$--><!--/$--></div>'
+
+/** A page with `banner` right after Next's hidden div, and the banner's flight copy. */
+const withBanner = (html: string, banner = BANNER): string =>
+  html.replace(HIDDEN_DIV, `${HIDDEN_DIV}${banner}`).replace('</body>', `${BANNER_FLIGHT}</body>`)
+
+/** A staging build's output: the banner on every page but Next's _global-error.html. */
+function staged(base: BuildOutput): BuildOutput {
+  return {
+    ...base,
+    html: new Map(
+      [...base.html].map(([path, html]) => [
+        path,
+        path === '_global-error.html' ? html : withBanner(html),
+      ]),
+    ),
+  }
+}
+
+/** The CI staging harness and preview:staging give check-build a simulated Preview (design §3.4). */
+const PREVIEW: Env = { CONTENT_SOURCE: 'storage', VERCEL_ENV: 'preview', READER_LAUNCH: 'review' }
+/** The gated harness: storage with no Vercel variables, on win32 or in GitHub Actions. */
+const LOCAL_STAGING: Env = { CONTENT_SOURCE: 'storage' }
+const OPEN_STAGING = resolveLaunch(PREVIEW)
+const GATED_STAGING = resolveLaunch(LOCAL_STAGING)
 
 describe('the sample outputs pass', () => {
   it('a gated build (CI gated leg and Production now)', () => {
@@ -617,21 +667,32 @@ describe('runCheckBuild on files', () => {
     return root
   }
 
-  function run(root: string, env: Record<string, string | undefined>) {
+  /** `platform` is passed only when given, so the default (process.platform) is also exercised. */
+  function run(root: string, env: Record<string, string | undefined>, platform?: string) {
     const out: string[] = []
     const err: string[] = []
-    const code = runCheckBuild({ root, env, log: (l) => out.push(l), logError: (l) => err.push(l) })
+    const code = runCheckBuild({
+      root,
+      env,
+      ...(platform === undefined ? {} : { platform }),
+      log: (l) => out.push(l),
+      logError: (l) => err.push(l),
+    })
     return { code, out, err }
   }
 
-  it('passes a gated build and prints the launch line once', () => {
+  it('passes a gated build and prints the launch line once, then the summary line', () => {
     const result = run(writeRoot(gatedOutput()), {
       VERCEL_ENV: 'production',
       CONTENT_SOURCE: 'none',
     })
     expect(result).toEqual({
       code: 0,
-      out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: none; staging banner pages: 0 of 2',
+        'check-build: ok',
+      ],
       err: [],
     })
   })
@@ -644,6 +705,7 @@ describe('runCheckBuild on files', () => {
     expect(result.code).toBe(0)
     expect(result.out).toEqual([
       'reader launch: open (review); locale routes: 4',
+      'content mode: fixtures; staging banner pages: 0 of 6',
       'check-build: ok',
     ])
   })
@@ -656,7 +718,11 @@ describe('runCheckBuild on files', () => {
     })
     expect(gated).toEqual({
       code: 0,
-      out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: none; staging banner pages: 0 of 2',
+        'check-build: ok',
+      ],
       err: [],
     })
     const open = run(writeRoot(openOutput(), true, 'route-cache', 'fixtures'), {
@@ -699,7 +765,11 @@ describe('runCheckBuild on files', () => {
     writeRouteCache(root, 'second-copy', 'index.html', output.html.get('index.html') ?? '')
     expect(run(root, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })).toEqual({
       code: 0,
-      out: ['reader launch: gated (committed); locale routes: 0', 'check-build: ok'],
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: none; staging banner pages: 0 of 2',
+        'check-build: ok',
+      ],
       err: [],
     })
   })
@@ -709,6 +779,10 @@ describe('runCheckBuild on files', () => {
     writeRouteCache(across, 'other', 'index.html', '<main></main>')
     const acrossResult = run(across, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })
     expect(acrossResult.code).toBe(1)
+    expect(acrossResult.out).toEqual([
+      'reader launch: gated (committed)',
+      'content mode: none; staging banner pages: unknown',
+    ])
     expect(acrossResult.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
     ])
@@ -725,7 +799,10 @@ describe('runCheckBuild on files', () => {
       READER_LAUNCH: 'review',
     })
     expect(result.code).toBe(1)
-    expect(result.out).toEqual(['reader launch: open (review); locale routes: 0'])
+    expect(result.out).toEqual([
+      'reader launch: open (review); locale routes: 0',
+      'content mode: fixtures; staging banner pages: 0 of 2',
+    ])
     expect(result.err).toEqual([
       expect.stringContaining(`check-build failed [state-agreement] ${DISAGREEMENT_HINT}`),
     ])
@@ -736,7 +813,10 @@ describe('runCheckBuild on files', () => {
     dirs.push(root)
     const result = run(root, {})
     expect(result.code).toBe(1)
-    expect(result.out).toEqual(['reader launch: gated (committed); locale routes: unknown'])
+    expect(result.out).toEqual([
+      'reader launch: gated (committed); locale routes: unknown',
+      'content mode: none; staging banner pages: 0 of 0',
+    ])
     expect(result.err).toEqual([
       'check-build failed [catalogue] messages/ is missing',
       'check-build failed [files] missing .next/prerender-manifest.json',
@@ -759,7 +839,10 @@ describe('runCheckBuild on files', () => {
     const result = run(root, { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })
     expect(result).toEqual({
       code: 1,
-      out: ['reader launch: gated (committed); locale routes: 0'],
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: fixtures; staging banner pages: 0 of 2',
+      ],
       err: [
         'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
         'check-build failed [content-outputs] public/build-info.json exists, but CONTENT_SOURCE is none',
@@ -780,7 +863,8 @@ describe('runCheckBuild on files', () => {
   })
 
   it('[content-outputs]: runs even when the build output is unreadable', () => {
-    const root = writeRoot(gatedOutput(), true, 'app', 'staging')
+    // A staging build-info with banners on its pages; win32 (this PC) passes the second lock.
+    const root = writeRoot(staged(gatedOutput()), true, 'app', 'staging')
     mkdirSync(join(root, '.next', 'server', 'route-cache', 'APP_PAGE', 'x', '$'), {
       recursive: true,
     })
@@ -788,12 +872,20 @@ describe('runCheckBuild on files', () => {
       join(root, '.next', 'server', 'route-cache', 'APP_PAGE', 'x', '$', 'index.html'),
       '<main></main>',
     )
-    const result = run(root, { CONTENT_SOURCE: 'none' })
+    const result = run(root, { CONTENT_SOURCE: 'none' }, 'win32')
+    expect(result.out).toEqual([
+      'reader launch: gated (committed)',
+      'content mode: staging; staging banner pages: unknown',
+    ])
     expect(result.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
       'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
       'check-build failed [content-outputs] public/build-info.json exists, but CONTENT_SOURCE is none',
     ])
+    // [staging-banner]'s second lock still runs without a readable output (Linux, no Preview).
+    expect(run(root, { CONTENT_SOURCE: 'none' }, 'linux').err.at(-1)).toBe(
+      `check-build failed [staging-banner] content mode is staging, but ${STAGING_REFUSED_HERE}`,
+    )
   })
 
   it('reads the content outputs by the output-layout names', () => {
@@ -819,6 +911,427 @@ describe('runCheckBuild on files', () => {
       publicBuildInfoExists: true,
       publicBuildInfo: null,
     })
+  })
+
+  // ---- [staging-banner] and the summary line (P1-2c, design p1-step9-design.md §4.5, §10.1) ----
+
+  it.each(['app', 'route-cache'] as const)(
+    'passes a staging build, open and gated, in the %s layout',
+    (layout) => {
+      // The CI staging leg and preview:staging: a simulated Preview, on Linux.
+      const open = run(writeRoot(staged(openOutput()), true, layout, 'staging'), PREVIEW, 'linux')
+      expect(open).toEqual({
+        code: 0,
+        out: [
+          'reader launch: open (review); locale routes: 4',
+          'content mode: staging; staging banner pages: 6 of 6',
+          'check-build: ok',
+        ],
+        err: [],
+      })
+      // The gated harness: on this PC, and in GitHub Actions on Linux.
+      for (const [env, platform] of [
+        [LOCAL_STAGING, 'win32'],
+        [{ ...LOCAL_STAGING, GITHUB_ACTIONS: 'true' }, 'linux'],
+      ] as const) {
+        const root = writeRoot(staged(gatedOutput()), true, layout, 'staging')
+        expect(run(root, env, platform)).toEqual({
+          code: 0,
+          out: [
+            'reader launch: gated (committed); locale routes: 0',
+            'content mode: staging; staging banner pages: 2 of 2',
+            'check-build: ok',
+          ],
+          err: [],
+        })
+      }
+    },
+  )
+
+  it.each(['app', 'route-cache'] as const)(
+    'fails a staging page without its banner in the %s layout, and still prints the summary line',
+    (layout) => {
+      const output = staged(openOutput())
+      const html = new Map(output.html)
+      html.set('hi/grown-ups.html', openOutput().html.get('hi/grown-ups.html') ?? '')
+      const root = writeRoot({ ...output, html }, true, layout, 'staging')
+      expect(run(root, PREVIEW, 'linux')).toEqual({
+        code: 1,
+        out: [
+          'reader launch: open (review); locale routes: 4',
+          'content mode: staging; staging banner pages: 5 of 6',
+        ],
+        err: [
+          `check-build failed [staging-banner] hi/grown-ups.html: expected exactly one banner (found 0 ${STAGING_BANNER_MARKER})`,
+        ],
+      })
+    },
+  )
+
+  it('fails a staging build where the loader would refuse a staging pointer (the second lock)', () => {
+    const lock = `check-build failed [staging-banner] content mode is staging, but ${STAGING_REFUSED_HERE}`
+    const cases: [Env, string][] = [
+      [{ ...LOCAL_STAGING, VERCEL_ENV: 'production' }, 'linux'],
+      [{ ...LOCAL_STAGING, VERCEL: '1', VERCEL_ENV: 'production' }, 'win32'],
+      [LOCAL_STAGING, 'linux'], // the Step 8 blind spot: Linux, no Vercel variables, no CI
+      [LOCAL_STAGING, 'darwin'],
+      [{ ...LOCAL_STAGING, VERCEL: '1' }, 'linux'],
+    ]
+    for (const [env, platform] of cases) {
+      const root = writeRoot(staged(gatedOutput()), true, 'app', 'staging')
+      const result = run(root, env, platform)
+      expect(result.code, JSON.stringify([env, platform])).toBe(1)
+      expect(result.out).toEqual([
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: staging; staging banner pages: 2 of 2',
+      ])
+      expect(result.err).toEqual([lock])
+    }
+  })
+
+  it('defaults the platform to process.platform', () => {
+    const root = writeRoot(staged(gatedOutput()), true, 'app', 'staging')
+    expect(run(root, LOCAL_STAGING).code).toBe(process.platform === 'win32' ? 0 : 1)
+  })
+
+  it('prints the summary line for each mode, invalid included, and never a value', () => {
+    const production = run(writeRoot(gatedOutput(), true, 'app', 'production'), {
+      CONTENT_SOURCE: 'storage',
+      VERCEL_ENV: 'production',
+    })
+    expect(production).toEqual({
+      code: 0,
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: production; staging banner pages: 0 of 2',
+        'check-build: ok',
+      ],
+      err: [],
+    })
+
+    const secret = ['not', 'a', 'mode'].join('_')
+    const invalid = writeRoot(openOutput(), true, 'app', 'fixtures')
+    for (const path of [join('.content', 'build-info.json'), join('public', 'build-info.json')]) {
+      writeFileSync(join(invalid, path), `{"mode":"${secret}"}`)
+    }
+    const result = run(invalid, { CONTENT_SOURCE: 'fixtures', READER_LAUNCH: 'review' })
+    expect(result).toEqual({
+      code: 1,
+      out: [
+        'reader launch: open (review); locale routes: 4',
+        'content mode: invalid; staging banner pages: 0 of 6',
+      ],
+      err: ['check-build failed [content-outputs] .content/build-info.json failed strict parse'],
+    })
+    expect(JSON.stringify(result)).not.toContain(secret)
+  })
+
+  it('fails a banner in a build of any other mode, in the page and in client JS', () => {
+    const output = changed(gatedOutput(), (o) => {
+      o.html.set('_not-found.html', withBanner(o.html.get('_not-found.html') ?? ''))
+      o.staticJs.set('chunks/banner.js', `var b=${JSON.stringify(STAGING_BANNER_TEXT)};`)
+    })
+    const result = run(writeRoot(output), { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' })
+    expect(result).toEqual({
+      code: 1,
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: none; staging banner pages: 1 of 2',
+      ],
+      err: [
+        `check-build failed [staging-banner] _not-found.html: holds ${STAGING_BANNER_ATTRIBUTE} 2 time(s), but content mode is none (only a staging build has the banner)`,
+        'check-build failed [staging-banner] _not-found.html: holds the banner text, but content mode is none',
+        'check-build failed [staging-banner] .next/static/chunks/banner.js holds the banner text',
+      ],
+    })
+  })
+})
+
+describe('[staging-banner] (P1-2c): checkStagingBanner', () => {
+  const PAGES = [
+    '_not-found.html',
+    'en.html',
+    'en/grown-ups.html',
+    'hi.html',
+    'hi/grown-ups.html',
+    'index.html',
+  ]
+
+  it('passes a staging build: gated (index, _not-found) and open (plus en, hi, both Grown-ups)', () => {
+    const gated = staged(gatedOutput())
+    expect(checkStagingBanner(gated, 'staging', LOCAL_STAGING, 'win32')).toEqual({
+      failures: [],
+      pages: 2,
+      withBanner: 2,
+    })
+    expect(failuresOf(gated, GATED_STAGING)).toEqual([])
+    const open = staged(openOutput())
+    expect(checkStagingBanner(open, 'staging', PREVIEW, 'linux')).toEqual({
+      failures: [],
+      pages: 6,
+      withBanner: 6,
+    })
+    expect(failuresOf(open, OPEN_STAGING)).toEqual([])
+  })
+
+  it('counts the flight copy of the attribute as no banner, and ignores _global-error.html', () => {
+    const output = changed(staged(openOutput()), (o) => {
+      // Next's own 500 page: a banner there is neither required nor counted.
+      o.html.set('_global-error.html', GLOBAL_ERROR.replace('<body>', `<body>${BANNER}${BANNER}`))
+    })
+    expect(checkStagingBanner(output, 'staging', PREVIEW, 'linux')).toEqual({
+      failures: [],
+      pages: 6,
+      withBanner: 6,
+    })
+    const page = output.html.get('en.html') ?? ''
+    expect(page.split(STAGING_BANNER_ATTRIBUTE)).toHaveLength(3) // the element and its flight copy
+    const other = changed(gatedOutput(), (o) => {
+      o.html.set('_global-error.html', GLOBAL_ERROR.replace('<body>', `<body>${BANNER}`))
+    })
+    expect(checkStagingBanner(other, null, {}, 'linux')).toEqual({
+      failures: [],
+      pages: 2,
+      withBanner: 0,
+    })
+  })
+
+  const banner = (attributes: string, text = STAGING_BANNER_TEXT, tag = 'p') =>
+    `<${tag} ${attributes}>${text}</${tag}>`
+
+  it.each<[string, (html: string) => string, string]>([
+    [
+      'a missing banner',
+      (html) => html.replace(BANNER, ''),
+      `expected exactly one banner (found 0 ${STAGING_BANNER_MARKER})`,
+    ],
+    [
+      'two banners',
+      (html) => html.replace(BANNER, `${BANNER}${BANNER}`),
+      `expected exactly one banner (found 2 ${STAGING_BANNER_MARKER})`,
+    ],
+    [
+      'the wrong text (a hyphen for the en dash)',
+      (html) => html.replace(BANNER, BANNER.replace('–', '-')),
+      'the banner text is not STAGING_BANNER_TEXT (src/ui/root/staging.ts)',
+    ],
+    [
+      'the text in lower case',
+      (html) => html.replace(BANNER, BANNER.replace('UNAPPROVED', 'Unapproved')),
+      'the banner text is not STAGING_BANNER_TEXT (src/ui/root/staging.ts)',
+    ],
+    [
+      'no lang="en"',
+      (html) => html.replace(BANNER, banner(`${STAGING_BANNER_MARKER} class="x_banner"`)),
+      'the banner has no lang="en"',
+    ],
+    [
+      'lang="hi"',
+      (html) => html.replace(BANNER, banner(`${STAGING_BANNER_MARKER} lang="hi"`)),
+      'the banner has no lang="en"',
+    ],
+    [
+      'a <div> instead of a <p>',
+      (html) =>
+        html.replace(BANNER, banner(`${STAGING_BANNER_MARKER} lang="en"`, undefined, 'div')),
+      'the banner is not a <p> element holding only text (found 0 such elements)',
+    ],
+    [
+      'markup inside the <p>',
+      (html) =>
+        html.replace(
+          BANNER,
+          banner(`${STAGING_BANNER_MARKER} lang="en"`, `<span>${STAGING_BANNER_TEXT}</span>`),
+        ),
+      'the banner is not a <p> element holding only text (found 0 such elements)',
+    ],
+    [
+      'the banner inside <main',
+      (html) => html.replace(BANNER, '').replace(/<main[^>]*>/, (main) => `${main}${BANNER}`),
+      'the banner comes after the first <main',
+    ],
+    [
+      'the banner after a <header>',
+      (html) => html.replace(BANNER, `<header><b>x</b></header>${BANNER}`),
+      'the banner comes after the first <header',
+    ],
+    [
+      'the banner after a skip link',
+      (html) => html.replace(BANNER, `<a href="#main">Skip</a>${BANNER}`),
+      'the banner comes after the first <a',
+    ],
+  ])('fails a staging page with %s, naming the file', (_name, edit, message) => {
+    for (const path of PAGES) {
+      const output = changed(staged(openOutput()), (o) => {
+        o.html.set(path, edit(o.html.get(path) ?? ''))
+      })
+      expect(checkStagingBanner(output, 'staging', PREVIEW, 'linux').failures, path).toEqual([
+        `[staging-banner] ${path}: ${message}`,
+      ])
+    }
+  })
+
+  it.each(['index.html', '_not-found.html'])(
+    'fails a gated staging %s without its banner',
+    (path) => {
+      const output = changed(staged(gatedOutput()), (o) => {
+        o.html.set(path, gatedOutput().html.get(path) ?? '')
+      })
+      expect(checkStagingBanner(output, 'staging', LOCAL_STAGING, 'win32')).toEqual({
+        failures: [
+          `[staging-banner] ${path}: expected exactly one banner (found 0 ${STAGING_BANNER_MARKER})`,
+        ],
+        pages: 2,
+        withBanner: 1,
+      })
+    },
+  )
+
+  const OTHER_MODES: ContentMode[] = ['fixtures', 'production', null, 'invalid']
+
+  describe.each(OTHER_MODES)('content mode %s', (mode) => {
+    const name = mode ?? 'none'
+    const attribute = (path: string, n: number) =>
+      `[staging-banner] ${path}: holds ${STAGING_BANNER_ATTRIBUTE} ${n} time(s), but content mode is ${name} (only a staging build has the banner)`
+    const text = (path: string, escaped = false) =>
+      `[staging-banner] ${path}: holds the banner text${escaped ? ' (\\u-escaped)' : ''}, but content mode is ${name}`
+
+    it('passes without a banner, gated and open', () => {
+      for (const output of [gatedOutput(), openOutput()]) {
+        expect(checkStagingBanner(output, mode, PREVIEW, 'linux').failures).toEqual([])
+      }
+    })
+
+    it.each<[string, string, (path: string) => string[]]>([
+      ['the marker', `<b ${STAGING_BANNER_MARKER}></b>`, (path) => [attribute(path, 1)]],
+      [
+        'the flight copy of the attribute',
+        BANNER_FLIGHT.replace(STAGING_BANNER_TEXT, 'x'),
+        (path) => [attribute(path, 1)],
+      ],
+      ['the raw text', `<b>${STAGING_BANNER_TEXT}</b>`, (path) => [text(path)]],
+      [
+        'the \\u2013-escaped text',
+        `<script>var t="${escapeNonAscii(STAGING_BANNER_TEXT, false)}"</script>`,
+        (path) => [text(path, true)],
+      ],
+      ['the whole banner', BANNER, (path) => [attribute(path, 1), text(path)]],
+    ])('fails a page holding %s, naming the file', (_what, extra, expected) => {
+      for (const path of ['index.html', '_not-found.html', 'en/grown-ups.html']) {
+        const output = changed(openOutput(), (o) => {
+          o.html.set(path, (o.html.get(path) ?? '').replace('</body>', `${extra}</body>`))
+        })
+        expect(checkStagingBanner(output, mode, PREVIEW, 'linux').failures, path).toEqual(
+          expected(path),
+        )
+      }
+    })
+  })
+
+  it.each<ContentMode>(['staging', ...OTHER_MODES])(
+    'fails the banner text or attribute in .next/static JS in content mode %s',
+    (mode) => {
+      const base = mode === 'staging' ? staged(openOutput()) : openOutput()
+      const cases: [string, string][] = [
+        [`var b=${JSON.stringify(STAGING_BANNER_TEXT)};`, 'holds the banner text'],
+        [
+          `var b="${escapeNonAscii(STAGING_BANNER_TEXT, true)}";`,
+          'holds the banner text (\\u-escaped)',
+        ],
+        [`var a="${STAGING_BANNER_ATTRIBUTE}";`, `holds ${STAGING_BANNER_ATTRIBUTE}`],
+      ]
+      for (const [js, message] of cases) {
+        const output = changed(base, (o) => {
+          o.staticJs.set('chunks/leak.js', js)
+        })
+        expect(checkStagingBanner(output, mode, PREVIEW, 'linux').failures).toEqual([
+          `[staging-banner] .next/static/chunks/leak.js ${message}`,
+        ])
+      }
+    },
+  )
+
+  it('applies the loader’s own predicate as the second lock, so the two never drift apart', () => {
+    const lock = `[staging-banner] content mode is staging, but ${STAGING_REFUSED_HERE}`
+    const output = staged(gatedOutput())
+    const envs: Env[] = [
+      {},
+      { VERCEL_ENV: 'preview' },
+      { VERCEL: '1', VERCEL_ENV: 'preview' },
+      { VERCEL_ENV: 'production' },
+      { VERCEL_ENV: 'production', GITHUB_ACTIONS: 'true' },
+      { VERCEL_ENV: 'development' },
+      { VERCEL_ENV: '' },
+      { VERCEL: '1' },
+      { VERCEL: '' },
+      { GITHUB_ACTIONS: 'true' },
+      { GITHUB_ACTIONS: '1' },
+    ]
+    let refused = 0
+    for (const env of envs) {
+      for (const platform of ['win32', 'linux', 'darwin']) {
+        const failures = checkStagingBanner(output, 'staging', env, platform).failures
+        const allowed = stagingPointerAllowed(env, platform)
+        expect(failures, JSON.stringify([env, platform])).toEqual(allowed ? [] : [lock])
+        if (!allowed) refused++
+        // The lock is for staging only: no other mode fails on the environment.
+        for (const mode of OTHER_MODES) {
+          expect(checkStagingBanner(gatedOutput(), mode, env, platform).failures).toEqual([])
+        }
+      }
+    }
+    expect(refused).toBeGreaterThan(0)
+    // The design's named cases.
+    expect(
+      checkStagingBanner(output, 'staging', { VERCEL_ENV: 'preview' }, 'linux').failures,
+    ).toEqual([])
+    expect(
+      checkStagingBanner(output, 'staging', { GITHUB_ACTIONS: 'true' }, 'linux').failures,
+    ).toEqual([])
+    expect(
+      checkStagingBanner(output, 'staging', { VERCEL_ENV: 'production' }, 'win32').failures,
+    ).toEqual([lock])
+    expect(checkStagingBanner(output, 'staging', {}, 'linux').failures).toEqual([lock])
+  })
+
+  it('never echoes an environment value', () => {
+    const value = ['some', 'vercel', 'value'].join('_')
+    const failures = checkStagingBanner(
+      staged(gatedOutput()),
+      'staging',
+      { VERCEL: value, VERCEL_ENV: value },
+      'linux',
+    ).failures
+    expect(failures).toHaveLength(1)
+    expect(JSON.stringify(failures)).not.toContain(value)
+  })
+})
+
+describe('readContentMode and the summary line (P1-2c)', () => {
+  const text = (value: string) => new TextEncoder().encode(value)
+
+  it('reads the mode the loader wrote, null without a file, invalid for anything else', () => {
+    expect(readContentMode(null)).toBeNull()
+    for (const mode of GATE_MODES) {
+      expect(readContentMode(new Uint8Array(jcsBytes(buildInfo(mode))))).toBe(mode)
+    }
+    expect(readContentMode(text(''))).toBe('invalid')
+    expect(readContentMode(text('{'))).toBe('invalid')
+    expect(readContentMode(text('{"mode":"staging"}'))).toBe('invalid')
+    expect(readContentMode(jcsBytes({ ...buildInfo('staging'), extra: 1 }))).toBe('invalid')
+    expect(readContentMode(jcsBytes({ ...buildInfo('staging'), mode: 'preview' }))).toBe('invalid')
+  })
+
+  it('is enums and counts only', () => {
+    expect(contentModeLine(null, { pages: 2, withBanner: 0 })).toBe(
+      'content mode: none; staging banner pages: 0 of 2',
+    )
+    expect(contentModeLine('staging', { pages: 6, withBanner: 6 })).toBe(
+      'content mode: staging; staging banner pages: 6 of 6',
+    )
+    expect(contentModeLine('invalid', null)).toBe(
+      'content mode: invalid; staging banner pages: unknown',
+    )
   })
 })
 
