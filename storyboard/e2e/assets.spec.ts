@@ -2,6 +2,8 @@
 // favicon, the icon links, the manifest and its icons, the font licences and every font file
 // return 200 with the right content type and the four security headers. This closes the guard's
 // status-code gap: e2e/fixtures.ts checks origins, not statuses.
+// P1-1c (design p1-step7-design.md §8.3): the font-request test reads the Coming-soon placeholder,
+// so it is tagged @gated (the gate also shows Hindi).
 import type { APIRequestContext, APIResponse } from '@playwright/test'
 import { expect, test } from './fixtures'
 import { fontFamilies, lockedFonts, servedFontFaces, settleFonts, sha256 } from './page-helpers'
@@ -174,32 +176,33 @@ test('every font file is same-origin woff2 with the headers and the locked bytes
   }
 })
 
-test('/ requests one font file (Lora), preloads one, and requests no Devanagari file', async ({
-  page,
-  request,
-}) => {
-  const fontRequests: string[] = []
-  page.on('request', (request) => {
-    const url = new URL(request.url())
-    if (request.resourceType() === 'font' || url.pathname.endsWith('.woff2')) {
-      fontRequests.push(url.pathname)
-    }
-  })
-  await page.goto('/')
-  await settleFonts(page)
-  await page.waitForTimeout(500)
+test(
+  '/ requests one font file (Lora), preloads one, and requests no Devanagari file',
+  { tag: '@gated' },
+  async ({ page, request }) => {
+    const fontRequests: string[] = []
+    page.on('request', (request) => {
+      const url = new URL(request.url())
+      if (request.resourceType() === 'font' || url.pathname.endsWith('.woff2')) {
+        fontRequests.push(url.pathname)
+      }
+    })
+    await page.goto('/')
+    await settleFonts(page)
+    await page.waitForTimeout(500)
 
-  const { lora } = await fontFamilies(page)
-  const loraPaths = (await servedFontFaces(page, request))
-    .filter((face) => face.family === lora)
-    .flatMap((face) => face.urls.map((url) => url.pathname))
-  expect(loraPaths).toHaveLength(1)
+    const { lora } = await fontFamilies(page)
+    const loraPaths = (await servedFontFaces(page, request))
+      .filter((face) => face.family === lora)
+      .flatMap((face) => face.urls.map((url) => url.pathname))
+    expect(loraPaths).toHaveLength(1)
 
-  expect(fontRequests).toEqual(loraPaths)
-  const preloads = page.locator('link[rel="preload"][as="font"]')
-  await expect(preloads).toHaveCount(1)
-  expect(new URL((await preloads.getAttribute('href')) ?? '', page.url()).pathname).toBe(
-    loraPaths[0],
-  )
-  expect(fontRequests.filter((path) => /devanagari/i.test(path))).toEqual([])
-})
+    expect(fontRequests).toEqual(loraPaths)
+    const preloads = page.locator('link[rel="preload"][as="font"]')
+    await expect(preloads).toHaveCount(1)
+    expect(new URL((await preloads.getAttribute('href')) ?? '', page.url()).pathname).toBe(
+      loraPaths[0],
+    )
+    expect(fontRequests.filter((path) => /devanagari/i.test(path))).toEqual([])
+  },
+)

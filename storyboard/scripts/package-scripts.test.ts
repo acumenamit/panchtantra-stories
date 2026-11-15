@@ -38,4 +38,15 @@ describe('package.json scripts', () => {
     expect(targets.map(([name]) => name)).toContain('build')
     expect(targets.filter(([, file]) => !existsSync(join(storyboard, file)))).toEqual([])
   })
+
+  it('ends build with the post-build check, so it also runs inside the Vercel build (P1-1c)', () => {
+    const { scripts } = PackageScripts.parse(
+      JSON.parse(readFileSync(join(storyboard, 'package.json'), 'utf8')),
+    )
+    // design p1-step7-design.md §5.7 item 2, §7 item 3: the loader, then next build, then
+    // check-build, chained with && so a failed check fails the build.
+    expect(scripts.build).toBe(
+      'tsx scripts/load-content.ts && next build && tsx scripts/check-build.ts',
+    )
+  })
 })

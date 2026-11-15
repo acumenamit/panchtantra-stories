@@ -403,6 +403,16 @@ describe('tokens.css text size', () => {
     })
   })
 
+  it('resets under :lang(en) every token :lang(hi) overrides, equal to :root (design §3.9 F3)', () => {
+    const english = Object.fromEntries(declarationsIn('@layer tokens > :lang(en)'))
+    const hindi = Object.fromEntries(declarationsIn('@layer tokens > :lang(hi)'))
+    const root = declarationsIn(ROOT)
+    expect(Object.keys(english).sort()).toEqual(Object.keys(hindi).sort())
+    for (const [name, value] of Object.entries(english)) {
+      expect(value, `${name} under :lang(en) equals :root`).toBe(root.get(name))
+    }
+  })
+
   it('drops every duration token to 0ms under reduced motion', () => {
     const durations = [...declarationsIn(ROOT).keys()].filter(
       (name) => name.startsWith('--duration-') || name === '--reveal-max',

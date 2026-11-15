@@ -1,5 +1,6 @@
 // build-info.json (spec §3.2): what one build loaded and how it fetched it. scripts/load-content.ts
 // writes it to .content/ (read by pages) and public/ (read by the publisher's verify step).
+import '../zod-jitless'
 import { z } from 'zod'
 import { Sha256, StoryId } from '../package/v1'
 import { GATE_MODES } from './gates'

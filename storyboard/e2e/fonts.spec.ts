@@ -3,6 +3,8 @@
 // Devanagari faces by unicode-range, bold Hindi loads the 700 faces, the faces keep the display
 // and unicode-range the build was given, conjuncts are shaped, and (Chromium, through CDP) each
 // script renders in its own face while emoji fall through to a system font.
+// P1-1c (design p1-step7-design.md §8.3): the first test needs every Noto face unloaded on / before
+// injection, true only of the Coming-soon placeholder, so it is tagged @gated.
 import type { Page } from '@playwright/test'
 import { expect, test } from './fixtures'
 import {
@@ -55,59 +57,60 @@ async function statuses(page: Page, family: string): Promise<Record<string, stri
   return Object.fromEntries(faces.map((face) => [face.weight, face.status]))
 }
 
-test('Hindi loads the Devanagari and Latin-subset 400 faces; bold Hindi loads the 700 faces', async ({
-  page,
-  request,
-}) => {
-  const requested: string[] = []
-  page.on('request', (request) => {
-    if (request.resourceType() === 'font') requested.push(new URL(request.url()).pathname)
-  })
-  await page.goto('/')
-  await settleFonts(page)
-  const families = await fontFamilies(page)
-  // The file of each face, from the served CSS: family and weight to path.
-  const faces = await servedFontFaces(page, request)
-  const fileOf = new Map(
-    faces.map((face) => [`${face.family} ${face.rule['font-weight']}`, face.urls[0]?.pathname]),
-  )
-  const loraFiles = faces
-    .filter((face) => face.family === families.lora)
-    .map((face) => face.urls[0]?.pathname)
-  const files = (weight: string) =>
-    [families.devanagari, families.devanagariLatin].map((family) => {
-      const file = fileOf.get(`${family} ${weight}`)
-      if (!file) throw new Error(`no @font-face for ${family} ${weight}`)
-      return file
+test(
+  'Hindi loads the Devanagari and Latin-subset 400 faces; bold Hindi loads the 700 faces',
+  { tag: '@gated' },
+  async ({ page, request }) => {
+    const requested: string[] = []
+    page.on('request', (request) => {
+      if (request.resourceType() === 'font') requested.push(new URL(request.url()).pathname)
     })
-  const notoRequests = () => requested.filter((path) => !loraFiles.includes(path)).sort()
-  expect(notoRequests()).toEqual([])
-  expect(await statuses(page, families.devanagari)).toEqual({ 400: 'unloaded', 700: 'unloaded' })
-  expect(await statuses(page, families.devanagariLatin)).toEqual({
-    400: 'unloaded',
-    700: 'unloaded',
-  })
+    await page.goto('/')
+    await settleFonts(page)
+    const families = await fontFamilies(page)
+    // The file of each face, from the served CSS: family and weight to path.
+    const faces = await servedFontFaces(page, request)
+    const fileOf = new Map(
+      faces.map((face) => [`${face.family} ${face.rule['font-weight']}`, face.urls[0]?.pathname]),
+    )
+    const loraFiles = faces
+      .filter((face) => face.family === families.lora)
+      .map((face) => face.urls[0]?.pathname)
+    const files = (weight: string) =>
+      [families.devanagari, families.devanagariLatin].map((family) => {
+        const file = fileOf.get(`${family} ${weight}`)
+        if (!file) throw new Error(`no @font-face for ${family} ${weight}`)
+        return file
+      })
+    const notoRequests = () => requested.filter((path) => !loraFiles.includes(path)).sort()
+    expect(notoRequests()).toEqual([])
+    expect(await statuses(page, families.devanagari)).toEqual({ 400: 'unloaded', 700: 'unloaded' })
+    expect(await statuses(page, families.devanagariLatin)).toEqual({
+      400: 'unloaded',
+      700: 'unloaded',
+    })
 
-  await inject(page, { id: 'e2e-hi', tag: 'p', lang: 'hi', text: HINDI_SAMPLE })
-  await settleFonts(page)
-  expect(await statuses(page, families.devanagari)).toEqual({ 400: 'loaded', 700: 'unloaded' })
-  expect(await statuses(page, families.devanagariLatin)).toEqual({
-    400: 'loaded',
-    700: 'unloaded',
-  })
-  const regular = `400 20px ${families.devanagari}, ${families.devanagariLatin}`
-  expect(await fontsCheck(page, regular, HINDI_SAMPLE)).toBe(true)
-  expect(notoRequests()).toEqual(files('400').sort())
+    await inject(page, { id: 'e2e-hi', tag: 'p', lang: 'hi', text: HINDI_SAMPLE })
+    await settleFonts(page)
+    expect(await statuses(page, families.devanagari)).toEqual({ 400: 'loaded', 700: 'unloaded' })
+    expect(await statuses(page, families.devanagariLatin)).toEqual({
+      400: 'loaded',
+      700: 'unloaded',
+    })
+    const regular = `400 20px ${families.devanagari}, ${families.devanagariLatin}`
+    expect(await fontsCheck(page, regular, HINDI_SAMPLE)).toBe(true)
+    expect(notoRequests()).toEqual(files('400').sort())
 
-  await inject(page, { id: 'e2e-hi-bold', tag: 'h2', lang: 'hi', text: HINDI_SAMPLE })
-  await settleFonts(page)
-  expect(await statuses(page, families.devanagari)).toEqual({ 400: 'loaded', 700: 'loaded' })
-  expect(await statuses(page, families.devanagariLatin)).toEqual({ 400: 'loaded', 700: 'loaded' })
-  const bold = `700 20px ${families.devanagari}, ${families.devanagariLatin}`
-  expect(await fontsCheck(page, bold, HINDI_SAMPLE)).toBe(true)
+    await inject(page, { id: 'e2e-hi-bold', tag: 'h2', lang: 'hi', text: HINDI_SAMPLE })
+    await settleFonts(page)
+    expect(await statuses(page, families.devanagari)).toEqual({ 400: 'loaded', 700: 'loaded' })
+    expect(await statuses(page, families.devanagariLatin)).toEqual({ 400: 'loaded', 700: 'loaded' })
+    const bold = `700 20px ${families.devanagari}, ${families.devanagariLatin}`
+    expect(await fontsCheck(page, bold, HINDI_SAMPLE)).toBe(true)
 
-  expect(notoRequests()).toEqual([...files('400'), ...files('700')].sort())
-})
+    expect(notoRequests()).toEqual([...files('400'), ...files('700')].sort())
+  },
+)
 
 test('the faces keep their font-display and unicode-range', async ({ page, request }) => {
   await page.goto('/')

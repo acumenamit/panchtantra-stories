@@ -1,9 +1,15 @@
 import { defineConfig, devices } from '@playwright/test'
+import { launchLeg, skippedTag } from './e2e/launch-leg'
 
 const PORT = 3005
 
+// P1-1c (design p1-step7-design.md §7 item 39): E2E_LAUNCH picks the leg, 'gated' by default or
+// 'review'; anything else throws here, before any test runs.
+const LEG = launchLeg(process.env.E2E_LAUNCH)
+
 export default defineConfig({
   testDir: './e2e',
+  grepInvert: skippedTag(LEG),
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

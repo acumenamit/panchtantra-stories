@@ -5,6 +5,80 @@ import nextTs from 'eslint-config-next/typescript'
 // A hex colour or a colour function in a JSX style string (the JSX style rules below, P1-1b).
 const JSX_COLOR_LITERAL = String.raw`/#[0-9a-fA-F]{3,8}\b|\b(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\(/`
 
+// The reader fence's import patterns (spec §10.2; P1-1a, P1-1b; P1-1c design
+// p1-step7-design.md §8.2). A later flat-config block that sets no-restricted-imports replaces
+// these options for the files it matches, so the two exception blocks below rebuild the list from
+// these constants and leave out only what they allow.
+const SUPABASE = {
+  group: ['@supabase/*'],
+  message: 'Reader code must not import Supabase clients.',
+}
+const SCRIPTS = {
+  group: ['**/scripts', '**/scripts/**'],
+  message: 'Reader code must not import scripts/.',
+}
+const TOOLS = { group: ['**/tools', '**/tools/**'], message: 'Reader code must not import tools/.' }
+const NETWORK_AT_BUILD = {
+  group: ['next/font/google', 'next/og'],
+  message: 'fetches from the network at build',
+}
+// P1-1c: reader pages are static (spec §3.2), so no request-time APIs. Step 20's route handlers
+// (app/api/**) are request-time by design and keep next/headers and next/server.
+const STATIC_ONLY = 'Reader pages are static: no request-time APIs (spec §3.2; P1-1c).'
+const REQUEST_TIME = { group: ['next/headers', 'next/server'], message: STATIC_ONLY }
+const ROOT_PARAMS = { group: ['next/root-params'], message: STATIC_ONLY }
+// P1-1c (P1 D8): no next-intl; its navigation writes a NEXT_LOCALE cookie (spec §9: no cookies).
+const NEXT_INTL = {
+  group: ['next-intl', 'next-intl/*'],
+  message: 'No next-intl: it writes a locale cookie (P1 D8; spec §9).',
+}
+// P1-1c (P1 D8): only src/ui/i18n/messages.ts (server-only) imports the catalogues; tests read the
+// files with readFileSync.
+const MESSAGES_JSON = {
+  group: ['**/messages/*.json'],
+  message: 'Only src/ui/i18n/messages.ts imports messages/*.json (server-only; P1 D8).',
+}
+const READER_FENCE = [
+  SUPABASE,
+  SCRIPTS,
+  TOOLS,
+  NETWORK_AT_BUILD,
+  REQUEST_TIME,
+  ROOT_PARAMS,
+  NEXT_INTL,
+  MESSAGES_JSON,
+]
+const without = (excluded) => READER_FENCE.filter((pattern) => pattern !== excluded)
+
+// P1-1c (design §8.2): reader code never reads process.env (the launch flag is read in
+// src/config/launch.ts), sets no cookie, and touches Web Storage only through
+// src/reader/progress/device-storage.ts. Test files use fakes and are not fenced.
+const NO_ENV = {
+  object: 'process',
+  property: 'env',
+  message:
+    'Reader code does not read process.env; the launch flag is read in src/config/launch.ts.',
+}
+const NO_COOKIE = {
+  object: 'document',
+  property: 'cookie',
+  message: 'The site sets no cookies (spec §9).',
+}
+const STORAGE_ONLY_IN_DEVICE_STORAGE =
+  'Web Storage is used only by src/reader/progress/device-storage.ts (spec §6.3).'
+const NO_WINDOW_STORAGE = ['localStorage', 'sessionStorage'].map((property) => ({
+  object: 'window',
+  property,
+  message: STORAGE_ONLY_IN_DEVICE_STORAGE,
+}))
+const NO_COOKIE_STORE = { name: 'cookieStore', message: 'The site sets no cookies (spec §9).' }
+const NO_STORAGE_GLOBALS = ['localStorage', 'sessionStorage'].map((name) => ({
+  name,
+  message: STORAGE_ONLY_IN_DEVICE_STORAGE,
+}))
+const READER_FILES = ['src/reader/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'src/ui/**/*.{ts,tsx}']
+const TEST_FILES = ['**/*.test.ts']
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -36,25 +110,51 @@ const eslintConfig = defineConfig([
     // The app/ routes are reader code too, so the same fence covers them (P1-1a).
     // src/ui (tokens, fonts, manifest) is reader code as well, and next/font/google and next/og
     // are banned in all of it: both fetch from the network at build (P1-1b, owner D5/D7).
-    files: ['src/reader/**/*.{ts,tsx}', 'app/**/*.{ts,tsx}', 'src/ui/**/*.{ts,tsx}'],
+    // P1-1c adds next/headers, next/server, next/root-params, next-intl and messages/*.json.
+    files: READER_FILES,
     rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            { group: ['@supabase/*'], message: 'Reader code must not import Supabase clients.' },
-            {
-              group: ['**/scripts', '**/scripts/**'],
-              message: 'Reader code must not import scripts/.',
-            },
-            { group: ['**/tools', '**/tools/**'], message: 'Reader code must not import tools/.' },
-            {
-              group: ['next/font/google', 'next/og'],
-              message: 'fetches from the network at build',
-            },
-          ],
-        },
-      ],
+      'no-restricted-imports': ['error', { patterns: READER_FENCE }],
+    },
+  },
+  {
+    // P1-1c: the one importer of the message catalogues; every other fence pattern still applies.
+    files: ['src/ui/i18n/messages.ts'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: without(MESSAGES_JSON) }],
+    },
+  },
+  {
+    // P1-1c: Step 20's route handlers are request-time by design (spec §3.4), so next/headers and
+    // next/server are allowed there; every other fence pattern still applies. Step 20 decides this
+    // fence finally; no app/api file exists yet.
+    files: ['app/api/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: without(REQUEST_TIME) }],
+    },
+  },
+  {
+    // P1-1c (design §8.2): no process.env, no cookie and no direct Web Storage in reader code.
+    files: READER_FILES,
+    ignores: TEST_FILES,
+    rules: {
+      'no-restricted-properties': ['error', NO_ENV, NO_COOKIE, ...NO_WINDOW_STORAGE],
+      'no-restricted-globals': ['error', NO_COOKIE_STORE, ...NO_STORAGE_GLOBALS],
+    },
+  },
+  {
+    // The device storage is the only Web Storage user (spec §6.3); env and cookies stay banned.
+    files: ['src/reader/progress/device-storage.ts'],
+    rules: {
+      'no-restricted-properties': ['error', NO_ENV, NO_COOKIE],
+      'no-restricted-globals': ['error', NO_COOKIE_STORE],
+    },
+  },
+  {
+    // Step 20's route handlers read server env (spec §3.5); cookies and Web Storage stay banned.
+    files: ['app/api/**/*.{ts,tsx}'],
+    ignores: TEST_FILES,
+    rules: {
+      'no-restricted-properties': ['error', NO_COOKIE, ...NO_WINDOW_STORAGE],
     },
   },
   {

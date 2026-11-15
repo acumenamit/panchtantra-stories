@@ -1,0 +1,142 @@
+/*
+ * The reader shell (spec §6.1 header, §6.6; design p1-step7-design.md §3.9 F3, §3.11 B1, §7 items
+ * 25-33; P1-1c): skip link, header, main and the storage banner. Token names only (colour and time
+ * literals live in tokens.css); logical properties only (RC-12). F3: every element whose lang
+ * differs from <html> (the brand on /hi, the switch's endonym) sets font-size and line-height from
+ * tokens on itself, so the [lang] re-declaration and the :lang() leading reach it.
+ */
+
+/* Skip link: visually hidden until focused, then top start, amber, at least --target-min tall. */
+.skipLink {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-control);
+  background-color: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-label);
+}
+
+.skipLink:not(:focus) {
+  inline-size: 1px;
+  block-size: 1px;
+  min-block-size: 0;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  max-inline-size: var(--page-max);
+  margin-inline: auto;
+  padding-block: var(--space-3);
+  padding-inline: var(--gutter);
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Every header link: a bordered pill at least --target-min tall (every control keeps a border). */
+.link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-text);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-label);
+  text-decoration-line: none;
+}
+
+.link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.link[aria-current='page'] {
+  background-color: var(--color-surface-selected);
+}
+
+/* The brand: Latin, lang="en" (an island on /hi). */
+.brand {
+  color: var(--color-text-strong);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-label);
+}
+
+/* A fixed width in em, so a late Devanagari swap cannot move the Grown-ups link. */
+.switch {
+  min-inline-size: 7em;
+}
+
+/* The other language's endonym: an island on every page. Regular weight (no Devanagari 700). */
+.switchName {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-label);
+}
+
+/*
+ * Optical centring of a Hindi label in a pill (P1-1c). In its line box, Noto Sans Devanagari's ink
+ * sits 0.11-0.13em above the centre (hhea 896/-408) and Lora's about 0.13em below (1006/-274), so a
+ * Hindi label looks high next to a Latin one. A relative offset moves only the paint, not the
+ * layout. Whether every Hindi control gets font-level metric overrides instead is for Step 10
+ * (choice buttons).
+ */
+.switchName:lang(hi),
+.label:lang(hi) {
+  position: relative;
+  inset-block-start: 0.12em;
+}
+
+/* Not a control and not in the Tab order: no ring and no halo after a skip-link jump. */
+.main:focus,
+.main:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* The storage-blocked banner: calm, first in main; no red, no icon, no dismiss. */
+.banner {
+  margin-block: 0 var(--space-5);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.bannerTitle {
+  margin-block: 0 var(--space-2);
+  font-weight: var(--fw-bold);
+}
+
+.bannerBody {
+  margin-block: 0;
+}

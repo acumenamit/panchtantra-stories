@@ -137,6 +137,192 @@ describe('reader fence additions', () => {
   })
 })
 
+// P1-1c (design p1-step7-design.md §8.2): one seeded violation per new fence pattern and rule.
+const STATIC_ONLY = 'Reader pages are static: no request-time APIs'
+const NO_NEXT_INTL = 'No next-intl'
+const ONLY_MESSAGES_TS = 'Only src/ui/i18n/messages.ts imports messages/*.json'
+const NO_ENV = 'Reader code does not read process.env'
+const NO_COOKIES = 'The site sets no cookies'
+const STORAGE_ONLY = 'Web Storage is used only by src/reader/progress/device-storage.ts'
+
+/** The messages (all errors) of one rule for a sample file. */
+async function ruleErrors(file: string, code: string, ruleId: string): Promise<string[]> {
+  const messages = (await lint(file, code)).filter((m) => m.ruleId === ruleId)
+  expect(messages.every((m) => m.severity === 2)).toBe(true)
+  return messages.map((m) => m.message)
+}
+
+const READER_SAMPLES = ['app/lint-sample.ts', 'src/ui/lint-sample.ts', 'src/reader/lint-sample.ts']
+
+/** One import line per new reader-fence pattern, with the message it must raise. */
+const NEW_FENCE_IMPORTS: readonly (readonly [string, string])[] = [
+  ["import 'next/headers'", STATIC_ONLY],
+  ["import 'next/server'", STATIC_ONLY],
+  ["import 'next/root-params'", STATIC_ONLY],
+  ["import 'next-intl'", NO_NEXT_INTL],
+  ["import 'next-intl/navigation'", NO_NEXT_INTL],
+  ["import en from '../../messages/en.json'\nvoid en", ONLY_MESSAGES_TS],
+  ["import hi from '@/../messages/hi.json'\nvoid hi", ONLY_MESSAGES_TS],
+]
+
+/** Every older reader-fence pattern, which the two exception blocks must keep. */
+const OLD_FENCE_IMPORTS: readonly (readonly [string, string])[] = [
+  ["import '@supabase/supabase-js'", 'Reader code must not import Supabase clients.'],
+  ["import '../../scripts/load-content'", 'Reader code must not import scripts/.'],
+  ["import '../../tools/publisher/cli'", 'Reader code must not import tools/.'],
+  ["import 'next/font/google'", NETWORK],
+  ["import 'next/og'", NETWORK],
+]
+
+describe('reader fence: P1-1c imports (design §8.2)', () => {
+  it.each(READER_SAMPLES.flatMap((file) => NEW_FENCE_IMPORTS.map(([line, m]) => [file, line, m])))(
+    '%s: %s is an error',
+    async (file, line, message) => {
+      expect(await importErrors(file, line)).toEqual([expect.stringContaining(message)])
+    },
+  )
+
+  it('fences the catalogues in tests too (they read the files with readFileSync)', async () => {
+    expect(
+      await importErrors(
+        'src/ui/i18n/lint-sample.test.ts',
+        "import en from '../../../messages/en.json'",
+      ),
+    ).toEqual([expect.stringContaining(ONLY_MESSAGES_TS)])
+  })
+
+  it('src/ui/i18n/messages.ts may import the catalogues', async () => {
+    const code = [
+      "import en from '../../../messages/en.json'",
+      "import hi from '../../../messages/hi.json'",
+      'void en',
+      'void hi',
+    ].join('\n')
+    expect(await importErrors('src/ui/i18n/messages.ts', code)).toEqual([])
+  })
+
+  it.each([
+    ...OLD_FENCE_IMPORTS,
+    ...NEW_FENCE_IMPORTS.filter(([, message]) => message !== ONLY_MESSAGES_TS),
+  ])('src/ui/i18n/messages.ts keeps every other pattern: %s', async (line, message) => {
+    expect(await importErrors('src/ui/i18n/messages.ts', line)).toEqual([
+      expect.stringContaining(message),
+    ])
+  })
+
+  it.each(["import 'next/headers'", "import 'next/server'"])(
+    'app/api/** may use request-time APIs (Step 20): %s',
+    async (line) => {
+      expect(await importErrors('app/api/report/route.ts', line)).toEqual([])
+    },
+  )
+
+  it.each([
+    ...OLD_FENCE_IMPORTS,
+    ...NEW_FENCE_IMPORTS.filter(([line]) => !/next\/(headers|server)'/.test(line)),
+  ])('app/api/** keeps every other pattern: %s', async (line, message) => {
+    expect(await importErrors('app/api/report/route.ts', line)).toEqual([
+      expect.stringContaining(message),
+    ])
+  })
+})
+
+describe('reader fence: env, cookies and Web Storage (design §8.2)', () => {
+  const PROPERTIES = 'no-restricted-properties'
+  const GLOBALS = 'no-restricted-globals'
+  const PROPERTY_SAMPLES: readonly (readonly [string, string])[] = [
+    ['export const flag = process.env.FLAG', NO_ENV],
+    ['const { env } = process\nexport const flag = env.FLAG', NO_ENV],
+    ["document.cookie = 'a=b'", NO_COOKIES],
+    ["export const v = window.localStorage.getItem('k')", STORAGE_ONLY],
+    ["export const v = window.sessionStorage.getItem('k')", STORAGE_ONLY],
+  ]
+  const GLOBAL_SAMPLES: readonly (readonly [string, string])[] = [
+    ["export const v = localStorage.getItem('k')", STORAGE_ONLY],
+    ["export const v = sessionStorage.getItem('k')", STORAGE_ONLY],
+    ["export const v = cookieStore.get('k')", NO_COOKIES],
+  ]
+
+  it.each(
+    READER_SAMPLES.flatMap((file) =>
+      PROPERTY_SAMPLES.map(([code, message]) => [file, code, message] as const),
+    ),
+  )('%s: no-restricted-properties rejects %s', async (file, code, message) => {
+    expect(await ruleErrors(file, code, PROPERTIES)).toEqual([expect.stringContaining(message)])
+  })
+
+  it.each(
+    READER_SAMPLES.flatMap((file) =>
+      GLOBAL_SAMPLES.map(([code, message]) => [file, code, message] as const),
+    ),
+  )('%s: no-restricted-globals rejects %s', async (file, code, message) => {
+    expect(await ruleErrors(file, code, GLOBALS)).toEqual([expect.stringContaining(message)])
+  })
+
+  it('cover .tsx files too', async () => {
+    const code = 'export function C() {\n  return <p>{process.env.X}</p>\n}\n'
+    expect(await ruleErrors('src/ui/lint-sample.tsx', code, PROPERTIES)).toEqual([
+      expect.stringContaining(NO_ENV),
+    ])
+  })
+
+  it('src/reader/progress/device-storage.ts may use Web Storage, but not env or cookies', async () => {
+    const file = 'src/reader/progress/device-storage.ts'
+    const storage = [
+      "export const a = window.localStorage.getItem('k')",
+      "export const b = window.sessionStorage.getItem('k')",
+      "export const c = localStorage.getItem('k')",
+      "export const d = sessionStorage.getItem('k')",
+    ].join('\n')
+    expect(await ruleErrors(file, storage, PROPERTIES)).toEqual([])
+    expect(await ruleErrors(file, storage, GLOBALS)).toEqual([])
+    expect(await ruleErrors(file, 'export const f = process.env.F', PROPERTIES)).toEqual([
+      expect.stringContaining(NO_ENV),
+    ])
+    expect(await ruleErrors(file, "document.cookie = 'a=b'", PROPERTIES)).toEqual([
+      expect.stringContaining(NO_COOKIES),
+    ])
+    expect(await ruleErrors(file, "export const v = cookieStore.get('k')", GLOBALS)).toEqual([
+      expect.stringContaining(NO_COOKIES),
+    ])
+  })
+
+  it('app/api/** may read process.env (Step 20), but not cookies or Web Storage', async () => {
+    const file = 'app/api/report/route.ts'
+    expect(await ruleErrors(file, 'export const url = process.env.READER_DB', PROPERTIES)).toEqual(
+      [],
+    )
+    expect(await ruleErrors(file, "document.cookie = 'a=b'", PROPERTIES)).toEqual([
+      expect.stringContaining(NO_COOKIES),
+    ])
+    expect(
+      await ruleErrors(file, "export const v = window.localStorage.getItem('k')", PROPERTIES),
+    ).toEqual([expect.stringContaining(STORAGE_ONLY)])
+    expect(await ruleErrors(file, "export const v = localStorage.getItem('k')", GLOBALS)).toEqual([
+      expect.stringContaining(STORAGE_ONLY),
+    ])
+  })
+
+  it('leave test files alone (they use fakes)', async () => {
+    const code = [
+      'export const a = process.env.A',
+      "document.cookie = 'a=b'",
+      "export const b = window.localStorage.getItem('k')",
+      "export const c = localStorage.getItem('k')",
+      "export const d = cookieStore.get('k')",
+    ].join('\n')
+    for (const file of ['src/ui/lint-sample.test.ts', 'src/reader/lint-sample.test.ts']) {
+      expect(await ruleErrors(file, code, PROPERTIES)).toEqual([])
+      expect(await ruleErrors(file, code, GLOBALS)).toEqual([])
+    }
+  })
+
+  it('do not reach code outside the reader (src/config reads the launch flag)', async () => {
+    const code = 'export const flag = process.env.FLAG'
+    expect(await ruleErrors('src/config/lint-sample.ts', code, PROPERTIES)).toEqual([])
+  })
+})
+
 describe('eslint-config-next is still applied', () => {
   it('fires a typescript-eslint rule on a .ts sample', async () => {
     const messages = await lint('src/reader/lint-sample.ts', 'export const value: any = 1\n')

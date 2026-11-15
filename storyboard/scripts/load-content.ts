@@ -98,9 +98,10 @@ export function resolveConfig(
   }
   if (source === 'none') return ok({ kind: 'skip', why: 'CONTENT_SOURCE=none' })
   if (source === 'fixtures') {
-    // Fixtures skip the approval gate, so they never build on Vercel. Vercel always sets VERCEL=1;
-    // VERCEL_ENV arrives only while system variables are exposed. Either one, any value (even empty),
-    // refuses fixtures (owner, 2026-11-14).
+    // Fixtures skip the approval gate, so they never build on Vercel. Vercel sets VERCEL=1 and
+    // VERCEL_ENV only while system variables are exposed; with that option off a Vercel build looks
+    // like a local one here (revisited at Step 8; P1-1c design §11 R4). Either one, any value (even
+    // empty), refuses fixtures (owner, 2026-11-14).
     if (env.VERCEL !== undefined || env.VERCEL_ENV !== undefined) {
       return fail(
         'CONTENT_SOURCE=fixtures is refused when VERCEL or VERCEL_ENV is set (CI and local only)',

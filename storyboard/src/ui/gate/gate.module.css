@@ -1,0 +1,77 @@
+/*
+ * The language gate (spec §6.1 language gate, §6.6 targets; design p1-step7-design.md §3.9 F3,
+ * §3.12 #7-#11, §7 items 18-20; P1-1c). Token names only; logical properties only (RC-12).
+ * - Options: large links styled as buttons, at least --target-gate tall (about 2 cm), --space-5
+ *   apart, full width up to --measure-body; stacked below 30rem, two columns from 30rem.
+ * - Endonyms at --fs-display, weight 400, so the gate never downloads the Devanagari 700 file.
+ * - F3: every element whose lang differs from <html> (the Hindi prompt, option and remember line)
+ *   sets font-size and line-height from tokens on itself; so do the option's children.
+ */
+
+.prompt {
+  margin-block: 0 var(--space-2);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+.options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-5);
+  max-inline-size: var(--measure-body);
+  margin-block: var(--space-5) var(--space-6);
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 30rem) {
+  .options {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-block-size: var(--target-gate);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-card);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: var(--fs-display);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-heading);
+  text-decoration-line: none;
+}
+
+.option:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/* The decorative script letter (aria-hidden): A for Latin, अ for Devanagari. */
+.mark {
+  color: var(--color-text-secondary);
+  font-size: var(--fs-title);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-heading);
+}
+
+.endonym {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-heading);
+}
+
+.remember {
+  max-inline-size: var(--measure-body);
+  margin-block: 0 var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--fs-small);
+  line-height: var(--lh-body);
+}

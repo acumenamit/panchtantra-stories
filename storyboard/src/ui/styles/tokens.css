@@ -105,6 +105,8 @@
     /* Targets (spec §6.6: at least 44 px; choices at least 56 px tall and 8 px apart) */
     --target-min: max(44px, 2.75rem);
     --target-choice: max(56px, 3.5rem);
+    /* The language gate's options: about 2 cm for young children (P1-1c, design §3.12 #8) */
+    --target-gate: max(120px, 7.5rem);
     --gap-choice: max(8px, 1rem);
     --gap-target: max(8px, 0.5rem);
 
@@ -138,9 +140,9 @@
    * Re-declared on every [lang] element, so a lang="hi" container can tune --script-scale for the
    * elements inside it that set font-size from these tokens. Text that only inherits does not
    * follow: base.css sets font-size on body and line-height on html, and children inherit those
-   * computed values. So the Hindi tokens below reach plain text only on a page whose <html> is
-   * lang="hi" (Step 7); a lang island on an English page must set font-size and line-height from
-   * tokens on itself (open for the Step 7 review).
+   * computed values. So the language tokens below reach plain text only on a page whose <html>
+   * has that lang; a lang island (an element whose lang differs from the page) sets font-size and
+   * line-height from tokens on itself (P1-1c, design §3.9 F3).
    */
   :root,
   [lang] {
@@ -160,6 +162,19 @@
     --lh-body: 1.75;
     --lh-label: 1.5;
     --lh-heading: 1.45;
+  }
+
+  /*
+   * English repeats the :root values, so an English island on a Hindi page (the brand and the
+   * language switch on /hi) gets the English leading instead of inheriting the Hindi values
+   * through the custom properties (P1-1c, design §3.9 F3). tokens.test.ts keeps it equal to :root.
+   */
+  :lang(en) {
+    --script-scale: 1;
+    --lh-story: 1.9;
+    --lh-body: 1.6;
+    --lh-label: 1.3;
+    --lh-heading: 1.25;
   }
 
   @media (min-width: 48rem) {

@@ -1,0 +1,46 @@
+/*
+ * The bilingual 404 body (spec §6.1 not found; design p1-step7-design.md §3.9 F3, §4.3, §7 item 13;
+ * P1-1c). Token names only; logical properties only (RC-12). F3: every lang="hi" part sets
+ * font-size and line-height from tokens on itself, so the Hindi leading reaches it.
+ */
+
+/* The Hindi heading, on its own line inside the h1. */
+.titleHi {
+  display: block;
+  font-size: var(--fs-title);
+  line-height: var(--lh-heading);
+}
+
+.bodyHi {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+/* One link to "/", styled as a button at least --target-choice tall. */
+.link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-block-size: var(--target-choice);
+  margin-block-start: var(--space-4);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-5);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: var(--fs-choice);
+  line-height: var(--lh-label);
+  text-decoration-line: none;
+}
+
+.link:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.linkHi {
+  font-size: var(--fs-choice);
+  line-height: var(--lh-label);
+}

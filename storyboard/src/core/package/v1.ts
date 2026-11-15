@@ -1,6 +1,7 @@
 // Story Package v1 (spec §4.2). Field names follow Rules v3 §4 (OD-14).
 // Zod checks shape and format ceilings only; editorial limits live in the rule set (§5, P0-6).
 // Two modes: "strict" rejects unknown keys (authoring, publish); "read" strips them (reader).
+import '../zod-jitless'
 import { z } from 'zod'
 import { LOCALE_CODES } from '../locales'
 

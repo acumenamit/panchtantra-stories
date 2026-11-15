@@ -3,6 +3,8 @@
 // project's viewport and at 320 px wide, it saves / and / with the injected specimen (swatches,
 // an English and a Hindi fixture passage with a question and two choices, a focused primary
 // button) to storyboard/migration-input/step6-look/ (git-ignored). No baselines are compared.
+// P1-1c (design p1-step7-design.md §8.3): tagged @gated, it shoots the Coming-soon placeholder
+// (screens.spec.ts takes the Step 7 screens).
 import path from 'node:path'
 import { TEXT_SCALES } from '../src/core/progress/records'
 import { expect, test } from './fixtures'
@@ -13,7 +15,7 @@ const OUTPUT_DIR = path.resolve(__dirname, '../migration-input/step6-look')
 test.skip(process.env['SPECIMEN'] !== '1', 'owner screenshots: run with SPECIMEN=1')
 
 for (const scale of TEXT_SCALES) {
-  test(`screenshots at ${scale}%`, async ({ page, browserName }, testInfo) => {
+  test(`screenshots at ${scale}%`, { tag: '@gated' }, async ({ page, browserName }, testInfo) => {
     const project = testInfo.project.name
     const viewport = page.viewportSize()
     if (!viewport) throw new Error('the project sets no viewport')

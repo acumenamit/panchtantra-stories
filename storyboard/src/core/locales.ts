@@ -57,6 +57,11 @@ export function isEnabledLocale(code: string): boolean {
   return LOCALES.some((l) => l.code === code && l.status === 'enabled')
 }
 
+/** The code when it is an enabled locale, else undefined: a narrowing parse (P1-1c route params). */
+export function parseEnabledLocale(value: string): LocaleCode | undefined {
+  return isLocaleCode(value) && isEnabledLocale(value) ? value : undefined
+}
+
 export const ENABLED_LOCALE_CODES: readonly LocaleCode[] = LOCALES.filter(
   (l) => l.status === 'enabled',
 ).map((l) => l.code)

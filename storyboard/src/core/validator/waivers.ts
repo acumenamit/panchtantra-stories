@@ -1,5 +1,6 @@
 // Legacy waivers (spec §5.4, REQ:64): for origin = "migration" only. A waiver matches on
 // (storyId, checkId, nodeId, locale, nodeTextSha256); if the node changes, the waiver lapses.
+import '../zod-jitless'
 import { z } from 'zod'
 import { jcsSha256 } from '../hashing'
 import { Locale, NodeId, Sha256, StoryId } from '../package/v1'

@@ -9,6 +9,7 @@
 //   'newer-schema': the caller leaves the bytes untouched and keeps that record in memory for the
 //   page visit. Any other schema value is damage and resets.
 // - No timestamps, names, free text or identifiers: `order` is a per-device counter, not a time.
+import '../zod-jitless'
 import { z } from 'zod'
 import type { LocaleCode } from '../locales'
 import { Locale, NodeId, StoryId, hasOwnProtoKey } from '../package/v1'

@@ -7,6 +7,8 @@ import {
   getLocaleDef,
   isEnabledLocale,
   isLocaleCode,
+  parseEnabledLocale,
+  type LocaleCode,
 } from './locales'
 
 describe('locale registry', () => {
@@ -67,6 +69,38 @@ describe('locale registry', () => {
         (s) => !isLocaleCode(s) && !isEnabledLocale(s),
       ),
       { seed: 20261021 },
+    )
+  })
+})
+
+describe('parseEnabledLocale (P1-1c)', () => {
+  it.each([
+    ['en', 'en'],
+    ['hi', 'hi'],
+    ['ar', undefined],
+    ['EN', undefined],
+    ['Hi', undefined],
+    ['', undefined],
+    ['xx', undefined],
+    [' en', undefined],
+    ['en-IN', undefined],
+    ['__proto__', undefined],
+  ])('parses %j as %j', (value, expected) => {
+    const parsed: LocaleCode | undefined = parseEnabledLocale(value)
+    expect(parsed).toBe(expected)
+  })
+
+  it('returns a value only for the enabled registry codes', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(fc.constantFrom(...LOCALE_CODES, 'EN', 'Ar'), fc.string({ maxLength: 6 })),
+        (value) => {
+          const parsed = parseEnabledLocale(value)
+          expect(parsed).toBe(ENABLED_LOCALE_CODES.find((code) => code === value))
+          expect(parsed === undefined || isEnabledLocale(parsed)).toBe(true)
+        },
+      ),
+      { seed: 20261114 },
     )
   })
 })

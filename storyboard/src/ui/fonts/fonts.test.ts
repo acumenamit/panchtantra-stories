@@ -206,6 +206,11 @@ const DEVANAGARI_BLOCKS: readonly Range[] = [
 
 const UI_SAMPLE = ['हिन्दी', 'पञ्चतन्त्र सिखाता है:', '०१२३४५६७८९', '०-९', '।']
 
+/** The Hindi UI messages (P1-1c, design p1-step7-design.md §6.3, §8.1 item 4), read as text. */
+const MESSAGES_HI = Object.values(
+  JSON.parse(readFileSync(join(storyboard, 'messages/hi.json'), 'utf8')) as Record<string, unknown>,
+).map(String)
+
 const isEmojiPart = (cp: number): boolean =>
   /\p{Extended_Pictographic}/u.test(String.fromCodePoint(cp)) ||
   cp === 0xfe0e ||
@@ -361,6 +366,32 @@ describe('glyph coverage', () => {
         (cp) => !KNOWN_UNCOVERED_LEGACY.includes(cp) && !font.hasGlyphForCodePoint(cp),
       )
       expect(missing.map(hex), file).toEqual([])
+    }
+  })
+
+  it('covers every messages/hi.json value with the shipped Devanagari and Latin-subset faces', () => {
+    const devanagariRanges = rangesOf('devanagari')
+    const latinRanges = rangesOf('devanagariLatin')
+    expect(MESSAGES_HI).toHaveLength(16)
+    const codePoints = [...codePointsOf(MESSAGES_HI)]
+    // Inside a unicode-range, so the browser downloads the face that has the glyph.
+    expect(
+      codePoints.filter((cp) => !inRanges(devanagariRanges, cp) && !inRanges(latinRanges, cp)),
+    ).toEqual([])
+    // --font-hindi lists the Devanagari face first; the Latin subset takes everything else.
+    const devanagariFonts = filesOf('devanagari').map((file) => ({ file, font: openFont(file) }))
+    const latinFonts = filesOf('devanagariLatin').map((file) => ({ file, font: openFont(file) }))
+    const viaDevanagari = codePoints.filter((cp) => inRanges(devanagariRanges, cp))
+    const viaLatin = codePoints.filter((cp) => !inRanges(devanagariRanges, cp))
+    expect(viaDevanagari.length).toBeGreaterThan(40)
+    expect(viaLatin).toEqual(expect.arrayContaining([0x20, 0x28, 0x29, 0x2c, 0x3a]))
+    for (const { file, font } of devanagariFonts) {
+      expect(viaDevanagari.filter((cp) => !font.hasGlyphForCodePoint(cp)).map(hex), file).toEqual(
+        [],
+      )
+    }
+    for (const { file, font } of latinFonts) {
+      expect(viaLatin.filter((cp) => !font.hasGlyphForCodePoint(cp)).map(hex), file).toEqual([])
     }
   })
 })

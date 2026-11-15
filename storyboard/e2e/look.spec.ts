@@ -2,6 +2,8 @@
 // and 5): text, colours, the Lora face, head metas, the boot script in the server HTML, both
 // text-size-adjust forms in the served CSS, reduced motion, the focus ring, forced colours (Chromium)
 // and the layout shift of a late Lora file (Chromium).
+// P1-1c (design p1-step7-design.md §8.3): the two tests that read the Coming-soon placeholder are
+// tagged @gated; the others are page-agnostic and run on both legs.
 import type { Page } from '@playwright/test'
 import { TEXT_SCALE_BOOT_SCRIPT } from '../src/core/progress/text-scale-boot'
 import { expect, test } from './fixtures'
@@ -61,30 +63,34 @@ async function ringOf(page: Page, selector: string) {
   })
 }
 
-test('the placeholder keeps its text and takes the Lantern Night colours', async ({ page }) => {
-  await page.goto('/')
-  const h1 = page.getByRole('heading', { level: 1 })
-  await expect(h1).toHaveText('Storyboard')
-  await expect(page.locator('main p')).toHaveText('Coming soon.')
-  expect(await page.locator('main p').evaluate((p) => p.textContent)).toBe('Coming soon.')
+test(
+  'the placeholder keeps its text and takes the Lantern Night colours',
+  { tag: '@gated' },
+  async ({ page }) => {
+    await page.goto('/')
+    const h1 = page.getByRole('heading', { level: 1 })
+    await expect(h1).toHaveText('Storyboard')
+    await expect(page.locator('main p')).toHaveText('Coming soon.')
+    expect(await page.locator('main p').evaluate((p) => p.textContent)).toBe('Coming soon.')
 
-  const colours = await page.evaluate(() => ({
-    html: getComputedStyle(document.documentElement).backgroundColor,
-    h1: getComputedStyle(document.querySelector('h1') as Element).color,
-    p: getComputedStyle(document.querySelector('main p') as Element).color,
-  }))
-  expect(colours).toEqual({ html: CANVAS, h1: 'rgb(254, 243, 199)', p: 'rgb(240, 230, 208)' })
+    const colours = await page.evaluate(() => ({
+      html: getComputedStyle(document.documentElement).backgroundColor,
+      h1: getComputedStyle(document.querySelector('h1') as Element).color,
+      p: getComputedStyle(document.querySelector('main p') as Element).color,
+    }))
+    expect(colours).toEqual({ html: CANVAS, h1: 'rgb(254, 243, 199)', p: 'rgb(240, 230, 208)' })
 
-  // Weight synthesis only (a single-weight fallback face still draws bold); never a fake italic.
-  const synthesis = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement)
-    return {
-      weight: style.getPropertyValue('font-synthesis-weight'),
-      style: style.getPropertyValue('font-synthesis-style'),
-    }
-  })
-  expect(synthesis).toEqual({ weight: 'auto', style: 'none' })
-})
+    // Weight synthesis only (a single-weight fallback face still draws bold); never a fake italic.
+    const synthesis = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement)
+      return {
+        weight: style.getPropertyValue('font-synthesis-weight'),
+        style: style.getPropertyValue('font-synthesis-style'),
+      }
+    })
+    expect(synthesis).toEqual({ weight: 'auto', style: 'none' })
+  },
+)
 
 test('the h1 is set in the self-hosted Lora face, and it has loaded', async ({ page, request }) => {
   await page.goto('/')
@@ -279,62 +285,64 @@ test('forced colours replace the amber ring (Chromium)', async ({ page, request,
   }
 })
 
-test('a Lora file delayed 1.5 s keeps the layout shift under 0.1 (Chromium)', async ({
-  page,
-  browserName,
-}) => {
-  test.skip(browserName !== 'chromium', 'the Layout Instability API is Chromium only')
-  await page.addInitScript(() => {
-    const w = window as unknown as Record<string, unknown>
-    const shifts: number[] = []
-    w['__e2eShifts'] = shifts
-    new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const shift = entry as PerformanceEntry & { value: number; hadRecentInput: boolean }
-        if (!shift.hadRecentInput) shifts.push(shift.value)
-      }
-    }).observe({ type: 'layout-shift', buffered: true })
-  })
-  let delayed = 0
-  await page.route(/\/_next\/static\/media\/lora[^/]*\.woff2$/, async (route) => {
-    delayed++
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    await route.continue().catch(() => undefined)
-  })
-  await page.goto('/', { waitUntil: 'domcontentloaded' })
-  const { lora } = await fontFamilies(page)
-  await page.waitForFunction(
-    (family) =>
-      [...document.fonts].some(
-        (face) => face.family.replace(/^["']|["']$/g, '') === family && face.status === 'loaded',
-      ),
-    lora,
-    { timeout: 15_000 },
-  )
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 500)))
-      }),
-  )
-  const measured = await page.evaluate(() => ({
-    shifts: (window as unknown as Record<string, unknown>)['__e2eShifts'] as number[],
-    firstPaint: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? Number.NaN,
-    loraEnd:
-      performance
-        .getEntriesByType('resource')
-        .find((entry) => /\/_next\/static\/media\/lora[^/]*\.woff2$/.test(entry.name))
-        ?.toJSON().responseEnd ?? Number.NaN,
-  }))
-  const cls = measured.shifts.reduce((sum, value) => sum + value, 0)
-  console.log(
-    `[look] CLS on / with Lora delayed 1.5 s: ${cls.toFixed(6)} (${measured.shifts.length} ` +
-      `shifts; first paint ${measured.firstPaint.toFixed(0)} ms, Lora arrived ` +
-      `${measured.loraEnd.toFixed(0)} ms)`,
-  )
-  test.info().annotations.push({ type: 'CLS', description: cls.toFixed(6) })
-  expect(delayed, 'the Lora request went through the delay').toBeGreaterThan(0)
-  // The page painted in the fallback face before Lora arrived, so the swap was measured.
-  expect(measured.firstPaint).toBeLessThan(measured.loraEnd)
-  expect(cls).toBeLessThan(0.1)
-})
+test(
+  'a Lora file delayed 1.5 s keeps the layout shift under 0.1 (Chromium)',
+  { tag: '@gated' },
+  async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'the Layout Instability API is Chromium only')
+    await page.addInitScript(() => {
+      const w = window as unknown as Record<string, unknown>
+      const shifts: number[] = []
+      w['__e2eShifts'] = shifts
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const shift = entry as PerformanceEntry & { value: number; hadRecentInput: boolean }
+          if (!shift.hadRecentInput) shifts.push(shift.value)
+        }
+      }).observe({ type: 'layout-shift', buffered: true })
+    })
+    let delayed = 0
+    await page.route(/\/_next\/static\/media\/lora[^/]*\.woff2$/, async (route) => {
+      delayed++
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await route.continue().catch(() => undefined)
+    })
+    await page.goto('/', { waitUntil: 'domcontentloaded' })
+    const { lora } = await fontFamilies(page)
+    await page.waitForFunction(
+      (family) =>
+        [...document.fonts].some(
+          (face) => face.family.replace(/^["']|["']$/g, '') === family && face.status === 'loaded',
+        ),
+      lora,
+      { timeout: 15_000 },
+    )
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 500)))
+        }),
+    )
+    const measured = await page.evaluate(() => ({
+      shifts: (window as unknown as Record<string, unknown>)['__e2eShifts'] as number[],
+      firstPaint:
+        performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? Number.NaN,
+      loraEnd:
+        performance
+          .getEntriesByType('resource')
+          .find((entry) => /\/_next\/static\/media\/lora[^/]*\.woff2$/.test(entry.name))
+          ?.toJSON().responseEnd ?? Number.NaN,
+    }))
+    const cls = measured.shifts.reduce((sum, value) => sum + value, 0)
+    console.log(
+      `[look] CLS on / with Lora delayed 1.5 s: ${cls.toFixed(6)} (${measured.shifts.length} ` +
+        `shifts; first paint ${measured.firstPaint.toFixed(0)} ms, Lora arrived ` +
+        `${measured.loraEnd.toFixed(0)} ms)`,
+    )
+    test.info().annotations.push({ type: 'CLS', description: cls.toFixed(6) })
+    expect(delayed, 'the Lora request went through the delay').toBeGreaterThan(0)
+    // The page painted in the fallback face before Lora arrived, so the swap was measured.
+    expect(measured.firstPaint).toBeLessThan(measured.loraEnd)
+    expect(cls).toBeLessThan(0.1)
+  },
+)

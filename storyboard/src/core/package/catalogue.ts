@@ -1,4 +1,5 @@
 // Catalogue snapshot and pointer (spec §4.4). Snapshots are immutable; pointers move.
+import '../zod-jitless'
 import { z } from 'zod'
 import { Sha256, StoryId } from './v1'
 

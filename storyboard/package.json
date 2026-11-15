@@ -8,8 +8,9 @@
   },
   "scripts": {
     "dev": "next dev --port 3005",
-    "build": "tsx scripts/load-content.ts && next build",
+    "build": "tsx scripts/load-content.ts && next build && tsx scripts/check-build.ts",
     "content:load": "tsx scripts/load-content.ts",
+    "live:check": "tsx scripts/live-check.ts",
     "fixtures:catalogue": "tsx scripts/build-fixtures-catalogue.ts",
     "start": "next start --port 3005",
     "lint": "eslint . && tsx scripts/lint/css-lint.ts",
