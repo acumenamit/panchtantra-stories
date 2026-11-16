@@ -96,6 +96,16 @@ jobs:
         env:
           CONTENT_SOURCE: none
           VERCEL_ENV: production
+      # P1-4b (design p1-step10-design.md L6): the same adapter build on the review leg, so
+      # check-build's [player-pages] and [package-text-leak] run on the player pages in the
+      # route-cache layout on every push. The next step rebuilds without it for the e2e run.
+      - name: Build (review, deployment-adapter output layout)
+        if: matrix.launch == 'review'
+        run: pnpm build
+        env:
+          CONTENT_SOURCE: fixtures
+          READER_LAUNCH: review
+          NEXT_ADAPTER_PATH: ${{ github.workspace }}/storyboard/scripts/testing/noop-adapter.cjs
       - name: Build (review)
         if: matrix.launch == 'review'
         run: pnpm build

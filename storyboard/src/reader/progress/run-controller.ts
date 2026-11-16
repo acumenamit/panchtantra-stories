@@ -11,12 +11,16 @@
 // - The run is held here: another tab's change never alters an open run; this tab's next save
 //   overwrites it (the latest run wins).
 // - The store is injected, so a preview can pass a memory-only store.
+// - The language on open follows localePolicy (Step 10, D11-P3): 'caller' (the default, the Step 5
+//   behaviour) or 'stored-first' for the player (openRun in src/core/progress/resume.ts), which
+//   needs the URL locale. The snapshot before open() is the start node in that locale either way.
 // - A subscriber that throws never makes dispatch() throw (the caller still gets the engine's
 //   audio effect, spec §6.4), never rejects open() and never stops the others (listeners.ts).
 import { start, step } from '../../core/engine'
 import type { EngineEvent, EngineState, Graph, StepResult } from '../../core/engine'
 import { isLocaleCode, type LocaleCode } from '../../core/locales'
 import {
+  openRun,
   resumeRun,
   stepWriteOf,
   type ActiveRun,
@@ -34,6 +38,9 @@ import type { ProgressStore } from './progress-store'
 
 export type RunPhase = 'opening' | 'open'
 
+/** How open() picks the run's language (Step 10, D11-P3). */
+export type LocalePolicy = 'caller' | 'stored-first'
+
 export interface RunSnapshot {
   /** 'opening' until open() resolves; events are refused until then. */
   readonly phase: RunPhase
@@ -46,8 +53,16 @@ export interface RunSnapshot {
 export interface RunControllerOptions {
   readonly graph: Graph
   readonly store: Pick<ProgressStore, 'get' | 'saveStep'>
-  /** The caller's language: wins over the stored run's, which wins over the story default. */
+  /**
+   * The caller's language. With localePolicy 'caller' it wins over the stored run's, which wins
+   * over the story default. With 'stored-first' it is required.
+   */
   readonly locale?: LocaleCode
+  /**
+   * 'caller' (default): as above. 'stored-first' (the player): the stored run's language when the
+   * graph has it, else `locale`; a fresh run always takes `locale` (openRun, resume.ts).
+   */
+  readonly localePolicy?: LocalePolicy
   /** Runs a save after dispatch returns. Defaults to queueMicrotask. */
   readonly schedule?: (task: () => void) => void
   /** Receives an error a subscriber threw. Defaults to rethrowing it after the current call. */
@@ -81,6 +96,17 @@ export function createRunController(options: RunControllerOptions): RunControlle
   if (typeof onListenerError !== 'function') {
     throw new TypeError('onListenerError must be a function')
   }
+  const localePolicy = options.localePolicy ?? 'caller'
+  if (localePolicy !== 'caller' && localePolicy !== 'stored-first') {
+    throw new TypeError('localePolicy must be "caller" or "stored-first"')
+  }
+  if (localePolicy === 'stored-first' && locale === undefined) {
+    throw new TypeError('localePolicy "stored-first" needs a locale')
+  }
+  const resume = (stored: ActiveRun | null): ResumeResult =>
+    localePolicy === 'stored-first' && locale !== undefined
+      ? openRun(graph, stored, locale)
+      : resumeRun(graph, stored, locale)
 
   const listeners = new Set<() => void>()
   const initial = start(
@@ -104,10 +130,10 @@ export function createRunController(options: RunControllerOptions): RunControlle
     }
     let result: ResumeResult
     try {
-      result = resumeRun(graph, stored, locale)
+      result = resume(stored)
     } catch {
       // Only a malformed entry from an injected store could get here.
-      result = resumeRun(graph, null, locale)
+      result = resume(null)
     }
     snapshot = Object.freeze({ phase: 'open', state: result.state, outcome: result.outcome })
     return result

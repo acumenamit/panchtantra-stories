@@ -128,9 +128,15 @@ const notFound = (body: string | null = NOT_FOUND): Recorded => ok(body, 404)
 function gatedSite(): Map<string, Recorded> {
   return new Map([
     ['/', ok(GATED_HOME)],
-    ...['/en', '/hi', '/en/grown-ups', '/hi/grown-ups', '/ar', '/no-such-page'].map(
-      (path): [string, Recorded] => [path, notFound()],
-    ),
+    ...[
+      '/en',
+      '/hi',
+      '/en/grown-ups',
+      '/hi/grown-ups',
+      '/ar',
+      '/no-such-page',
+      '/en/stories/two-paths/read',
+    ].map((path): [string, Recorded] => [path, notFound()]),
     ['/build-info.json', notFound()],
   ])
 }
@@ -143,6 +149,7 @@ function launchedSite(): Map<string, Recorded> {
     ['/hi', ok(localeHome('hi'))],
     ['/ar', notFound()],
     ['/no-such-page', notFound()],
+    ['/en/stories/two-paths/read', notFound()],
     [
       '/build-info.json',
       ok('{"schemaVersion":"1.0"}', 200, [...SECURITY, ['content-type', 'application/json']]),
@@ -180,6 +187,7 @@ describe('the committed expectation', () => {
       ['/hi/grown-ups', 404],
       ['/ar', 404],
       ['/no-such-page', 404],
+      ['/en/stories/two-paths/read', 404],
       ['/build-info.json', 404],
     ])
   })
@@ -191,6 +199,7 @@ describe('the committed expectation', () => {
       ['/hi', 200],
       ['/ar', 404],
       ['/no-such-page', 404],
+      ['/en/stories/two-paths/read', 404],
       ['/build-info.json', 200],
     ])
     expect(probes('gated', true, TITLES).at(-1)).toMatchObject({
@@ -382,6 +391,7 @@ describe('the response checker on recorded responses', () => {
         '/hi/grown-ups',
         '/ar',
         '/no-such-page',
+        '/en/stories/two-paths/read',
       ]) {
         const recorded = site.get(path)
         if (!recorded?.body) throw new Error(`no body for ${path}`)
@@ -395,12 +405,20 @@ describe('the response checker on recorded responses', () => {
         '/hi/grown-ups 404: no staging banner',
         '/ar 404: no staging banner',
         '/no-such-page 404: no staging banner',
+        '/en/stories/two-paths/read 404: no staging banner',
       ])
     })
 
     it.each(FORMS)('fails %s on the launched "/", /en, /hi and both 404s', (_what, extra) => {
       const site = launchedSite()
-      for (const path of ['/', '/en', '/hi', '/ar', '/no-such-page']) {
+      for (const path of [
+        '/',
+        '/en',
+        '/hi',
+        '/ar',
+        '/no-such-page',
+        '/en/stories/two-paths/read',
+      ]) {
         const recorded = site.get(path)
         if (!recorded?.body) throw new Error(`no body for ${path}`)
         site.set(path, { ...recorded, body: plus(recorded.body, extra) })
@@ -411,6 +429,7 @@ describe('the response checker on recorded responses', () => {
         '/hi 200: no staging banner',
         '/ar 404: no staging banner',
         '/no-such-page 404: no staging banner',
+        '/en/stories/two-paths/read 404: no staging banner',
       ])
     })
 

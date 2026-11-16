@@ -15,3 +15,5 @@ tools/migrate/legacy-waiver-keys.json
 .rules-private
 # Supabase CLI private link state (gitignored)
 supabase/.temp
+# Local cache written by the impeccable editor hook (gitignored)
+.impeccable

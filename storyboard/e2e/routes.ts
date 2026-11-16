@@ -7,12 +7,21 @@
 // - Both legs: every unmatched URL is the bilingual 404 (lang en, Hindi parts in lang="hi").
 // The UI strings are read from messages/*.json as text: only src/ui/i18n/messages.ts imports the
 // catalogues (lint fence, design §8.2).
+// P1-4b (design p1-step10-design.md §2.1 e2e/routes.ts, §9.3; Step 10a): the story player at
+// /{code}/stories/{storyId}/read.
+// - playerPaths(): every story of the fixtures catalogue (the one the review and staging builds
+//   load) in every enabled locale its package has. The gated build serves none of them.
+// - PLAYER_DOC_PATHS: two-paths in each enabled locale, kind 'player'. legRoutes adds them on the
+//   open legs only, so the shared document, shell and staging-banner loops visit a player page.
+// - PLAYER_NOT_FOUND_PATHS: player-shaped URLs no build serves (T-a21; 10e adds the picture id).
+// - formatted(): a UI string that takes arguments, formatted by the app's own ICU subset.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { APP_NAME } from '../src/core/app-info'
+import { formatMessage, parseMessage, type MessageValues } from '../src/core/i18n/message-format'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
-import type { LaunchLeg } from './launch-leg'
+import { legOpen, type LaunchLeg } from './launch-leg'
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -24,8 +33,8 @@ export type UiLang = 'en' | 'hi'
 
 const catalogues = new Map<UiLang, Readonly<Record<string, string>>>()
 
-/** One UI string as the page shows it. Step 7's strings take no arguments, so it is the raw value. */
-export function message(lang: UiLang, key: string): string {
+/** One catalogue value as stored, arguments unformatted. */
+function rawMessage(lang: UiLang, key: string): string {
   let catalogue = catalogues.get(lang)
   if (!catalogue) {
     catalogue = JSON.parse(
@@ -35,8 +44,23 @@ export function message(lang: UiLang, key: string): string {
   }
   const value = catalogue[key]
   if (value === undefined) throw new Error(`messages/${lang}.json has no key ${key}`)
+  return value
+}
+
+/** One UI string as the page shows it. Step 7's strings take no arguments, so it is the raw value. */
+export function message(lang: UiLang, key: string): string {
+  const value = rawMessage(lang, key)
   if (/[{}]/.test(value)) throw new Error(`${lang} ${key} takes arguments; format it first`)
   return value
+}
+
+/**
+ * One UI string that takes arguments, as the page shows it: the app's own ICU subset formats it
+ * (src/core/i18n/message-format.ts, the parser and formatter the server's t() uses), so a missing
+ * or extra argument throws here as it would in the build.
+ */
+export function formatted(lang: UiLang, key: string, values: MessageValues): string {
+  return formatMessage(lang, parseMessage(rawMessage(lang, key)), values)
 }
 
 /** The UI language of an enabled reader locale. */
@@ -48,7 +72,7 @@ export function uiLang(code: LocaleCode): UiLang {
 // ---------------------------------------------------------------------------------------------
 // Routes
 
-export type RouteKind = 'coming-soon' | 'gate' | 'home' | 'grown-ups' | 'not-found'
+export type RouteKind = 'coming-soon' | 'gate' | 'home' | 'grown-ups' | 'player' | 'not-found'
 
 export interface LegRoute {
   readonly path: string
@@ -95,7 +119,10 @@ export function readerPaths(): { path: string; code: LocaleCode; kind: 'home' | 
   ])
 }
 
-/** "/" and every reader route, as the leg's build serves them. */
+/**
+ * "/" and every reader route, as the leg's build serves them. The open legs add the two player
+ * pages of PLAYER_DOC_PATHS (kind 'player'); the gated leg's player check is its own test.
+ */
 export function legRoutes(leg: LaunchLeg): LegRoute[] {
   const start: LegRoute = {
     path: '/',
@@ -111,13 +138,131 @@ export function legRoutes(leg: LaunchLeg): LegRoute[] {
       kind === 'home' ? APP_NAME : `${message(uiLang(code), 'grownUps.title')} – ${APP_NAME}`
     return { path: routePath, status: 200, kind, lang: code, dir: getLocaleDef(code).dir, title }
   })
-  return [start, ...reader]
+  const player = legOpen(leg)
+    ? PLAYER_DOC_PATHS.map(({ path: routePath, code, storyId }): LegRoute => ({
+        path: routePath,
+        status: 200,
+        kind: 'player',
+        lang: code,
+        dir: getLocaleDef(code).dir,
+        // The story's title in the URL locale through the [locale] layout's template.
+        title: `${playerFixture(storyId).text[code]?.title ?? ''} – ${APP_NAME}`,
+      }))
+    : []
+  return [start, ...reader, ...player]
 }
 
 /** The leg's routes plus one unmatched URL: the document checks cover the 404 page too. */
 export function documentRoutes(leg: LaunchLeg): LegRoute[] {
   return [...legRoutes(leg), notFoundRoute('/no-such-page')]
 }
+
+// ---------------------------------------------------------------------------------------------
+// The story player (P1-4b)
+
+/** One node of a fixture package: its type and its choices in package order. */
+export interface PlayerFixtureNode {
+  readonly id: string
+  readonly type: string
+  readonly choices?: readonly { readonly id: string; readonly next: string }[]
+}
+
+/** One node's text in one locale, as stored. */
+export interface PlayerFixtureNodeText {
+  readonly text: string
+  readonly question?: string
+  readonly choices?: Readonly<Record<string, string>>
+  readonly lesson?: string
+}
+
+/** The fields of a fixture package the e2e specs read (fixtures/packages/*.json, read only). */
+export interface PlayerFixture {
+  readonly storyId: string
+  readonly version: number
+  readonly locales: readonly string[]
+  readonly startNodeId: string
+  readonly nodes: readonly PlayerFixtureNode[]
+  readonly text: Readonly<
+    Record<
+      string,
+      { readonly title: string; readonly nodes: Readonly<Record<string, PlayerFixtureNodeText>> }
+    >
+  >
+}
+
+const FIXTURES = path.join(ROOT, 'fixtures')
+
+/** The fixtures catalogue's stories in its order: the stories a review or staging build lists. */
+function fixtureCatalogue(): { storyId: string; packagePath: string }[] {
+  const pointer = JSON.parse(
+    readFileSync(path.join(FIXTURES, 'catalogue', 'fixtures.json'), 'utf8'),
+  ) as { snapshotPath: string }
+  const snapshot = JSON.parse(readFileSync(path.join(FIXTURES, pointer.snapshotPath), 'utf8')) as {
+    stories: { storyId: string; packagePath: string }[]
+  }
+  return snapshot.stories.map(({ storyId, packagePath }) => ({ storyId, packagePath }))
+}
+
+const playerFixtures = new Map<string, PlayerFixture>()
+
+/** One fixture package by story id (read once per worker). */
+export function playerFixture(storyId: string): PlayerFixture {
+  let fixture = playerFixtures.get(storyId)
+  if (!fixture) {
+    const entry = fixtureCatalogue().find((story) => story.storyId === storyId)
+    if (!entry) throw new Error(`the fixtures catalogue has no story ${storyId}`)
+    fixture = JSON.parse(
+      readFileSync(path.join(FIXTURES, entry.packagePath), 'utf8'),
+    ) as PlayerFixture
+    if (fixture.storyId !== storyId) throw new Error(`${entry.packagePath} is not ${storyId}`)
+    playerFixtures.set(storyId, fixture)
+  }
+  return fixture
+}
+
+/** The player URL of one story in one locale. */
+export function playerPath(code: LocaleCode, storyId: string): string {
+  return `/${code}/stories/${storyId}/read`
+}
+
+/** One player page of an open build. */
+export interface PlayerPage {
+  readonly path: string
+  readonly code: LocaleCode
+  readonly storyId: string
+}
+
+/**
+ * Every player page a review or staging build serves: each catalogue story in each enabled locale
+ * its package has, in registry order (3 fixtures × en, hi). The gated build serves none.
+ */
+export function playerPaths(): PlayerPage[] {
+  return fixtureCatalogue().flatMap(({ storyId }) =>
+    ENABLED_LOCALE_CODES.filter((code) => playerFixture(storyId).locales.includes(code)).map(
+      (code) => ({ path: playerPath(code, storyId), code, storyId }),
+    ),
+  )
+}
+
+/** The player pages the shared document, shell and staging-banner loops visit: two-paths. */
+export const PLAYER_DOC_PATHS: readonly PlayerPage[] = playerPaths().filter(
+  (page) => page.storyId === 'two-paths',
+)
+
+/**
+ * Player-shaped URLs that no build serves (T-a21; design C20): an unknown story, an unknown last
+ * segment, the story URL without /read (until Step 12), /en/stories, a locale that is not enabled
+ * and an upper-case story id. Each is the bilingual 404 on every leg. The trailing-slash form is
+ * not here: Next answers it with a 308 to the real page.
+ */
+export const PLAYER_NOT_FOUND_PATHS = [
+  '/en/stories/nope/read',
+  '/hi/stories/two-paths/nope',
+  '/en/stories/two-paths',
+  '/en/stories',
+  '/ar/stories/two-paths/read',
+  '/en/stories/TWO-PATHS/read',
+] as const
 
 // ---------------------------------------------------------------------------------------------
 // Page helpers

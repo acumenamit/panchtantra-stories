@@ -11,6 +11,8 @@
 //   and scripts/testing/staging-build.ts set it for a child `next build` and refuse a preset one,
 //   naming it only in a name list and the build-env literal (design §9 item 16); the decision is
 //   still computed only by launch.ts.
+// - P1-4b (design p1-step10-design.md §2.1): the player island's five client files are scanned,
+//   and its server half (src/ui/player/strings.ts, which calls t()) is never a client file.
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
 //   which turns zod's eval probe off before any schema is built (spec §9 CSP: no 'unsafe-eval';
 //   the stores and zod reach every reader page, design §11 R10). Type-only imports are fine.
@@ -240,8 +242,16 @@ describe('the client boundary in the repo', () => {
         'src/ui/shell/choice-recorder.tsx',
         'src/ui/shell/header-nav.tsx',
         'src/ui/shell/storage-banner.tsx',
+        // The Step 10 player island (P1-4b; design p1-step10-design.md §2.1).
+        'src/ui/player/choice-list.tsx',
+        'src/ui/player/player-boundary.tsx',
+        'src/ui/player/player-header.tsx',
+        'src/ui/player/player.tsx',
+        'src/ui/player/story-part.tsx',
       ]),
     )
+    // The player's server half builds its strings with t(); it is never a client file.
+    expect(isClientFile(graph.get('src/ui/player/strings.ts') ?? "'use client'")).toBe(false)
     expect(graph.has('src/ui/i18n/messages.ts')).toBe(true)
     expect(graph.has('messages/en.json') && graph.has('messages/hi.json')).toBe(true)
   })

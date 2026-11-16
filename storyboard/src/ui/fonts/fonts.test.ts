@@ -375,7 +375,7 @@ describe('glyph coverage', () => {
   it('covers every messages/hi.json value with the shipped Devanagari and Latin-subset faces', () => {
     const devanagariRanges = rangesOf('devanagari')
     const latinRanges = rangesOf('devanagariLatin')
-    expect(MESSAGES_HI).toHaveLength(16)
+    expect(MESSAGES_HI).toHaveLength(20)
     const codePoints = [...codePointsOf(MESSAGES_HI)]
     // Inside a unicode-range, so the browser downloads the face that has the glyph.
     expect(

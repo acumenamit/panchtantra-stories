@@ -44,6 +44,23 @@ export function resumeRun(
   return { state, outcome: exact ? 'resumed' : 'adjusted' }
 }
 
+/**
+ * The player's language policy on open (Step 10, D11-P3, stored-first): the stored run's language
+ * when the graph has it, else the page's. A fresh run (nothing stored, or a stored run that ends at
+ * an ending) always takes the page's language, never the stored one or the story default. In the
+ * player, `graph.locales` are the page's content locales (graphOf in src/reader/player), so a
+ * stored language that is not enabled, or that the package lacks, falls to the page's language.
+ */
+export function openRun(
+  graph: Graph,
+  stored: ActiveRun | null,
+  pageLocale: LocaleCode,
+): ResumeResult {
+  const useStored = stored !== null && graph.locales.includes(stored.locale)
+  const result = resumeRun(graph, stored, useStored ? stored.locale : pageLocale)
+  return result.outcome === 'fresh' ? resumeRun(graph, null, pageLocale) : result
+}
+
 /** The ids of the story's ending nodes, in package order. */
 export function endingIdsOf(graph: Graph): string[] {
   const ids: string[] = []

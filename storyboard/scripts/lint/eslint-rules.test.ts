@@ -369,6 +369,279 @@ describe('reader fence: src/content (P1-2b)', () => {
   })
 })
 
+// P1-4b (design p1-step10-design.md §9.1 G3; probe R16): the player fence. Every sample is linted
+// with the real config at a path under src/ui/player or src/reader/player, so eslint-config-next's
+// browser globals apply (checkGlobalObject reports self. and window. only for declared globals).
+// Each negative names exactly the fence rules that must report it, so a dropped rule or selector
+// fails a test even where another rule also reports the sample.
+describe('player fence (P1-4b, design p1-step10 §9.1 G3)', () => {
+  const G = 'no-restricted-globals'
+  const P = 'no-restricted-properties'
+  const S = 'no-restricted-syntax'
+  const FENCE = [G, P, S]
+  const PLAYER_TS = ['src/ui/player/lint-sample.ts', 'src/reader/player/lint-sample.ts']
+  const PLAYER_TSX = 'src/ui/player/lint-sample.tsx'
+  /** Every message a fence rule may give in a player file: the player's own and the inherited. */
+  const MESSAGES = ['design p1-step10-design.md', STORAGE_ONLY, NO_COOKIES, NO_ENV, ONLY_CUSTOM]
+
+  /** The fence rules (sorted, once each) that report `code` in `file`; every one is an error. */
+  async function fenceRules(file: string, code: string): Promise<string[]> {
+    const messages = (await lint(file, `${code}\n`)).filter((m) => FENCE.includes(m.ruleId ?? ''))
+    expect(messages.every((m) => m.severity === 2)).toBe(true)
+    for (const m of messages) {
+      expect(
+        MESSAGES.some((known) => m.message.includes(known)),
+        m.message,
+      ).toBe(true)
+    }
+    return [...new Set(messages.map((m) => m.ruleId ?? ''))].sort()
+  }
+
+  /** §9.1 G3's negatives (and C10's), plus alias forms only a member selector catches. */
+  const NEGATIVES: readonly (readonly [string, readonly string[]])[] = [
+    ["export const r = fetch('/x')", [G]],
+    ["export const r = globalThis.fetch('/x')", [G, P, S]],
+    ["export const r = self.fetch('/x')", [G, P, S]],
+    ["export const r = window['fetch']('/x')", [G, P, S]],
+    ["export const r = self['fetch']('/x')", [G, P, S]],
+    ['export const v = navigator.userAgent', [P, S]],
+    ["export const v = navigator['userAgent']", [P, S]],
+    ['export const v = window.navigator.userAgent', [S]],
+    ['const { userAgent } = navigator\nexport const v = userAgent', [P, S]],
+    ['export const v = navigator?.userAgent', [P, S]],
+    ['export const v = navigator.userAgentData', [P, S]],
+    ['export const v = navigator.platform', [P, S]],
+    ['export const t = performance.now()', [G, P]],
+    ["export const t = performance['now']()", [G, P, S]],
+    ['export const t = performance?.now()', [G, P]],
+    ['export const t = performance.timeOrigin', [G, P]],
+    ['const { now } = performance\nexport const t = now()', [G, P]],
+    // Review F2, T4: the performance clock through a global object or an alias.
+    ['export const t = window.performance.now()', [G, P, S]],
+    ['export const t = globalThis.performance.now()', [G, P, S]],
+    ['export const t = self.performance.timeOrigin', [G, P, S]],
+    ["export const t = window['performance'].now()", [G, P, S]],
+    ['const p = performance\nexport const t = p.now()', [G]],
+    ['const { performance: p } = window\nexport const t = p.now()', [P, S]],
+    ['const w = window\nexport const t = w.performance.now()', [S]],
+    ["const w = window\nexport const t = w['performance'].timeOrigin", [S]],
+    ["const { fetch: f } = window\nexport const r = f('/x')", [P, S]],
+    // Review F2: the platform names and sendBeacon through a global object, computed or destructured.
+    ['export const v = window.navigator.platform', [S]],
+    ['export const v = globalThis.navigator.userAgentData', [S]],
+    ["export const v = window.navigator['userAgentData']", [S]],
+    ["export const v = navigator['platform']", [P, S]],
+    ['const { platform } = window.navigator\nexport const v = platform', [S]],
+    ["declare const u: string\nnavigator['sendBeacon'](u)", [S]],
+    ['declare const u: string\nwindow.navigator.sendBeacon(u)', [S]],
+    ['const { sendBeacon } = navigator\nexport const s = sendBeacon', [S]],
+    [
+      "declare const preload: (h: string, o: object) => void\npreload('x', { crossOrigin: '' })",
+      [S],
+    ],
+    ["export const o = { 'crossOrigin': '' }", [S]],
+    ["declare const img: HTMLImageElement\nimg.crossOrigin = ''", [S]],
+    ["declare const img: HTMLImageElement\nimg['crossOrigin'] = ''", [S]],
+    ["declare const el: HTMLElement\nel.setAttribute('crossorigin', '')", [S]],
+    ['declare const u: string\nnavigator.sendBeacon(u)', [S]],
+    ['export const x = new XMLHttpRequest()', [G]],
+    ["export const x = new EventSource('/x')", [G]],
+    ["export const x = new WebSocket('wss://x')", [G]],
+    // The inherited reader fence (env, cookies, Web Storage) still applies in the player.
+    ["export const v = localStorage.getItem('k')", [G]],
+    ['export const v = globalThis.localStorage', [G]],
+    ['export const v = self.sessionStorage', [G]],
+    ["export const v = window.localStorage.getItem('k')", [G, P]],
+    ["export const v = cookieStore.get('k')", [G]],
+    ["document.cookie = 'a=b'", [P]],
+    ['export const v = process.env.X', [P]],
+    // Aliases: only the member selectors see these.
+    ["const w = window\nexport const r = w.fetch('/x')", [S]],
+    ["const w = window\nexport const r = w['fetch']('/x')", [S]],
+    ['const n = navigator\nexport const v = n.userAgent', [S]],
+    ["const n = navigator\nexport const v = n['userAgent']", [S]],
+    // Second review R2-G3-1: fetch and the request constructors through an alias or destructured.
+    ["const w = window\nconst { fetch: f } = w\nexport const r = f('/x')", [S]],
+    ["const { fetch: f } = document.defaultView!\nexport const r = f('/x')", [S]],
+    ["const w = globalThis\nconst { fetch } = w\nexport const r = fetch('/x')", [S]],
+    ['const w = window\nexport const x = new w.XMLHttpRequest()', [S]],
+    ["const w = globalThis\nexport const x = new w.WebSocket('wss://x')", [S]],
+    ["export const x = new (document.defaultView!.EventSource)('/x')", [S]],
+    ['const { XMLHttpRequest: X } = window\nexport const x = new X()', [S]],
+    ["const { WebSocket: W } = globalThis\nexport const x = new W('wss://x')", [S]],
+    // R2-G3-2: crossorigin through other DOM APIs, a computed callee, a template or a pattern.
+    ["declare const el: HTMLElement\nel.toggleAttribute('crossorigin')", [S]],
+    ["declare const el: HTMLElement\nel.setAttributeNS(null, 'crossorigin', '')", [S]],
+    ["declare const el: HTMLElement\nel['setAttribute']('crossorigin', '')", [S]],
+    ["declare const el: HTMLElement\nel.setAttribute(`crossorigin`, '')", [S]],
+    ["declare const img: HTMLImageElement\nimg[`crossOrigin`] = ''", [S]],
+    ["declare const img: HTMLImageElement\nReflect.set(img, 'crossOrigin', '')", [S]],
+    [
+      "declare const img: HTMLImageElement\nObject.defineProperty(img, 'crossOrigin', { value: '' })",
+      [S],
+    ],
+    ["declare const img: HTMLImageElement\n;[img.crossOrigin] = ['']", [S]],
+    // R2-G3-3: template keys and computed destructuring keys, on navigator itself too.
+    ['declare const u: string\nnavigator[`sendBeacon`](u)', [S]],
+    ["const { ['sendBeacon']: b } = navigator\nexport const s = b", [S]],
+    ['const n = navigator\nexport const v = n[`userAgent`]', [S]],
+    ["const n = navigator\nconst { ['userAgent']: ua } = n\nexport const v = ua", [S]],
+    ['export const v = document.defaultView!.navigator[`platform`]', [S]],
+    ['const w = window\nexport const t = w[`performance`].now()', [S]],
+    ['export const t = document.defaultView![`performance`].now()', [S]],
+    ["const w = window\nconst { ['performance']: p } = w\nexport const t = p.now()", [S]],
+    ['const w = window\nconst { [`performance`]: p } = w\nexport const t = p.now()', [S]],
+    ["const w = window\nexport const r = w[`fetch`]('/x')", [S]],
+    ["export const r = document.defaultView![`fetch`]('/x')", [S]],
+    // R2-G3-5: Reflect with a literal name (design §9.1 G3 listed the first as a limit).
+    ["export const f = Reflect.get(globalThis, 'fetch')", [S]],
+    ["export const v = Reflect.get(navigator, 'userAgent')", [S]],
+    ["export const s = Reflect.get(navigator, 'sendBeacon')", [S]],
+    ["export const t = Reflect.get(globalThis, 'performance')", [S]],
+    // R2-G3-6: the other user-agent and platform names.
+    ['export const v = navigator.appVersion', [P, S]],
+    ['export const v = navigator.vendor', [P, S]],
+    ['export const v = navigator.oscpu', [P, S]],
+    ['export const v = navigator.appName', [P, S]],
+    ['export const v = window.navigator.appVersion', [S]],
+    ['const { vendor } = navigator\nexport const v = vendor', [P, S]],
+  ]
+
+  it.each(
+    PLAYER_TS.flatMap((file) => NEGATIVES.map(([code, rules]) => [file, code, rules] as const)),
+  )('%s: rejects %s', async (file, code, rules) => {
+    expect(await fenceRules(file, code)).toEqual(rules)
+  })
+
+  it.each(NEGATIVES)('src/ui/player/*.tsx: rejects %s', async (code, rules) => {
+    expect(await fenceRules(PLAYER_TSX, code)).toEqual(rules)
+  })
+
+  it.each([
+    ['<img crossOrigin="" alt="" />', [S]],
+    ['<img crossorigin="anonymous" alt="" />', [S]],
+    ['<link crossorigin="" />', [S]],
+    ["<div style={{ color: 'red' }} />", [S]], // the inherited JSX style rule
+  ])('src/ui/player/*.tsx: rejects %s', async (jsx, rules) => {
+    expect(await fenceRules(PLAYER_TSX, `export const a = ${jsx}`)).toEqual(rules)
+  })
+
+  it('keeps every inherited JSX style rule in the player, message for message', async () => {
+    for (const [jsx, expected] of [
+      ['<div style={{ marginLeft: 1 }} />', [ONLY_CUSTOM]],
+      ['<div style={{ [key]: 1 }} />', [ONLY_CUSTOM]],
+      ["<div style={{ '--x': '#fff' }} />", [NO_COLOR]],
+      ['<div style={{ ...base }} />', [NO_SPREAD]],
+      ['<div style={base} />', [ONLY_OBJECT]],
+      ["<style>{'a { color: red }'}</style>", [NO_STYLE_ELEMENT]],
+    ] as const) {
+      expect(await styleErrors(jsx, PLAYER_TSX), jsx).toEqual(expected)
+    }
+  })
+
+  it('leaves what the player needs alone (the 6 probe positives and the globals it uses)', async () => {
+    const positives: readonly (readonly [string, string])[] = [
+      [
+        'src/ui/player/lint-sample.ts',
+        "declare const controller: { dispatch(a: object): unknown }\nexport const r = controller.dispatch({ type: 'CHOOSE', seq: 1, choiceId: 'c1' })",
+      ],
+      [
+        'src/ui/player/lint-sample.ts',
+        "import { preload } from 'react-dom'\ndeclare const src: string, s: string, z: string\npreload(src, { as: 'image', imageSrcSet: s, imageSizes: z, fetchPriority: 'low' })",
+      ],
+      [
+        PLAYER_TSX,
+        'declare const s: string, z: string, u: string\nexport const a = <img srcSet={s} sizes={z} src={u} width={1} height={1} fetchPriority="high" alt="" />',
+      ],
+      [
+        'src/ui/player/lint-sample.ts',
+        'declare const title: string, url: string\nvoid navigator.share?.({ title, url })',
+      ],
+      [
+        'src/ui/player/lint-sample.ts',
+        'declare const url: string\nvoid navigator.clipboard?.writeText(url)',
+      ],
+      ['src/reader/player/lint-sample.ts', 'export const t = setTimeout(() => {}, 500)'],
+      ['src/ui/player/lint-sample.ts', 'export const t = window.setTimeout(() => {}, 500)'],
+      ['src/ui/player/lint-sample.ts', 'window.location.reload()'],
+      [
+        'src/ui/player/lint-sample.ts',
+        "document.documentElement.removeAttribute('data-saved-run')",
+      ],
+      [
+        'src/ui/player/lint-sample.ts',
+        "declare const el: HTMLElement\nel.scrollIntoView({ block: 'start' })\nel.focus({ preventScroll: true })",
+      ],
+      ['src/ui/player/lint-sample.ts', 'export const d = Date.now()'],
+    ]
+    for (const [file, code] of positives) {
+      const errors = (await lint(file, `${code}\n`)).filter((m) => m.severity === 2)
+      expect(errors, code).toEqual([])
+    }
+  })
+
+  it('covers nested player folders, and stops at the two player folders and their tests', async () => {
+    const fetchCode = "export const r = fetch('/x')"
+    for (const file of [
+      'src/ui/player/deep/lint-sample.tsx',
+      'src/reader/player/deep/lint-sample.ts',
+      // Review T3: a .tsx file under src/reader/player is fenced too.
+      'src/reader/player/lint-sample.tsx',
+      'src/reader/player/deep/lint-sample.tsx',
+    ]) {
+      expect(await fenceRules(file, fetchCode), file).toEqual([G])
+    }
+    // narration-controller.ts uses performance.now as a duration clock (design §9.1 G3).
+    expect(
+      await fenceRules('src/reader/narration/lint-sample.ts', 'export const t = performance.now()'),
+    ).toEqual([])
+    expect(await fenceRules('src/ui/lint-sample.ts', fetchCode)).toEqual([])
+    const all = [
+      fetchCode,
+      "export const v = localStorage.getItem('k')",
+      'export const e = process.env.X',
+      'export const t = performance.now()',
+      'export const u = navigator.userAgent',
+    ].join('\n')
+    for (const file of [
+      'src/ui/player/lint-sample.test.ts',
+      'src/reader/player/lint-sample.test.ts',
+    ]) {
+      expect(await fenceRules(file, all), file).toEqual([])
+    }
+    // The sniffing and clock names stay allowed outside the player (src/ui, the narration code).
+    expect(
+      await fenceRules(
+        'src/ui/lint-sample.ts',
+        'export const v = window.navigator.platform\nexport const t = window.performance.now()',
+      ),
+    ).toEqual([])
+  })
+
+  it('covers a player file with any other script extension, imports included (R2-G3-4)', async () => {
+    const supabase = "import '@supabase/supabase-js'"
+    for (const base of ['src/ui/player/lint-sample', 'src/reader/player/deep/lint-sample']) {
+      for (const extension of ['mts', 'cts', 'js', 'jsx', 'mjs', 'cjs']) {
+        const file = `${base}.${extension}`
+        expect(await fenceRules(file, "fetch('/x')"), file).toEqual([G])
+        if (extension === 'cjs') continue // CommonJS: an import statement does not parse
+        expect(await importErrors(file, supabase), file).toEqual([
+          expect.stringContaining('Reader code must not import Supabase clients.'),
+        ])
+      }
+    }
+  })
+
+  it('documented limits (design §9.1 G3): a name assembled at run time', async () => {
+    for (const code of [
+      "const k = 'fe' + 'tch'\nexport const f = { ...globalThis }[k]",
+      "export const f = Reflect.get(globalThis, ['fe', 'tch'].join(''))",
+    ]) {
+      expect(await fenceRules('src/ui/player/lint-sample.ts', code), code).toEqual([])
+    }
+  })
+})
+
 describe('eslint-config-next is still applied', () => {
   it('fires a typescript-eslint rule on a .ts sample', async () => {
     const messages = await lint('src/reader/lint-sample.ts', 'export const value: any = 1\n')

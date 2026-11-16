@@ -2,12 +2,13 @@
 // p1-step9-design.md §3.6 rows 3-8, §4.2-§4.4, §10.3, critic C6; P1-2c). Staging leg only
 // (@staging): the build scripts/testing/staging-build.ts makes from the 3 synthetic fixtures served
 // as a staging catalogue, with the reader open.
-// - One test per documentRoutes('staging') route ("/", /en, /hi, both Grown-ups pages and one
-//   unmatched URL): exactly one banner, a p with the exact text and lang="en", and the marker once
-//   in the server HTML; the first element child of <body> that is not [hidden] (Next renders its
-//   own <div hidden=""> first, so body.firstElementChild is never used); outside main and header,
-//   before the skip link where the page has one; no role, aria-live or tabindex and nothing
-//   focusable inside; in normal flow at the top, full width, amber fill, dark text, bold.
+// - One test per documentRoutes('staging') route ("/", /en, /hi, both Grown-ups pages, the two
+//   two-paths player pages and one unmatched URL): exactly one banner, a p with the exact text
+//   and lang="en", and the marker once in the server HTML; the first element child of <body>
+//   that is not [hidden] (Next renders its own <div hidden=""> first, so body.firstElementChild is
+//   never used); outside main and header, before the skip link where the page has one; no role,
+//   aria-live or tabindex and nothing focusable inside; in normal flow at the top, full width,
+//   amber fill, dark text, bold.
 // - One reflow test: /hi at 320 px wide and 150% text has no horizontal scroll and the banner fits.
 // The selector, marker and text come from src/ui/root/staging.ts; colours are the tokens'
 // --color-accent (#f59e0b) and --color-text-on-accent (#0d0a05). The shared guard in fixtures.ts
@@ -34,7 +35,10 @@ function count(text: string, needle: string): number {
 test.describe('the staging banner', { tag: '@staging' }, () => {
   for (const route of documentRoutes('staging')) {
     const label = `${route.path} (${route.status}, ${route.kind})`
-    const hasSkipLink = route.kind === 'home' || route.kind === 'grown-ups'
+    // The site pages and the player pages (P1-4b, design p1-step10-design.md §9.3 loops) render a
+    // skip link after the banner; "/" and the 404 have none.
+    const hasSkipLink =
+      route.kind === 'home' || route.kind === 'grown-ups' || route.kind === 'player'
 
     test(`${label} shows one staging banner, first in the body and in flow`, async ({
       page,

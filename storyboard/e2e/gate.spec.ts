@@ -159,16 +159,19 @@ test.describe('the language gate', { tag: '@review' }, () => {
     })
     expect((await storageAfter(page)).writes, 'one write').toEqual(['setItem'])
 
-    // Back: the gate again, and no redirect (navigation type back_forward).
-    const visited: string[] = []
-    page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) visited.push(new URL(frame.url()).pathname)
+    // Back: the gate again, and no redirect (navigation type back_forward). Only the documents that
+    // load count: Next applies the query removal with a second, same-document replaceState('/hi')
+    // that can land after this point (review R2-FLK-2). It loads no document; a redirect does.
+    const documents: string[] = []
+    page.on('request', (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame())
+        documents.push(new URL(request.url()).pathname)
     })
     await page.goBack()
     await expectGateStays(page)
     expect(
-      visited.filter((pathname) => pathname !== '/'),
-      'pages after Back',
+      documents.filter((pathname) => pathname !== '/'),
+      'documents loaded after Back',
     ).toEqual([])
   })
 

@@ -6,10 +6,14 @@
 // - gated: "/" 200 with the Coming-soon body, today's title, description, viewport, theme-color,
 //   color-scheme, manifest and icon tags, exactly one robots meta (noindex, nofollow), no locale
 //   link and no redirect script; /en, /hi, both Grown-ups
-//   pages, /ar and /no-such-page 404 with the bilingual h1 and noindex; /build-info.json 404 until
-//   EXPECT_BUILD_INFO is flipped at Step 25a.
+//   pages, /ar, /no-such-page and /en/stories/two-paths/read 404 with the bilingual h1 and
+//   noindex; /build-info.json 404 until EXPECT_BUILD_INFO is flipped at Step 25a.
 // - launched (after Step 25b): "/" 200 with both gate links; /en and /hi 200 with <html lang>;
-//   unmatched URLs 404.
+//   unmatched URLs 404, /en/stories/two-paths/read among them.
+// - /en/stories/two-paths/read (C18; design p1-step10-design.md §2.1, P1-4b) is a player URL for a
+//   fixture story id, which Production never builds, so each Production deployment proves on Vercel
+//   itself that it is the bilingual 404: gated, through the [locale] segment's empty params;
+//   launched, through the player route's dynamicParams 404 (dynamicParams = false).
 // - always: the exact spec CSP and the 3 other security headers on every response, and no
 //   Set-Cookie anywhere (spec §9).
 // - no staging banner (design p1-step9-design.md §4.5; P1-2c): on "/" in both states, on /en and
@@ -50,8 +54,12 @@ export const DEADLINE_MS = 10 * 60_000
 export const REQUEST_TIMEOUT_MS = 15_000
 const MAX_BODY_BYTES = 1024 * 1024
 
-/** Unmatched URLs probed in both states. */
-const UNMATCHED = ['/ar', '/no-such-page'] as const
+/**
+ * Unmatched URLs probed in both states. The player path names a fixture story id that Production
+ * never builds (C18, P1-4b): gated, the [locale] segment's empty params make it a 404; launched,
+ * the player route's dynamicParams 404 does.
+ */
+const UNMATCHED = ['/ar', '/no-such-page', '/en/stories/two-paths/read'] as const
 
 /** The redirect script's first call; the RSC payload repeats the script escaped. */
 const REDIRECT_MARKER = 'getEntriesByType('

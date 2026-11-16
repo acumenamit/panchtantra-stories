@@ -5,7 +5,11 @@
 // P1-2c (design p1-step9-design.md §4.5, §10.1): [staging-banner], its second lock (the loader's
 // stagingPointerAllowed), readContentMode and the summary line every runCheckBuild run prints.
 // The banner's marker, attribute and text come from src/ui/root/staging.ts, never retyped.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+// P1-4b (design p1-step10-design.md §9.1 G1, G2, §10.1 item 5): [player-pages] and
+// [package-text-leak] with every listed negative, on the 3 fixture packages and strictly parsed
+// variants of them, and the two player lines every runCheckBuild run prints.
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +18,8 @@ import { resolveLaunch, type Env, type LaunchDecision } from '../src/config/laun
 import type { BuildInfo } from '../src/core/content/build-info'
 import { GATE_MODES, type GateMode } from '../src/core/content/gates'
 import { jcsBytes } from '../src/core/hashing'
+import { ENABLED_LOCALE_CODES } from '../src/core/locales'
+import { StoryPackageV1 } from '../src/core/package/v1'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import {
   STAGING_BANNER_ATTRIBUTE,
@@ -23,18 +29,28 @@ import {
 import {
   checkBuild,
   checkContentOutputs,
+  checkPackageTextLeak,
+  checkPlayerPages,
   checkStagingBanner,
   COMING_SOON_MAIN,
   contentModeLine,
   DISAGREEMENT_HINT,
   escapeNonAscii,
   leakForms,
+  MIN_LEAK_LENGTH,
+  NO_CONTENT,
+  packageTextForms,
+  packageTextValues,
+  PLAYER_PATTERN,
+  playerLine,
+  readBuiltContent,
   readCatalogues,
   readContentMode,
   readContentOutputs,
   ROBOTS_META,
   runCheckBuild,
   type BuildOutput,
+  type BuiltContent,
   type CatalogueValue,
   type ContentMode,
   type ContentOutputs,
@@ -201,6 +217,114 @@ const failuresOf = (
   decision: LaunchDecision,
   catalogue: readonly CatalogueValue[] = CATALOGUE,
 ) => checkBuild(output, decision, catalogue).failures
+
+// ---- the story player (P1-4b, design p1-step10-design.md §9.1 G1, G2) ----
+
+/** The two player lines of a build with no player page and no package (§10.1 item 5). */
+const NO_PLAYER_LINES = ['player pages: 0 (expected 0); package text values scanned: 0']
+/** The same lines when the build output could not be read (a [read] failure). */
+const UNREAD_PLAYER_LINES = [
+  'player pages: unknown (expected 0); package text values scanned: unknown',
+]
+
+const fixture = (storyId: string): StoryPackageV1 =>
+  StoryPackageV1.parse(
+    JSON.parse(readFileSync(join(storyboard, 'fixtures', 'packages', `${storyId}.json`), 'utf8')),
+  )
+/** The 3 fixture packages: en and hi each; 110 text lines of 16 or more code units in all. */
+const FIXTURES = ['lantern-walk', 'river-stones', 'two-paths'].map(fixture)
+const TWO_PATHS = fixture('two-paths')
+
+/** A copy of `pkg` changed by `edit`, strictly parsed again, so every sample is a valid package. */
+function variant(pkg: StoryPackageV1, edit: (draft: StoryPackageV1) => void): StoryPackageV1 {
+  const draft = structuredClone(pkg)
+  edit(draft)
+  return StoryPackageV1.parse(draft)
+}
+
+/** two-paths in English only (C8: its hi page is unexpected). */
+const EN_ONLY = variant(TWO_PATHS, (d) => {
+  d.locales = ['en']
+  delete d.text.hi
+})
+
+/** An asset id for the alt-text sample (alt values are package text too). */
+const ALT_ID = 'a'.repeat(64)
+
+/**
+ * two-paths with a value of 16 or more code units in every text field of en, with a multi-line
+ * passage (an apostrophe, a `</` and a 15-unit line), an emoji-led choice and a curly apostrophe,
+ * plus an ar locale (in the package, not enabled), whose text must be scanned too.
+ */
+const SAMPLE = variant(TWO_PATHS, (d) => {
+  const en = d.text.en!
+  en.title = 'The sample story title for tests'
+  en.description = 'A description that is long enough.'
+  en.theme = 'A theme that is long enough'
+  en.duration = 'A duration, long enough'
+  en.book = 'A book line, long enough'
+  en.alt = { [ALT_ID]: 'An alt text that is long enough' }
+  en.nodes.start!.text =
+    'First line of the opening passage.\n\nSecond line: it\'s a "quoted" word.\n' +
+    'Third line holds </b> markup.\n15 units, short\n16 units: kept!!'
+  en.nodes.start!.question = 'Which way isn’t the long way home?'
+  en.nodes.start!.choices = {
+    c1: '🐢 Take the slow and steady path',
+    c2: '🐇 Run the quick path now',
+  }
+  en.nodes.ending_wise!.lesson = 'The lesson of the wise ending.'
+  d.locales = ['en', 'hi', 'ar']
+  const ar = structuredClone(en)
+  ar.title = 'Arabic sample title, long enough'
+  ar.description = 'Arabic description, long enough'
+  ar.theme = 'Arabic theme, long enough'
+  ar.duration = 'Arabic duration, long enough'
+  ar.book = 'Arabic book line, long enough'
+  ar.alt = { [ALT_ID]: 'Arabic alt text, long enough' }
+  for (const [id, node] of Object.entries(ar.nodes)) {
+    node.text = `Arabic passage of ${id}, long.`
+    if (node.question !== undefined) node.question = `Arabic question of ${id}?`
+    if (node.choices !== undefined) {
+      node.choices = Object.fromEntries(
+        Object.keys(node.choices).map((c) => [c, `Arabic choice ${c} of ${id}`]),
+      )
+    }
+    if (node.lesson !== undefined) node.lesson = `Arabic lesson of ${id}, long.`
+  }
+  d.text.ar = ar
+})
+
+const contentOf = (
+  packages: readonly StoryPackageV1[],
+  storyIds = packages.map((pkg) => pkg.storyId),
+): BuiltContent => ({ storyIds, packages, problems: [] })
+
+/** A player page as Next writes it (P1-4b): skip link, hint script, then the island, one main. */
+const playerPage = (code: string, main = '<main id="main" tabindex="-1" class="x_main">') =>
+  doc(
+    code,
+    `<title>Two Paths – Storyboard</title>${ROBOTS_META}`,
+    '<a href="#main" class="x_skip">Skip</a><script>(function(){try{}catch(e){}})()</script>' +
+      `<div data-player="" data-run-phase="opening"><header><a href="/${code}" data-exit="">x</a>` +
+      `</header>${main}<div data-run="" data-epoch="0"><h1>x</h1></div><div role="status"></div>` +
+      '</main></div>',
+  )
+
+const playerPath = (code: string, storyId: string) => `${code}/stories/${storyId}/read.html`
+
+/** `base` with the player pattern entry and, unless gated, a page per story and enabled locale. */
+function withPlayers(base: BuildOutput, packages: readonly StoryPackageV1[]): BuildOutput {
+  return changed(base, (o) => {
+    o.manifest.dynamicRoutes![PLAYER_PATTERN] = pattern('^/([^/]+?)/stories/([^/]+?)/read(?:/)?$')
+    if (!o.html.has('en.html')) return // gated: the pattern entry only, as Next writes it
+    for (const pkg of packages) {
+      for (const code of ENABLED_LOCALE_CODES.filter((c) => pkg.locales.includes(c))) {
+        o.manifest.routes![`/${code}/stories/${pkg.storyId}/read`] = page(PLAYER_PATTERN)
+        o.html.set(playerPath(code, pkg.storyId), playerPage(code))
+      }
+    }
+  })
+}
 
 // ---- the staging banner (P1-2c) ----
 
@@ -611,6 +735,573 @@ describe('the real catalogues', () => {
   })
 })
 
+describe('[player-pages] (P1-4b, design p1-step10-design.md §9.1 G1)', () => {
+  const CONTENT = contentOf(FIXTURES)
+  const OPEN_PLAYERS = withPlayers(openOutput(), FIXTURES)
+  const report = (failures: string[], pages: number, expected: number | null) => ({
+    failures,
+    pages,
+    expected,
+  })
+
+  it('passes an open build with one page per listed story and enabled locale (6)', () => {
+    expect(checkPlayerPages(OPEN_PLAYERS, OPEN, CONTENT)).toEqual(report([], 6, 6))
+    const full = checkBuild(OPEN_PLAYERS, OPEN, CATALOGUE, CONTENT)
+    expect(full.failures).toEqual([])
+    expect(full.launchLine).toBe('reader launch: open (review); locale routes: 10')
+  })
+
+  it('expects no player page while gated, or without content', () => {
+    const gated = withPlayers(gatedOutput(), FIXTURES)
+    expect(checkPlayerPages(gated, GATED, CONTENT)).toEqual(report([], 0, 0))
+    expect(checkBuild(gated, GATED, CATALOGUE, CONTENT).failures).toEqual([])
+    expect(checkPlayerPages(openOutput(), OPEN, NO_CONTENT)).toEqual(report([], 0, 0))
+    expect(checkPlayerPages(openOutput(), OPEN, contentOf([]))).toEqual(report([], 0, 0))
+  })
+
+  it('expects only the enabled locales of each package ([en, hi, ar] gives 2 pages)', () => {
+    const output = withPlayers(openOutput(), [SAMPLE])
+    expect([...output.html.keys()].filter((p) => p.includes('/stories/'))).toEqual([
+      playerPath('en', 'two-paths'),
+      playerPath('hi', 'two-paths'),
+    ])
+    expect(checkPlayerPages(output, OPEN, contentOf([SAMPLE]))).toEqual(report([], 2, 2))
+  })
+
+  it.each<[string, (o: { html: Map<string, string> }) => void, BuiltContent, string[]]>([
+    [
+      'an extra page for a story build-info does not list',
+      (o) => o.html.set(playerPath('en', 'other-story'), playerPage('en')),
+      CONTENT,
+      [
+        `[player-pages] unexpected ${playerPath('en', 'other-story')} (build-info lists no story other-story)`,
+      ],
+    ],
+    [
+      'a missing hi page',
+      (o) => o.html.delete(playerPath('hi', 'two-paths')),
+      CONTENT,
+      [`[player-pages] missing ${playerPath('hi', 'two-paths')}`],
+    ],
+    [
+      'a page under a disabled locale',
+      (o) => o.html.set(playerPath('ar', 'two-paths'), playerPage('ar')),
+      CONTENT,
+      [`[player-pages] unexpected ${playerPath('ar', 'two-paths')} (ar is not an enabled locale)`],
+    ],
+    [
+      'a hi page for an en-only package (C8)',
+      () => undefined,
+      contentOf([FIXTURES[0]!, FIXTURES[1]!, EN_ONLY]),
+      [
+        `[player-pages] unexpected ${playerPath('hi', 'two-paths')} (package two-paths has no hi text)`,
+      ],
+    ],
+    [
+      'a page with two mains',
+      (o) => {
+        const path = playerPath('en', 'lantern-walk')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '</main><main id="main"></main>'),
+        )
+      },
+      CONTENT,
+      [`[player-pages] ${playerPath('en', 'lantern-walk')}: <main id="main" 2 time(s)`],
+    ],
+    [
+      'a page with main#main and a second main without an id (two main landmarks, F1)',
+      (o) => {
+        const path = playerPath('en', 'lantern-walk')
+        o.html.set(path, (o.html.get(path) ?? '').replace('</main>', '</main><main></main>'))
+      },
+      CONTENT,
+      [`[player-pages] ${playerPath('en', 'lantern-walk')}: <main 2 time(s)`],
+    ],
+    [
+      'a page with main#main and a second main with other attributes (F1)',
+      (o) => {
+        const path = playerPath('hi', 'two-paths')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '</main><main\nclass="x" id="other"></main>'),
+        )
+      },
+      CONTENT,
+      [`[player-pages] ${playerPath('hi', 'two-paths')}: <main 2 time(s)`],
+    ],
+    [
+      'a page with main#main and a second main landmark written as role="main" (R2-G1-7)',
+      (o) => {
+        const path = playerPath('en', 'two-paths')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '</main><div role="main">x</div>'),
+        )
+      },
+      CONTENT,
+      [`[player-pages] ${playerPath('en', 'two-paths')}: <main 2 time(s)`],
+    ],
+    [
+      'a page with a role="main" element inside main#main (R2-G1-7)',
+      (o) => {
+        const path = playerPath('hi', 'river-stones')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '<section\nrole="main"></section></main>'),
+        )
+      },
+      CONTENT,
+      [`[player-pages] ${playerPath('hi', 'river-stones')}: <main 2 time(s)`],
+    ],
+    [
+      'a page whose only main is <main id="main-x"> (not counted, C8)',
+      (o) => o.html.set(playerPath('hi', 'lantern-walk'), playerPage('hi', '<main id="main-x">')),
+      CONTENT,
+      [`[player-pages] ${playerPath('hi', 'lantern-walk')}: <main id="main" 0 time(s)`],
+    ],
+    [
+      'a page whose main has no id',
+      (o) => o.html.set(playerPath('hi', 'lantern-walk'), playerPage('hi', '<main tabindex="-1">')),
+      CONTENT,
+      [`[player-pages] ${playerPath('hi', 'lantern-walk')}: <main id="main" 0 time(s)`],
+    ],
+    [
+      'a page whose html lang is wrong',
+      (o) => o.html.set(playerPath('hi', 'river-stones'), playerPage('en')),
+      CONTENT,
+      [`[player-pages] ${playerPath('hi', 'river-stones')}: <html lang> is not hi`],
+    ],
+  ])('fails %s', (_name, edit, content, failures) => {
+    const output = changed(OPEN_PLAYERS, edit)
+    expect(checkPlayerPages(output, OPEN, content).failures).toEqual(failures)
+  })
+
+  it.each([
+    ['class first', '<main class="x_main" tabindex="-1" id="main">'],
+    ['id last before >', '<main tabindex="-1" class="x_main" id="main">'],
+    ['a line break before id', '<main class="x_main"\nid="main">'],
+    ['a main that also says role="main" (R2-G1-7)', '<main id="main" role="main" tabindex="-1">'],
+  ])('counts a main whose attributes come in another order once: %s (C8)', (_name, main) => {
+    const output = changed(OPEN_PLAYERS, (o) => {
+      o.html.set(playerPath('en', 'river-stones'), playerPage('en', main))
+    })
+    expect(checkPlayerPages(output, OPEN, CONTENT)).toEqual(report([], 6, 6))
+  })
+
+  it.each([
+    ['a <mainly> element', '<mainly>x</mainly>'],
+    ['a custom <main-menu> element', '<main-menu>x</main-menu>'],
+    ['escaped text that names a main', '<p>&lt;main id="main"&gt;</p>'],
+    ['escaped text that names a role', '<p>&lt;div role=&quot;main&quot;&gt;</p>'],
+    ['another role', '<div role="mainland">x</div><div data-role="main">x</div>'],
+  ])('does not count %s as a second main (F1)', (_name, extra) => {
+    const output = changed(OPEN_PLAYERS, (o) => {
+      const path = playerPath('en', 'two-paths')
+      o.html.set(path, (o.html.get(path) ?? '').replace('</main>', `${extra}</main>`))
+    })
+    expect(checkPlayerPages(output, OPEN, CONTENT)).toEqual(report([], 6, 6))
+  })
+
+  it('fails any player page in a gated build, with or without content', () => {
+    const output = changed(withPlayers(gatedOutput(), FIXTURES), (o) => {
+      o.html.set(playerPath('en', 'two-paths'), playerPage('en'))
+    })
+    for (const content of [CONTENT, NO_CONTENT]) {
+      expect(checkPlayerPages(output, GATED, content)).toEqual(
+        report([`[player-pages] gated build has ${playerPath('en', 'two-paths')}`], 1, 0),
+      )
+    }
+  })
+
+  it('fails a player page in an open build without content', () => {
+    expect(checkPlayerPages(withPlayers(openOutput(), [TWO_PATHS]), OPEN, NO_CONTENT)).toEqual(
+      report(
+        [
+          `[player-pages] unexpected ${playerPath('en', 'two-paths')} (build-info lists no story two-paths)`,
+          `[player-pages] unexpected ${playerPath('hi', 'two-paths')} (build-info lists no story two-paths)`,
+        ],
+        2,
+        0,
+      ),
+    )
+  })
+
+  it('needs the player pattern entry in an open build with at least one story', () => {
+    const output = changed(OPEN_PLAYERS, (o) => {
+      delete o.manifest.dynamicRoutes![PLAYER_PATTERN]
+    })
+    expect(checkBuild(output, OPEN, CATALOGUE, contentOf([TWO_PATHS])).failures).toEqual([
+      '[dynamic-routes] dynamicRoutes has no /[locale]/stories/[storyId]/read entry (design R23)',
+    ])
+    // Not without a story, and not while gated.
+    expect(checkBuild(openOutput(), OPEN, CATALOGUE, contentOf([])).failures).toEqual([])
+    expect(checkBuild(openOutput(), OPEN, CATALOGUE).failures).toEqual([])
+    expect(checkBuild(gatedOutput(), GATED, CATALOGUE, CONTENT).failures).toEqual([])
+  })
+
+  it('names a package that could not be read, and expects an unknown count', () => {
+    const content: BuiltContent = {
+      storyIds: ['two-paths'],
+      packages: [],
+      problems: ['.content/packages/two-paths.json is missing'],
+    }
+    expect(checkPlayerPages(withPlayers(openOutput(), [TWO_PATHS]), OPEN, content)).toEqual(
+      report(['[player-pages] .content/packages/two-paths.json is missing'], 2, null),
+    )
+  })
+
+  it('prints one value-free line, in the design §8 form', () => {
+    expect(playerLine(6, 6, 110)).toBe(
+      'player pages: 6 (expected 6); package text values scanned: 110',
+    )
+    expect(playerLine(null, null, null)).toBe(
+      'player pages: unknown (expected unknown); package text values scanned: unknown',
+    )
+  })
+})
+
+describe('readBuiltContent (P1-4b)', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** A root with these package files and a build-info listing `listed`. */
+  function rootWith(files: Record<string, string | Uint8Array>, listed: readonly StoryPackageV1[]) {
+    const root = mkdtempSync(join(tmpdir(), 'check-build-content-'))
+    dirs.push(root)
+    mkdirSync(join(root, '.content', 'packages'), { recursive: true })
+    for (const [id, bytes] of Object.entries(files)) {
+      writeFileSync(join(root, '.content', 'packages', `${id}.json`), bytes)
+    }
+    const stories = listed.map((pkg) => ({
+      storyId: pkg.storyId,
+      version: pkg.version,
+      packageSha256: 'b'.repeat(64),
+    }))
+    return { root, info: jcsBytes(buildInfo('fixtures', stories)) }
+  }
+
+  it('reads every listed package in build-info order, strictly parsed', () => {
+    const [lantern, river, two] = FIXTURES as [StoryPackageV1, StoryPackageV1, StoryPackageV1]
+    const { root, info } = rootWith(
+      Object.fromEntries(FIXTURES.map((pkg) => [pkg.storyId, jcsBytes(pkg)])),
+      [two, lantern, river],
+    )
+    expect(readBuiltContent(root, info)).toEqual({
+      storyIds: ['two-paths', 'lantern-walk', 'river-stones'],
+      packages: [two, lantern, river],
+      problems: [],
+    })
+  })
+
+  it('is no content without a build-info, or with one that is not strictly valid', () => {
+    const { root } = rootWith({ 'two-paths': jcsBytes(TWO_PATHS) }, [TWO_PATHS])
+    expect(readBuiltContent(root, null)).toEqual(NO_CONTENT)
+    expect(readBuiltContent(root, new TextEncoder().encode('{'))).toEqual(NO_CONTENT)
+    expect(readBuiltContent(root, jcsBytes({ ...buildInfo('fixtures'), extra: 1 }))).toEqual(
+      NO_CONTENT,
+    )
+  })
+
+  it('names a missing, non-strict or mismatched package by file, never a value', () => {
+    const secret = ['a', 'secret', 'value'].join('_')
+    const other = variant(TWO_PATHS, (d) => {
+      d.storyId = 'other-story'
+    })
+    const { root, info } = rootWith(
+      {
+        'two-paths': JSON.stringify({ ...TWO_PATHS, extra: secret }),
+        'river-stones': jcsBytes(other),
+        'lantern-walk': `{"__proto__":{"x":"${secret}"}}`,
+      },
+      [TWO_PATHS, FIXTURES[1]!, FIXTURES[0]!, EN_ONLY],
+    )
+    const content = readBuiltContent(root, info)
+    expect(content).toEqual({
+      storyIds: ['two-paths', 'river-stones', 'lantern-walk', 'two-paths'],
+      packages: [],
+      problems: [
+        '.content/packages/two-paths.json failed strict parse',
+        '.content/packages/river-stones.json names another storyId',
+        '.content/packages/lantern-walk.json failed strict parse',
+        '.content/packages/two-paths.json failed strict parse',
+      ],
+    })
+    expect(JSON.stringify(content)).not.toContain(secret)
+    rmSync(join(root, '.content', 'packages', 'two-paths.json'))
+    expect(readBuiltContent(root, info).problems[0]).toBe(
+      '.content/packages/two-paths.json is missing',
+    )
+  })
+})
+
+describe('[package-text-leak] (C-3, P1-4b, design p1-step10-design.md §9.1 G2)', () => {
+  const CONTENT = contentOf([SAMPLE])
+  /** openOutput() with one more chunk holding `js`. */
+  const leak = (js: string) =>
+    changed(openOutput(), (o) => {
+      o.staticJs.set('chunks/leak.js', js)
+    })
+  /** Design §8 names a node's field "node <id> field <f>" and a package field "node - field <f>". */
+  const where = (field: string): string => {
+    const [, node, name] = /^nodes\.([^.]+)\.(.+)$/.exec(field) ?? []
+    return node === undefined ? `node - field ${field}` : `node ${node} field ${name}`
+  }
+  const holds = (locale: string, field: string, note = '') =>
+    `[package-text-leak] .next/static/chunks/leak.js: storyId two-paths locale ${locale} ${where(field)}${note}`
+  const valueOf = (locale: string, field: string): string => {
+    const value = packageTextValues(SAMPLE).find((v) => v.locale === locale && v.field === field)
+    if (!value) throw new Error(`no value ${locale} ${field}`)
+    return value.line
+  }
+  const START = 'nodes.start.text'
+
+  it('passes the fixtures against the sample chunks: 110 values scanned', () => {
+    expect(checkPackageTextLeak(openOutput(), contentOf(FIXTURES))).toEqual({
+      failures: [],
+      values: 110,
+    })
+  })
+
+  it('reads every text field in every locale of the package, split on "\\n", 16 code units or more', () => {
+    const values = packageTextValues(SAMPLE)
+    const fields = new Set(values.map((v) => `${v.locale} ${v.field}`))
+    for (const field of [
+      'en title',
+      'en description',
+      'en theme',
+      'en duration',
+      'en book',
+      `en alt.${ALT_ID}`,
+      `en ${START}`,
+      'en nodes.start.question',
+      'en nodes.start.choices.c1',
+      'en nodes.start.choices.c2',
+      'en nodes.ending_wise.lesson',
+      'hi title',
+      `hi ${START}`,
+      'hi nodes.wise_path.text',
+      'hi nodes.ending_quick.lesson',
+      'ar title', // a locale of the package that is not enabled
+      `ar ${START}`,
+      `ar alt.${ALT_ID}`,
+    ]) {
+      expect(fields, field).toContain(field)
+    }
+    expect(values.filter((v) => v.locale === 'en' && v.field === START).map((v) => v.line)).toEqual(
+      [
+        'First line of the opening passage.',
+        'Second line: it\'s a "quoted" word.',
+        'Third line holds </b> markup.',
+        '16 units: kept!!',
+      ],
+    )
+    expect(values.every((v) => v.line.length >= MIN_LEAK_LENGTH && !v.line.includes('\n'))).toBe(
+      true,
+    )
+    expect(values.map((v) => v.line)).not.toContain('15 units, short')
+  })
+
+  it.each<[string, () => string, string[]]>([
+    ['the raw line', () => `var a="${valueOf('hi', 'title')}";`, [holds('hi', 'title')]],
+    [
+      'the line \\u-escaped in lower case',
+      () => `var a="${escapeNonAscii(valueOf('hi', 'title'), false)}";`,
+      [holds('hi', 'title', ' (\\u-escaped)')],
+    ],
+    [
+      'the line \\u-escaped in upper case',
+      () => `var a="${escapeNonAscii(valueOf('hi', 'title'), true)}";`,
+      [holds('hi', 'title', ' (\\u-escaped)')],
+    ],
+    [
+      'one passage line without the rest of the passage',
+      () => 'var a="Third line holds </b> markup.";',
+      [holds('en', START)],
+    ],
+    [
+      'a line next to an escaped newline (the whole passage as a JS string)',
+      () =>
+        `var a=${JSON.stringify(SAMPLE.text.en!.nodes.start!.text.split('\n').slice(0, 3).join('\n'))};`,
+      [holds('en', START), holds('en', START, ' (JSON-escaped)')],
+    ],
+    [
+      'a value with " written \\"',
+      () => `var a=${JSON.stringify('Second line: it\'s a "quoted" word.')};`,
+      [holds('en', START, ' (JSON-escaped)')],
+    ],
+    [
+      '’ written \\u2019',
+      () => 'var a="Which way isn\\u2019t the long way home?";',
+      [holds('en', 'nodes.start.question', ' (\\u-escaped)')],
+    ],
+    [
+      'an emoji-led choice as a surrogate-pair escape, lower case',
+      () => 'var a="\\ud83d\\udc22 Take the slow and steady path";',
+      [holds('en', 'nodes.start.choices.c1', ' (\\u-escaped)')],
+    ],
+    [
+      'an emoji-led choice as a surrogate-pair escape, upper case',
+      () => 'var a="\\uD83D\\uDC07 Run the quick path now";',
+      [holds('en', 'nodes.start.choices.c2', ' (\\u-escaped)')],
+    ],
+    [
+      "a line with ' written \\' (a single-quoted string, C9)",
+      () => "var a='Second line: it\\'s a \"quoted\" word.';",
+      [holds('en', START, " (with \\')")],
+    ],
+    [
+      'a line with </ written <\\/ (C9)',
+      () => 'var a="Third line holds <\\/b> markup.";',
+      [holds('en', START, ' (with <\\/)')],
+    ],
+    [
+      'a line of a locale that is not enabled',
+      () => `var a="${valueOf('ar', 'title')}";`,
+      [holds('ar', 'title')],
+    ],
+  ])('fails %s', (_name, js, failures) => {
+    const report = checkPackageTextLeak(leak(js()), CONTENT)
+    expect(report.failures).toEqual(failures)
+    expect(report.values).toBe(packageTextValues(SAMPLE).length)
+  })
+
+  it.each([
+    ['en', 'title'],
+    ['en', 'description'],
+    ['en', 'theme'],
+    ['en', 'duration'],
+    ['en', 'book'],
+    ['en', `alt.${ALT_ID}`],
+    ['en', 'nodes.start.question'],
+    ['en', 'nodes.start.choices.c1'],
+    ['en', 'nodes.ending_wise.lesson'],
+    ['hi', START],
+    ['hi', 'nodes.wise_path.text'],
+    ['hi', 'nodes.ending_quick.lesson'],
+  ])('fails a raw %s %s line', (locale, field) => {
+    expect(checkPackageTextLeak(leak(`/*${valueOf(locale, field)}*/`), CONTENT).failures).toContain(
+      holds(locale, field),
+    )
+  })
+
+  it('names ids and files only, never the text', () => {
+    const line = valueOf('hi', START)
+    const { failures } = checkPackageTextLeak(leak(`var a="${line}";`), CONTENT)
+    expect(failures).toEqual([holds('hi', START)])
+    expect(failures.join('\n')).not.toContain(line)
+    // The design §8 form, written out once without the helper.
+    expect(failures).toEqual([
+      '[package-text-leak] .next/static/chunks/leak.js: storyId two-paths locale hi node start field text',
+    ])
+    expect(
+      checkPackageTextLeak(leak(`var a="${valueOf('en', 'title')}";`), CONTENT).failures,
+    ).toEqual([
+      '[package-text-leak] .next/static/chunks/leak.js: storyId two-paths locale en node - field title',
+    ])
+  })
+
+  // F4: the crossings of the forms a minifier can write. Each sample line holds what makes its
+  // crossing differ from every simpler form, so the note names the crossing.
+  const CROSS = variant(TWO_PATHS, (d) => {
+    d.text.en!.nodes.start!.text = [
+      'He wrote "</b>" on the old stone wall.',
+      "It's the fox’s turn now, said the crow.",
+      "It's </i> the end of the old road.",
+      'रवि ने "</b>" लिखा और चला गया।',
+    ].join('\n')
+  })
+  const crossLine = (index: number): string => CROSS.text.en!.nodes.start!.text.split('\n')[index]!
+  const crossHolds = (note: string) =>
+    `[package-text-leak] .next/static/chunks/leak.js: storyId two-paths locale en node start field text${note}`
+
+  it.each<[string, () => string, string]>([
+    [
+      'the JSON-escaped line with every </ written <\\/',
+      () => `var a=${JSON.stringify(crossLine(0)).replace(/<\//g, '<\\/')};`,
+      ' (JSON-escaped with <\\/)',
+    ],
+    [
+      "the line with every ' written \\', \\u-escaped (a single-quoted ASCII-only string)",
+      () => `var a='${escapeNonAscii(crossLine(1).replace(/'/g, "\\'"), false)}';`,
+      " (with \\', \\u-escaped)",
+    ],
+    [
+      "the line with every ' written \\' and every </ written <\\/",
+      () => `var a='${crossLine(2).replace(/'/g, "\\'").replace(/<\//g, '<\\/')}';`,
+      " (with \\' and <\\/)",
+    ],
+    [
+      'the JSON-escaped line with </ written <\\/, \\u-escaped in upper case',
+      () =>
+        `var a="${escapeNonAscii(JSON.stringify(crossLine(3)).slice(1, -1).replace(/<\//g, '<\\/'), true)}";`,
+      ' (JSON-escaped with <\\/, \\u-escaped)',
+    ],
+  ])('fails a crossing of forms: %s (F4)', (_name, js, note) => {
+    expect(checkPackageTextLeak(leak(js()), contentOf([CROSS])).failures).toEqual([
+      crossHolds(note),
+    ])
+  })
+
+  it('ignores lines shorter than 16 code units', () => {
+    const short = FIXTURES.flatMap((pkg) =>
+      Object.values(pkg.text).flatMap((t) =>
+        [
+          t!.title,
+          t!.theme,
+          t!.duration,
+          t!.book,
+          ...Object.values(t!.nodes).flatMap((n) => [n.text, ...Object.values(n.choices ?? {})]),
+        ].flatMap((v) => v.split('\n')),
+      ),
+    ).filter((line) => line.length < MIN_LEAK_LENGTH)
+    expect(short.length).toBeGreaterThan(0)
+    const js = `var s=[${[...short, '15 units, short'].map((s) => JSON.stringify(s)).join(',')}];`
+    expect(checkPackageTextLeak(leak(js), contentOf([...FIXTURES, SAMPLE])).failures).toEqual([])
+  })
+
+  it('passes an empty build-info with 0 values, and fails a listed story with none scanned', () => {
+    expect(checkPackageTextLeak(openOutput(), contentOf([]))).toEqual({ failures: [], values: 0 })
+    expect(checkPackageTextLeak(openOutput(), NO_CONTENT)).toEqual({ failures: [], values: 0 })
+    const unread: BuiltContent = { storyIds: ['two-paths', 'x-y'], packages: [], problems: ['p'] }
+    expect(checkPackageTextLeak(openOutput(), unread)).toEqual({
+      failures: ['[package-text-leak] content is loaded but 0 values were scanned'],
+      values: 0,
+    })
+  })
+
+  it('documented limit: a line split across concatenated string literals is not found', () => {
+    const js = 'var a="First line of the "+"opening passage.";'
+    expect(checkPackageTextLeak(leak(js), CONTENT).failures).toEqual([])
+  })
+
+  it('builds each form once, with the note a failure carries', () => {
+    expect(packageTextForms('plain ASCII line here')).toEqual([['plain ASCII line here', '']])
+    expect(packageTextForms('it\'s </b> "x" पेज')).toEqual([
+      ['it\'s </b> "x" पेज', ''],
+      ['it\'s </b> "x" \\u092a\\u0947\\u091c', ' (\\u-escaped)'],
+      ['it\'s </b> "x" \\u092A\\u0947\\u091C', ' (\\u-escaped)'],
+      ['it\'s </b> \\"x\\" पेज', ' (JSON-escaped)'],
+      ['it\'s </b> \\"x\\" \\u092a\\u0947\\u091c', ' (JSON- and \\u-escaped)'],
+      ['it\'s </b> \\"x\\" \\u092A\\u0947\\u091C', ' (JSON- and \\u-escaped)'],
+      ['it\\\'s </b> "x" पेज', " (with \\')"],
+      ['it\\\'s </b> "x" \\u092a\\u0947\\u091c', " (with \\', \\u-escaped)"],
+      ['it\\\'s </b> "x" \\u092A\\u0947\\u091C', " (with \\', \\u-escaped)"],
+      ['it\'s <\\/b> "x" पेज', ' (with <\\/)'],
+      ['it\'s <\\/b> "x" \\u092a\\u0947\\u091c', ' (with <\\/, \\u-escaped)'],
+      ['it\'s <\\/b> "x" \\u092A\\u0947\\u091C', ' (with <\\/, \\u-escaped)'],
+      ['it\'s <\\/b> \\"x\\" पेज', ' (JSON-escaped with <\\/)'],
+      ['it\'s <\\/b> \\"x\\" \\u092a\\u0947\\u091c', ' (JSON-escaped with <\\/, \\u-escaped)'],
+      ['it\'s <\\/b> \\"x\\" \\u092A\\u0947\\u091C', ' (JSON-escaped with <\\/, \\u-escaped)'],
+      ['it\\\'s <\\/b> "x" पेज', " (with \\' and <\\/)"],
+      ['it\\\'s <\\/b> "x" \\u092a\\u0947\\u091c', " (with \\' and <\\/, \\u-escaped)"],
+      ['it\\\'s <\\/b> "x" \\u092A\\u0947\\u091C', " (with \\' and <\\/, \\u-escaped)"],
+    ])
+  })
+})
+
 describe('runCheckBuild on files', () => {
   const dirs: string[] = []
   afterEach(() => {
@@ -625,12 +1316,14 @@ describe('runCheckBuild on files', () => {
   /**
    * `content` writes the loader's outputs for that mode (.content/build-info.json and its public
    * copy), as a fixtures or storage build has them; null writes none (CONTENT_SOURCE none or unset).
+   * `packages` are written to .content/packages/<id>.json and listed in build-info, in that order.
    */
   function writeRoot(
     output: BuildOutput,
     catalogues = true,
     layout: 'app' | 'route-cache' = 'app',
     content: GateMode | null = null,
+    packages: readonly StoryPackageV1[] = [],
   ): string {
     const root = mkdtempSync(join(tmpdir(), 'check-build-'))
     dirs.push(root)
@@ -639,7 +1332,13 @@ describe('runCheckBuild on files', () => {
       writeFileSync(path, text)
     }
     if (content !== null) {
-      const bytes = jcsBytes(buildInfo(content))
+      const stories = packages.map((pkg) => {
+        const bytes = jcsBytes(pkg)
+        write(join(root, '.content', 'packages', `${pkg.storyId}.json`), bytes)
+        const packageSha256 = createHash('sha256').update(bytes).digest('hex')
+        return { storyId: pkg.storyId, version: pkg.version, packageSha256 }
+      })
+      const bytes = jcsBytes(buildInfo(content, stories))
       write(join(root, '.content', 'build-info.json'), bytes)
       write(join(root, 'public', 'build-info.json'), bytes)
     }
@@ -691,6 +1390,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
+        ...NO_PLAYER_LINES,
         'check-build: ok',
       ],
       err: [],
@@ -706,6 +1406,7 @@ describe('runCheckBuild on files', () => {
     expect(result.out).toEqual([
       'reader launch: open (review); locale routes: 4',
       'content mode: fixtures; staging banner pages: 0 of 6',
+      ...NO_PLAYER_LINES,
       'check-build: ok',
     ])
   })
@@ -721,6 +1422,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
+        ...NO_PLAYER_LINES,
         'check-build: ok',
       ],
       err: [],
@@ -752,7 +1454,7 @@ describe('runCheckBuild on files', () => {
   /** Writes `html` as <path> in a route-cache source folder `source` under `root`. */
   function writeRouteCache(root: string, source: string, path: string, html: string): void {
     const dir = join(root, '.next', 'server', 'route-cache', 'APP_PAGE', source, '$')
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dirname(join(dir, path)), { recursive: true }) // a player page path has folders
     writeFileSync(join(dir, path), html)
   }
 
@@ -768,6 +1470,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
+        ...NO_PLAYER_LINES,
         'check-build: ok',
       ],
       err: [],
@@ -782,6 +1485,7 @@ describe('runCheckBuild on files', () => {
     expect(acrossResult.out).toEqual([
       'reader launch: gated (committed)',
       'content mode: none; staging banner pages: unknown',
+      ...UNREAD_PLAYER_LINES,
     ])
     expect(acrossResult.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
@@ -802,6 +1506,7 @@ describe('runCheckBuild on files', () => {
     expect(result.out).toEqual([
       'reader launch: open (review); locale routes: 0',
       'content mode: fixtures; staging banner pages: 0 of 2',
+      ...NO_PLAYER_LINES,
     ])
     expect(result.err).toEqual([
       expect.stringContaining(`check-build failed [state-agreement] ${DISAGREEMENT_HINT}`),
@@ -816,6 +1521,7 @@ describe('runCheckBuild on files', () => {
     expect(result.out).toEqual([
       'reader launch: gated (committed); locale routes: unknown',
       'content mode: none; staging banner pages: 0 of 0',
+      ...NO_PLAYER_LINES,
     ])
     expect(result.err).toEqual([
       'check-build failed [catalogue] messages/ is missing',
@@ -842,6 +1548,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: fixtures; staging banner pages: 0 of 2',
+        ...NO_PLAYER_LINES,
       ],
       err: [
         'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
@@ -876,6 +1583,7 @@ describe('runCheckBuild on files', () => {
     expect(result.out).toEqual([
       'reader launch: gated (committed)',
       'content mode: staging; staging banner pages: unknown',
+      ...UNREAD_PLAYER_LINES,
     ])
     expect(result.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
@@ -925,6 +1633,7 @@ describe('runCheckBuild on files', () => {
         out: [
           'reader launch: open (review); locale routes: 4',
           'content mode: staging; staging banner pages: 6 of 6',
+          ...NO_PLAYER_LINES,
           'check-build: ok',
         ],
         err: [],
@@ -940,6 +1649,7 @@ describe('runCheckBuild on files', () => {
           out: [
             'reader launch: gated (committed); locale routes: 0',
             'content mode: staging; staging banner pages: 2 of 2',
+            ...NO_PLAYER_LINES,
             'check-build: ok',
           ],
           err: [],
@@ -960,6 +1670,7 @@ describe('runCheckBuild on files', () => {
         out: [
           'reader launch: open (review); locale routes: 4',
           'content mode: staging; staging banner pages: 5 of 6',
+          ...NO_PLAYER_LINES,
         ],
         err: [
           `check-build failed [staging-banner] hi/grown-ups.html: expected exactly one banner (found 0 ${STAGING_BANNER_MARKER})`,
@@ -984,6 +1695,7 @@ describe('runCheckBuild on files', () => {
       expect(result.out).toEqual([
         'reader launch: gated (committed); locale routes: 0',
         'content mode: staging; staging banner pages: 2 of 2',
+        ...NO_PLAYER_LINES,
       ])
       expect(result.err).toEqual([lock])
     }
@@ -1004,6 +1716,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: production; staging banner pages: 0 of 2',
+        ...NO_PLAYER_LINES,
         'check-build: ok',
       ],
       err: [],
@@ -1020,6 +1733,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: open (review); locale routes: 4',
         'content mode: invalid; staging banner pages: 0 of 6',
+        ...NO_PLAYER_LINES,
       ],
       err: ['check-build failed [content-outputs] .content/build-info.json failed strict parse'],
     })
@@ -1037,6 +1751,7 @@ describe('runCheckBuild on files', () => {
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 1 of 2',
+        ...NO_PLAYER_LINES,
       ],
       err: [
         `check-build failed [staging-banner] _not-found.html: holds ${STAGING_BANNER_ATTRIBUTE} 2 time(s), but content mode is none (only a staging build has the banner)`,
@@ -1044,6 +1759,142 @@ describe('runCheckBuild on files', () => {
         'check-build failed [staging-banner] .next/static/chunks/banner.js holds the banner text',
       ],
     })
+  })
+
+  // ---- [player-pages] and [package-text-leak] on files (P1-4b, design p1-step10 §9.1, §10.1) ----
+
+  const REVIEW: Env = { CONTENT_SOURCE: 'fixtures', READER_LAUNCH: 'review' }
+  const REVIEW_LINES = [
+    'reader launch: open (review); locale routes: 10',
+    'content mode: fixtures; staging banner pages: 0 of 12',
+    'player pages: 6 (expected 6); package text values scanned: 110',
+  ]
+
+  it.each(['app', 'route-cache'] as const)(
+    'passes a review build with its 6 player pages in the %s layout (a page only in route-cache counts)',
+    (layout) => {
+      const root = writeRoot(
+        withPlayers(openOutput(), FIXTURES),
+        true,
+        layout,
+        'fixtures',
+        FIXTURES,
+      )
+      expect(run(root, REVIEW)).toEqual({
+        code: 0,
+        out: [...REVIEW_LINES, 'check-build: ok'],
+        err: [],
+      })
+    },
+  )
+
+  it('passes the CI checks build (gated, fixtures loaded): no player page, every value scanned', () => {
+    const root = writeRoot(withPlayers(gatedOutput(), FIXTURES), true, 'app', 'fixtures', FIXTURES)
+    expect(run(root, { CONTENT_SOURCE: 'fixtures' })).toEqual({
+      code: 0,
+      out: [
+        'reader launch: gated (committed); locale routes: 0',
+        'content mode: fixtures; staging banner pages: 0 of 2',
+        'player pages: 0 (expected 0); package text values scanned: 110',
+        'check-build: ok',
+      ],
+      err: [],
+    })
+  })
+
+  it('counts a byte-identical route-cache copy of a player page once', () => {
+    const output = withPlayers(openOutput(), FIXTURES)
+    const root = writeRoot(output, true, 'app', 'fixtures', FIXTURES)
+    const path = playerPath('en', 'two-paths')
+    writeRouteCache(root, 'player-copy', path, output.html.get(path) ?? '')
+    expect(run(root, REVIEW)).toEqual({
+      code: 0,
+      out: [...REVIEW_LINES, 'check-build: ok'],
+      err: [],
+    })
+  })
+
+  it('a player page only in the route-cache layout counts, beside the app layout', () => {
+    const output = withPlayers(openOutput(), FIXTURES)
+    const path = playerPath('hi', 'river-stones')
+    const html = new Map(output.html)
+    html.delete(path)
+    const root = writeRoot({ ...output, html }, true, 'app', 'fixtures', FIXTURES)
+    writeRouteCache(root, 'player-only-here', path, output.html.get(path) ?? '')
+    expect(run(root, REVIEW)).toEqual({
+      code: 0,
+      out: [...REVIEW_LINES, 'check-build: ok'],
+      err: [],
+    })
+  })
+
+  it('fails two different copies of one player page, and prints the player lines as unknown', () => {
+    const output = withPlayers(openOutput(), FIXTURES)
+    const root = writeRoot(output, true, 'app', 'fixtures', FIXTURES)
+    const path = playerPath('en', 'two-paths')
+    writeRouteCache(
+      root,
+      'player-other',
+      path,
+      playerPage('en').replace('<h1>x</h1>', '<h1>y</h1>'),
+    )
+    expect(run(root, REVIEW)).toEqual({
+      code: 1,
+      out: [
+        'reader launch: open (review)',
+        'content mode: fixtures; staging banner pages: unknown',
+        'player pages: unknown (expected 6); package text values scanned: unknown',
+      ],
+      err: [
+        `check-build failed [read] two different prerendered files for ${path} (server/route-cache)`,
+      ],
+    })
+  })
+
+  it('fails a listed package that is missing or not strict, naming the file and no value', () => {
+    const output = withPlayers(openOutput(), [TWO_PATHS])
+    const root = writeRoot(output, true, 'app', 'fixtures', [TWO_PATHS])
+    const file = join(root, '.content', 'packages', 'two-paths.json')
+    const secret = ['not', 'a', 'story', 'value'].join('_')
+    writeFileSync(file, JSON.stringify({ ...TWO_PATHS, extra: secret }))
+    const strict = run(root, REVIEW)
+    expect(strict).toEqual({
+      code: 1,
+      out: [
+        'reader launch: open (review); locale routes: 6',
+        'content mode: fixtures; staging banner pages: 0 of 8',
+        'player pages: 2 (expected unknown); package text values scanned: 0',
+      ],
+      err: [
+        'check-build failed [player-pages] .content/packages/two-paths.json failed strict parse',
+        'check-build failed [package-text-leak] content is loaded but 0 values were scanned',
+      ],
+    })
+    expect(JSON.stringify(strict)).not.toContain(secret)
+    rmSync(file)
+    expect(run(root, REVIEW).err).toEqual([
+      'check-build failed [player-pages] .content/packages/two-paths.json is missing',
+      'check-build failed [package-text-leak] content is loaded but 0 values were scanned',
+    ])
+  })
+
+  it('fails a leak of package text into .next/static, naming the file and ids only', () => {
+    const output = withPlayers(openOutput(), FIXTURES)
+    const line = packageTextValues(TWO_PATHS).find(
+      (v) => v.locale === 'hi' && v.field === 'nodes.start.text',
+    )!
+    const leaked = changed(output, (o) => {
+      o.staticJs.set('chunks/player.js', `var t="${escapeNonAscii(line.line, true)}";`)
+    })
+    const result = run(writeRoot(leaked, true, 'app', 'fixtures', FIXTURES), REVIEW)
+    expect(result).toEqual({
+      code: 1,
+      out: REVIEW_LINES,
+      err: [
+        `check-build failed [package-text-leak] .next/static/chunks/player.js: storyId two-paths locale hi node start field text (\\u-escaped)`,
+      ],
+    })
+    expect(JSON.stringify(result)).not.toContain(line.line)
   })
 })
 
@@ -1336,7 +2187,7 @@ describe('readContentMode and the summary line (P1-2c)', () => {
 })
 
 /** A strict build-info record of this mode (a Storage mode needs at least one GET). */
-function buildInfo(mode: GateMode): BuildInfo {
+function buildInfo(mode: GateMode, stories: BuildInfo['stories'] = []): BuildInfo {
   return {
     schemaVersion: '1.0',
     mode,
@@ -1345,7 +2196,7 @@ function buildInfo(mode: GateMode): BuildInfo {
     snapshotPath: 'catalogue/snapshots/1.json',
     snapshotSha256: 'a'.repeat(64),
     featuredStoryId: null,
-    stories: [],
+    stories,
     excluded: [],
     appVersion: null,
     deploymentId: null,

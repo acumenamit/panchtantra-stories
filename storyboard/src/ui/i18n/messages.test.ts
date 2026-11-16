@@ -1,13 +1,21 @@
 // The UI message catalogues (P1 D8; design p1-step7-design.md §3.4, §6.1, §6.3, §6.5, §6.6,
 // §8.1 item 4; P1-1c). The JSON files are read as text with readFileSync (raw key order; only
-// messages.ts imports them): the 16 keys, parity and order, the ICU subset, argument and plural
+// messages.ts imports them): the design keys, parity and order, the ICU subset, argument and plural
 // parity, the house style, t(), and every key referenced in app/ or src/. Glyph coverage of the
 // Hindi values is in src/ui/fonts/fonts.test.ts.
+// P1-4b (design p1-step10-design.md §0.2, §9.1 G5): Step 10a adds the 4 player keys (owner drafts),
+// the 'player' surface, an explicit table of the arguments each key takes, and a Latin check that
+// reads only the parsed literal text, plural branches included (argument names are not text).
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { parseMessage, strictestKinds, type ParsedMessage } from '../../core/i18n/message-format'
+import {
+  parseMessage,
+  strictestKinds,
+  type ArgKind,
+  type ParsedMessage,
+} from '../../core/i18n/message-format'
 import { ROOT_METADATA } from '../root/metadata'
 import { argumentKinds, hasMessages, translator, type MessageKey } from './messages'
 
@@ -33,7 +41,7 @@ const ALL = LOCALES.flatMap((locale) =>
   entries(locale).map(([key, text]) => [locale, key, text] as const),
 )
 
-/** Design §6.3: the 16 keys Step 7 renders, sorted. */
+/** Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4 player keys (p1-step10 §0.2), sorted. */
 const DESIGN_KEYS = [
   'gate.prompt',
   'gate.remember',
@@ -48,12 +56,58 @@ const DESIGN_KEYS = [
   'notFound.body',
   'notFound.link',
   'notFound.title',
+  'player.allStories',
+  'player.errorTitle',
+  'player.page',
+  'player.startThisAgain',
   'shell.skipToMain',
   'storage.body',
   'storage.title',
 ]
 
-const SURFACES = ['meta', 'gate', 'shell', 'header', 'home', 'grownUps', 'storage', 'notFound']
+const SURFACES = [
+  'meta',
+  'gate',
+  'shell',
+  'header',
+  'home',
+  'grownUps',
+  'storage',
+  'notFound',
+  'player',
+]
+
+/**
+ * Design p1-step10 §9.1 G5: the arguments each key takes, with their kind; every other key takes
+ * none. Each entry also gives sample values and what t() makes of them in each language.
+ */
+const ARGUMENTS: Readonly<
+  Record<
+    string,
+    {
+      readonly kinds: Readonly<Record<string, ArgKind>>
+      readonly sample: Readonly<Record<string, number>>
+      readonly formatted: Readonly<Record<Locale, string>>
+    }
+  >
+> = {
+  'player.page': {
+    kinds: { n: 'any' },
+    sample: { n: 7 },
+    formatted: { en: 'Page 7', hi: 'पेज 7' },
+  },
+}
+
+/** Latin letters, ASCII and fullwidth (U+FF21-FF3A, U+FF41-FF5A). */
+const LATIN = /[A-Za-zＡ-Ｚａ-ｚ]/
+
+/** The literal text of a message, plural branches included; arguments and # are not text. */
+function literalText(message: ParsedMessage): string {
+  return message.parts
+    .flatMap((part) => (part.type === 'plural' ? [...part.branches.values()].flat() : [part]))
+    .map((part) => (part.type === 'text' ? part.value : ' '))
+    .join('')
+}
 
 /** Each plural in the message as [argument, selectors]. */
 function plurals(message: ParsedMessage): [string, string[]][] {
@@ -72,7 +126,7 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the 16 keys of design §6.3, sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7 and Step 10a), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)
@@ -156,8 +210,32 @@ describe('message catalogues: house style (design §3.4)', () => {
     }
   })
 
-  it('hold no Latin letters in Hindi', () => {
-    for (const [key, text] of entries('hi')) expect(text, key).not.toMatch(/[A-Za-z]/)
+  it('hold no Latin letters in Hindi literal text (argument names are not text; G5)', () => {
+    for (const [key, text] of entries('hi')) {
+      expect(literalText(parseMessage(text)), key).not.toMatch(LATIN)
+    }
+  })
+
+  it('the Latin check reads literal text only and catches every form (G5)', () => {
+    const latinIn = (source: string): boolean => LATIN.test(literalText(parseMessage(source)))
+    // Clean: argument names, # and plural syntax are not text.
+    for (const source of [
+      'पेज {n}',
+      '{percent, number}%',
+      '{found, plural, =0 {अभी कोई अंत नहीं मिला} one {{total} में से # अंत मिला} other {{total} में से # अंत मिले}}',
+    ]) {
+      expect(latinIn(source), source).toBe(false)
+    }
+    // Latin in plain text, inside a plural branch, inside =0, and fullwidth (upper and lower).
+    for (const source of [
+      'पेज a {n}',
+      '{n, plural, =0 {कुछ नहीं} one {# page} other {# पेज}}',
+      '{n, plural, =0 {none} one {#} other {#}}',
+      'पेज Ａ',
+      'पेज ｚ',
+    ]) {
+      expect(latinIn(source), source).toBe(true)
+    }
   })
 
   it('spell हिन्दी and कहानियाँ (never हिंदी or कहानियां)', () => {
@@ -210,12 +288,25 @@ describe('messages.ts', () => {
     expect(source.split('\n')[0]).toBe("import 'server-only'")
   })
 
-  it('t() returns every value of both catalogues unchanged (no message takes arguments yet)', () => {
+  it('every key takes exactly the arguments of the table (G5), every other key none', () => {
+    for (const key of Object.keys(ARGUMENTS)) expect(KEYS, key).toContain(key)
+    for (const key of KEYS as MessageKey[]) {
+      expect(Object.fromEntries(argumentKinds(key)), key).toEqual(ARGUMENTS[key]?.kinds ?? {})
+    }
+  })
+
+  it('t() returns every value without arguments unchanged and formats the table keys', () => {
     for (const locale of LOCALES) {
       const t = translator(locale)
       for (const [key, text] of entries(locale)) {
-        expect(t(key as MessageKey)).toBe(text)
-        expect(t(key as MessageKey)).toBe(text)
+        const args = ARGUMENTS[key]
+        if (args === undefined) {
+          expect(t(key as MessageKey)).toBe(text)
+          expect(t(key as MessageKey)).toBe(text)
+        } else {
+          expect(t(key as MessageKey, args.sample), `${locale} ${key}`).toBe(args.formatted[locale])
+          expect(() => t(key as MessageKey), `${locale} ${key}`).toThrow('missing argument')
+        }
       }
     }
   })

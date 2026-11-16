@@ -126,6 +126,13 @@
     --duration-scene: 1200ms;
     --reveal-max: 2500ms;
     --ease-calm: cubic-bezier(0.2, 0, 0, 1);
+
+    /*
+     * The player's saved-run hint failsafe (Step 10, design p1-step10-design.md D11-P5, §4.4): a
+     * run area hidden for a resuming reader shows after this delay if JavaScript never runs. Not a
+     * --duration-* token, so it is never zeroed under reduced motion.
+     */
+    --saved-run-failsafe: 3000ms;
   }
 
   :root[data-text-scale='125'] {

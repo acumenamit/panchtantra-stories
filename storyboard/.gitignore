@@ -4,3 +4,5 @@ next-env.d.ts
 /public/build-info.json
 # Vitest report output (json, junit, blob reporters without outputFile)
 /.vitest/
+# Local cache written by the impeccable editor hook
+/.impeccable/

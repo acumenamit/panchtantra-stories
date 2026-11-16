@@ -105,8 +105,8 @@
  * Optical centring of a Hindi label in a pill (P1-1c). In its line box, Noto Sans Devanagari's ink
  * sits 0.11-0.13em above the centre (hhea 896/-408) and Lora's about 0.13em below (1006/-274), so a
  * Hindi label looks high next to a Latin one. A relative offset moves only the paint, not the
- * layout. Whether every Hindi control gets font-level metric overrides instead is for Step 10
- * (choice buttons).
+ * layout. Step 10 keeps this offset for every Hindi control label (choices, player header links,
+ * error and ending actions), not font-level metric overrides (P1-4b, D11-P26, DEC:23 note).
  */
 .switchName:lang(hi),
 .label:lang(hi) {

@@ -12,6 +12,11 @@
 // - F3: every visible element whose lang differs from <html> has the leading of its own language
 //   (line-height / font-size from tokens.css: hi 2, 1.75, 1.5, 1.45; en 1.9, 1.6, 1.3, 1.25;
 //   English islands on Hindi pages get theirs from the :lang(en) block).
+// P1-4b (design p1-step10-design.md §9.3 loops, C12, F1; Step 10a): the 320 px and F3 loops also
+// visit the two-paths player pages (kind 'player'). A player header holds 2 links (All stories,
+// Grown-ups); the viewport and overlap checks also cover header buttons (Menu from 10b, the story
+// language switch from 10d). A player page has no lang island until 10d: the story container
+// carries the page's lang and there is no switch, so kind 'player' takes 0 islands or more.
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
@@ -267,7 +272,8 @@ test.describe('the reader shell', { tag: '@review' }, () => {
         attribute: document.documentElement.getAttribute('data-text-scale'),
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
-        controls: [...document.querySelectorAll('header a')].map((a) => ({
+        links: document.querySelectorAll('header a').length,
+        controls: [...document.querySelectorAll('header a, header button')].map((a) => ({
           name: a.textContent ?? '',
           ...a.getBoundingClientRect().toJSON(),
         })) as { name: string; left: number; right: number; top: number; bottom: number }[],
@@ -278,8 +284,8 @@ test.describe('the reader shell', { tag: '@review' }, () => {
       )
       expect(layout.attribute).toBe('150')
       expect(layout.scrollWidth, 'horizontal scroll').toBeLessThanOrEqual(layout.clientWidth)
-      expect(layout.controls.length, 'header controls').toBe(
-        route.kind === 'home' || route.kind === 'grown-ups' ? 3 : 0,
+      expect(layout.links, 'header links').toBe(
+        route.kind === 'home' || route.kind === 'grown-ups' ? 3 : route.kind === 'player' ? 2 : 0,
       )
       for (const control of layout.controls) {
         expect(control.right, `${control.name} inside the viewport`).toBeLessThanOrEqual(320)
@@ -336,7 +342,10 @@ test.describe('the reader shell', { tag: '@review' }, () => {
       )
       test.info().annotations.push({ type: 'F3', description })
       console.log(`[shell] F3 ${route.path} (${test.info().project.name}): ${description}`)
-      expect(measured.length, 'lang islands on the page').toBeGreaterThan(0)
+      // Every other route has at least one island (the switch's endonym, the 404's Hindi parts).
+      if (route.kind !== 'player') {
+        expect(measured.length, 'lang islands on the page').toBeGreaterThan(0)
+      }
       for (const island of measured) {
         const allowed = LEADING[island.lang] ?? []
         expect(

@@ -5,6 +5,8 @@
 // P1-2c (design p1-step9-design.md §3.6 rows 4, 17-20, §5.2, §9 item 4, §10.1): the staging banner
 // first in <body> of each root file, the only files that hold its marker, and the robots-file and
 // public/ guards (D10-B: no robots.txt, sitemap or other public file without a robots decision).
+// P1-4b (design p1-step10-design.md D11-P1, P29, §4.1): the player page in the page list, its
+// child-form generateStaticParams, no notFound() and no localized not-found, and its body order.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +28,8 @@ const GATE_LAYOUT = 'app/(reader)/(gate)/layout.tsx'
 const LOCALE_LAYOUT = 'app/(reader)/[locale]/layout.tsx'
 const GLOBAL_NOT_FOUND = 'app/global-not-found.tsx'
 const ROOT_FILES = [GATE_LAYOUT, LOCALE_LAYOUT, GLOBAL_NOT_FOUND]
+/** The Step 10 player page (P1-4b; design p1-step10-design.md D11-P1, P29). */
+const PLAYER_PAGE = 'app/(reader)/[locale]/(player)/stories/[storyId]/read/page.tsx'
 
 const BOOT_IMPORT = "import { TEXT_SCALE_BOOT_SCRIPT } from '@/core/progress/text-scale-boot'"
 const BOOT_SCRIPT = '<script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT_SCRIPT }} />'
@@ -200,6 +204,7 @@ describe('the app/ tree (design §4, §7 items 6, 9-10)', () => {
     const pages = appFiles.filter((file) => file.startsWith('app/(reader)/[locale]/'))
     const pageFiles = pages.filter((file) => /\/page\.tsx$/.test(file))
     expect(pageFiles).toEqual([
+      PLAYER_PAGE,
       'app/(reader)/[locale]/(site)/grown-ups/page.tsx',
       'app/(reader)/[locale]/(site)/page.tsx',
     ])
@@ -208,6 +213,34 @@ describe('the app/ tree (design §4, §7 items 6, 9-10)', () => {
       expect(source, file).toContain("export const dynamic = 'force-static'")
       expect(source, file).toContain('export const dynamicParams = false')
     }
+  })
+
+  it('the player page lists stories in the child form, [] while gated, and never calls notFound() (P1-4b)', () => {
+    const source = read(PLAYER_PAGE)
+    // Design p1-step10 D11-P29, C1: the top-down child form, one call per [locale] param.
+    expect(source).toContain(
+      'export function generateStaticParams({ params }: { params: { locale: string } }) {',
+    )
+    expect(source).toContain('if (!buildLaunch().readerRoutes || code === undefined) return []')
+    expect(source).toContain(
+      'return listStoriesForLocale(code).map((s) => ({ storyId: s.storyId }))',
+    )
+    // Unknown ids are the global bilingual 404 through dynamicParams = false, never a localized one.
+    expect(source).not.toMatch(/\bnotFound\b/)
+    expect(
+      files('app/(reader)/[locale]').filter((file) => /\/not-found\.[^/]+$/.test(file)),
+    ).toEqual([])
+    // The (player) group has no layout: the page renders its own skip link and chrome (D11-P1).
+    expect(files('app/(reader)/[locale]/(player)')).toEqual([PLAYER_PAGE])
+    // Body order (design §4.1): the skip link, the saved-run hint script, then the boundary.
+    const skip = source.indexOf('<SkipLink ')
+    const hint = source.indexOf(
+      '<script dangerouslySetInnerHTML={{ __html: savedRunHintScript(data.storyId) }} />',
+    )
+    const boundary = source.indexOf('<PlayerBoundary ')
+    expect(skip).toBeGreaterThan(0)
+    expect(hint).toBeGreaterThan(skip)
+    expect(boundary).toBeGreaterThan(hint)
   })
 
   it('"/" is static and renders Coming soon or the gate from the launch flag', () => {

@@ -1,0 +1,179 @@
+/*
+ * The story player (Step 10a; design p1-step10-design.md §4.1, §4.4, §6, D11-P5 to P8, P18, P25,
+ * P26, P30; spec §6.1, §6.6). The header, its links and main reuse src/ui/shell/shell.module.css.
+ * Token names only (colour and time literals live in tokens.css); logical properties only (RC-12).
+ * In-flow bars only: no fixed or sticky chrome (D11-P18). Tests select data attributes, never these
+ * class names (§4.6). F3: the story container carries the content lang, and every text element in
+ * it sets font-size and line-height from tokens on itself, so a lang island gets its own leading.
+ */
+
+/* The story: title, then the card with the passage, the question and the choices. */
+.story {
+  max-inline-size: var(--measure-story);
+  margin-inline: auto;
+}
+
+.title {
+  margin-block: 0 var(--space-5);
+  color: var(--color-text-strong);
+  font-size: var(--fs-title);
+  line-height: var(--lh-heading);
+}
+
+.card {
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border-radius: var(--radius-card);
+  background-color: var(--color-surface-story);
+  color: var(--color-text);
+}
+
+/* Paragraphs split on a blank line; single newlines and spaces render as stored (D11-P30). */
+.paragraph {
+  margin-block: 0 var(--space-4);
+  font-size: var(--fs-story);
+  line-height: var(--lh-story);
+  white-space: pre-wrap;
+}
+
+/* The focus target after a step (D11-P8): not a control and not in the Tab order, so no ring. */
+.paragraph:focus,
+.paragraph:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.question {
+  margin-block: var(--space-5) var(--space-4);
+  color: var(--color-text-strong);
+  font-size: var(--fs-story);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-story);
+}
+
+/* Choices: full-width native buttons, at least --target-choice tall and --gap-choice apart. */
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-choice);
+  margin-block: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: var(--target-choice);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: var(--fs-choice);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-label);
+  text-align: start;
+  cursor: pointer;
+}
+
+.choice:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/*
+ * Hindi control labels: the paint-only 0.12em offset of shell.module.css (P1-1c), not font-level
+ * metric overrides (D11-P26, DEC:23). The header links use the shell's .label rule.
+ */
+.choiceLabel:lang(hi),
+.actionLabel:lang(hi) {
+  position: relative;
+  inset-block-start: 0.12em;
+}
+
+/*
+ * Reveal (D11-P6), only on a part that an accepted CHOOSE, BACK or RESTART rendered: the passage
+ * fades in over --duration-calm, then the question and choices over --duration-quick. Opacity
+ * only. A pointerdown or keydown in the run area sets data-reveal="done", which ends it. Under
+ * reduced motion every token here is 0ms, delays included.
+ */
+@keyframes reveal {
+  from {
+    opacity: 0;
+  }
+}
+
+.part[data-animate]:not([data-reveal='done']) .passage {
+  animation-name: reveal;
+  animation-duration: var(--duration-calm);
+  animation-timing-function: var(--ease-calm);
+  animation-fill-mode: both;
+}
+
+.part[data-animate]:not([data-reveal='done']) .question,
+.part[data-animate]:not([data-reveal='done']) .choices {
+  animation-name: reveal;
+  animation-duration: var(--duration-quick);
+  animation-delay: var(--duration-calm);
+  animation-timing-function: var(--ease-calm);
+  animation-fill-mode: both;
+}
+
+/*
+ * The saved-run hint (D11-P5, §4.4): while the player is opening and <html> carries
+ * data-saved-run (set by the inline script for a reader with a saved run), the run-dependent parts
+ * are hidden, so the start node never paints before the saved one. A one-shot failsafe shows them
+ * after --saved-run-failsafe if JavaScript never runs; reduced motion shortens the duration only,
+ * never the delay (base.css), so it still fires.
+ */
+@keyframes savedRunFailsafe {
+  to {
+    visibility: visible;
+  }
+}
+
+:global(:root[data-saved-run]) .player[data-run-phase='opening'] .runDependent {
+  visibility: hidden;
+  animation-name: savedRunFailsafe;
+  animation-duration: var(--duration-quick);
+  animation-delay: var(--saved-run-failsafe);
+  animation-fill-mode: forwards;
+}
+
+/* The error fallback (D11-P17): the heading is focused on mount (not a control: no ring). */
+.fallbackTitle:focus,
+.fallbackTitle:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-target);
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-label);
+  text-decoration-line: none;
+  cursor: pointer;
+}
+
+.action:hover {
+  background-color: var(--color-surface-hover);
+}

@@ -2,6 +2,8 @@
 // and its @font-face rules, the font lock file, prefs seeding with a storage-write spy, keyboard
 // focus, fixture text and the owner specimen. Not a spec: Playwright does not let one spec import
 // another, so look, assets, fonts, text-scale and specimen all take these from here.
+// P1-4b (design p1-step10-design.md §2.1 e2e/page-helpers.ts, §9.3; Step 10a): the story player's
+// helpers: seedProgressOnce, progressSpy, walk, fixtureGraph and the consoleErrors collector.
 //
 // INJECTION: the specs append test elements to <body>, never inside <main>. React may hydrate
 // <main> after the load event that page.goto waits for, and an extra node inside it is a hydration
@@ -12,14 +14,20 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { APIRequestContext, Page } from '@playwright/test'
 import { declaredCustomProperties, lintCss } from '../scripts/lint/css-rules'
+import type { LocaleCode } from '../src/core/locales'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
 import {
   DEFAULT_PREFS,
   PREFS_KEY,
+  PROGRESS_KEY,
+  RECORD_SCHEMA,
   serializePrefs,
+  serializeProgress,
+  type ProgressRecord,
   type TextScale,
 } from '../src/core/progress/records'
 import { expect } from './fixtures'
+import { playerFixture, type PlayerFixture } from './routes'
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -510,4 +518,243 @@ export async function injectSpecimen(page: Page): Promise<void> {
     },
     { colours: COLOUR_TOKENS, scenes: SCENES, en: fixtureText('en'), hi: fixtureText('hi') },
   )
+}
+
+// ---------------------------------------------------------------------------------------------
+// The story player (P1-4b; design p1-step10-design.md §9.3)
+
+/** One node of a fixture story: its type and its choices in package order. */
+export interface FixtureGraphNode {
+  readonly id: string
+  readonly type: string
+  readonly choices: readonly { readonly id: string; readonly next: string }[]
+}
+
+/** A fixture story as the player walks it (fixtures/packages/<id>.json, read only). */
+export interface FixtureGraph {
+  readonly storyId: string
+  readonly version: number
+  readonly startNodeId: string
+  readonly nodes: ReadonlyMap<string, FixtureGraphNode>
+  /** Per locale: the title, and per node the passage, question, choice labels and lesson. */
+  readonly text: PlayerFixture['text']
+  /** The path that takes the first choice at every node: choice ids, and node ids from the start. */
+  readonly firstPath: { readonly choices: readonly string[]; readonly nodes: readonly string[] }
+}
+
+export function fixtureGraph(storyId: string): FixtureGraph {
+  const fixture = playerFixture(storyId)
+  const nodes = new Map<string, FixtureGraphNode>(
+    fixture.nodes.map((node) => [
+      node.id,
+      { id: node.id, type: node.type, choices: node.choices ?? [] },
+    ]),
+  )
+  const choices: string[] = []
+  const visited = [fixture.startNodeId]
+  let node = nodes.get(fixture.startNodeId)
+  while (node !== undefined && node.type !== 'ending' && visited.length <= nodes.size) {
+    const first = node.choices[0]
+    if (first === undefined) break
+    choices.push(first.id)
+    visited.push(first.next)
+    node = nodes.get(first.next)
+  }
+  if (node?.type !== 'ending') throw new Error(`${storyId}: the first choices reach no ending`)
+  return {
+    storyId,
+    version: fixture.version,
+    startNodeId: fixture.startNodeId,
+    nodes,
+    text: fixture.text,
+    firstPath: { choices, nodes: visited },
+  }
+}
+
+/** One story's saved progress for seedProgressOnce. */
+export interface SeededStory {
+  readonly activeRun: { readonly path: readonly string[]; readonly locale: LocaleCode } | null
+  readonly endingsFound?: readonly string[]
+}
+
+/** The same-origin path seedProgressOnce serves itself (page.route): an empty page, no app code. */
+const SEED_PATH = '/e2e-seed-progress'
+
+/**
+ * Stores a progress record once, as an earlier visit would have left it: opens an empty page on
+ * the site's origin, writes reader.v1.progress there by evaluate and reads it back. Never an init
+ * script, so a later reload or navigation is not seeded again (design fact-check B §C11). The page
+ * is served by page.route, not by the app: on an app page the router prefetches its links, and
+ * WebKit reports each prefetch that the next navigation aborts as a page error ("Fetch API cannot
+ * load …?_rsc=… due to access control checks"; probe 2026-11-16), which the player tests'
+ * error collector would count. Each story gets its fixture's version and the orders 1, 2, … in
+ * the given order. Returns the stored bytes.
+ */
+export async function seedProgressOnce(
+  page: Page,
+  stories: Readonly<Record<string, SeededStory>>,
+): Promise<string> {
+  const record: ProgressRecord = {
+    schema: RECORD_SCHEMA,
+    stories: Object.fromEntries(
+      Object.entries(stories).map(([storyId, story], index) => [
+        storyId,
+        {
+          version: playerFixture(storyId).version,
+          activeRun: story.activeRun,
+          endingsFound: story.endingsFound ?? [],
+          order: index + 1,
+        },
+      ]),
+    ),
+  }
+  const raw = serializeProgress(record)
+  const isSeedPage = (url: URL): boolean => url.pathname === SEED_PATH
+  await page.route(isSeedPage, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: '<!doctype html><html lang="en"><head><title>e2e seed</title></head></html>',
+    }),
+  )
+  const response = await page.goto(SEED_PATH)
+  expect(response?.status(), 'the page that seeds the progress record').toBe(200)
+  const stored = await page.evaluate(
+    ([key, value]) => {
+      window.localStorage.setItem(key, value)
+      return window.localStorage.getItem(key)
+    },
+    [PROGRESS_KEY, raw] as const,
+  )
+  expect(stored, 'the seeded progress record').toBe(raw)
+  await page.unroute(isSeedPage)
+  return raw
+}
+
+/**
+ * Before any page script: records, per document, every localStorage write to the progress key
+ * (setItem, removeItem) and every clear(). Returns a reader of the current document's list.
+ */
+export async function progressSpy(page: Page): Promise<() => Promise<string[]>> {
+  await page.addInitScript((key) => {
+    const w = window as unknown as Record<string, unknown>
+    const writes: string[] = []
+    w['__e2eProgressWrites'] = writes
+    const proto = Storage.prototype
+    for (const name of ['setItem', 'removeItem', 'clear'] as const) {
+      const original = proto[name] as unknown as (...args: unknown[]) => unknown
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value: function (this: Storage, ...args: unknown[]) {
+          if (name === 'clear') writes.push('clear')
+          else if (args[0] === key) writes.push(`${name} ${key}`)
+          return original.apply(this, args)
+        },
+      })
+    }
+  }, PROGRESS_KEY)
+  return () =>
+    page.evaluate(() => [
+      ...(((window as unknown as Record<string, unknown>)['__e2eProgressWrites'] as
+        string[] | undefined) ?? ['spy missing']),
+    ])
+}
+
+/**
+ * Takes `choices` in order on the open player of `storyId`: before each tap it waits until the run
+ * is open and the choices are no longer inert (the settle has ended), then taps the choice of the
+ * part on screen and waits for the next part (seq + 1) to show the node the fixture graph names.
+ * Returns the node ids reached.
+ */
+export async function walk(
+  page: Page,
+  storyId: string,
+  choices: readonly string[],
+): Promise<string[]> {
+  const graph = fixtureGraph(storyId)
+  const part = page.locator('[data-part]')
+  const reached: string[] = []
+  for (const choiceId of choices) {
+    await expect(page.locator('[data-player]')).toHaveAttribute('data-run-phase', 'open')
+    await expect(page.locator('ul[data-choices]')).not.toHaveAttribute('inert')
+    const node = (await part.getAttribute('data-node')) ?? ''
+    const seq = Number(await part.getAttribute('data-seq'))
+    const next = graph.nodes.get(node)?.choices.find((choice) => choice.id === choiceId)?.next
+    if (next === undefined) throw new Error(`${storyId}: node ${node} has no choice ${choiceId}`)
+    await page.locator(`[data-part] button[data-choice="${choiceId}"]`).click()
+    await expect(part, `${storyId}: ${node} ${choiceId}`).toHaveAttribute(
+      'data-seq',
+      String(seq + 1),
+    )
+    await expect(part, `${storyId}: ${node} ${choiceId}`).toHaveAttribute('data-node', next)
+    reached.push(next)
+  }
+  return reached
+}
+
+/** Console error lines a test causes on purpose, per engine (Playwright's browserName). */
+export interface ExpectedErrors {
+  readonly chromium?: readonly RegExp[]
+  readonly webkit?: readonly RegExp[]
+}
+
+/** What consoleErrors collects and checks. */
+export interface ConsoleErrors {
+  /** Each console message of type error as the engine reports it; each page error as "pageerror: …". */
+  readonly lines: readonly string[]
+  /** Collects from another page of the same test too. */
+  watch(page: Page): void
+  /** Declares the errors this test causes on purpose (design §9.3 C4, F5). */
+  allow(expected: ExpectedErrors): void
+  /**
+   * Fails on any line that no pattern of this engine matches, and on any pattern of this engine
+   * that matched no line, so an allowance is never vacuous.
+   */
+  check(browserName: string): void
+}
+
+/**
+ * Collects every console message of type error and every page error of `page` (design §9.3).
+ * Errors only: a console warning (Chromium's unused-preload notice) never fails a test. Production
+ * React reports a hydration mismatch as a page error ("Minified React error #418"), never as a
+ * console error, which is why page errors are collected. A page error is recorded with a
+ * "pageerror: " prefix, so a pattern written for a console line (anchored with ^) never allows one.
+ */
+export function consoleErrors(
+  page: Page,
+  options: { readonly expected?: ExpectedErrors } = {},
+): ConsoleErrors {
+  const lines: string[] = []
+  let expected: ExpectedErrors = options.expected ?? {}
+  const watch = (target: Page): void => {
+    target.on('console', (msg) => {
+      if (msg.type() === 'error') lines.push(msg.text())
+    })
+    target.on('pageerror', (error) => {
+      lines.push(`pageerror: ${String(error)}`)
+    })
+  }
+  watch(page)
+  return {
+    lines,
+    watch,
+    allow(next) {
+      expected = next
+    },
+    check(browserName) {
+      const patterns =
+        browserName === 'chromium'
+          ? (expected.chromium ?? [])
+          : browserName === 'webkit'
+            ? (expected.webkit ?? [])
+            : []
+      const unexpected = lines.filter((line) => !patterns.some((pattern) => pattern.test(line)))
+      expect(unexpected, `console errors and page errors (${browserName})`).toEqual([])
+      const unused = patterns
+        .filter((pattern) => !lines.some((line) => pattern.test(line)))
+        .map((pattern) => String(pattern))
+      expect(unused, `expected error patterns that matched nothing (${browserName})`).toEqual([])
+    },
+  }
 }

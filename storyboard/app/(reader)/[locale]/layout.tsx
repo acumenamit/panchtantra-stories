@@ -11,7 +11,8 @@
 // - ChoiceRecorder saves uiLocale only when the URL carries ?remember=1 (gate and header links).
 // - P1-2c (design p1-step9-design.md §3.6 rows 1-6, §4.3, §9 item 4): the staging banner is the
 //   first child of <body>, before ChoiceRecorder, from contentMode() (the mode the loader wrote;
-//   null without .content/, so it renders nothing then). Step 10's player sits under this layout.
+//   null without .content/, so it renders nothing then). Step 10's player page, in the (player)
+//   group with no layout of its own, sits under this layout (P1-4b).
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import type { ReactNode } from 'react'

@@ -49,5 +49,5 @@ export type {
   TextScale,
   UiLocale,
 } from './records'
-export { endingIdsOf, resumeRun, stepWriteOf } from './resume'
+export { endingIdsOf, openRun, resumeRun, stepWriteOf } from './resume'
 export type { ResumeOutcome, ResumeResult } from './resume'

@@ -11,6 +11,9 @@
 // robots: exactly one (a p with the exact text and lang="en") on the staging leg, none on the gated
 // and review legs, counted in the server HTML and in the DOM. The selector, marker and text come
 // from src/ui/root/staging.ts, so a typo cannot pass the 0 here without failing the staging leg.
+// P1-4b (design p1-step10-design.md §9.3 loops; Step 10a): on the open legs the routes include the
+// two-paths player pages (kind 'player'), which carry the same shared document, the story's title
+// and, as their first focusable element, the skip link to #main in the page's language.
 import type { APIRequestContext, Page } from '@playwright/test'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { TEXT_SCALE_BOOT_SCRIPT } from '../src/core/progress/text-scale-boot'
@@ -30,7 +33,7 @@ import {
   storageAfter,
   watchScaleAttribute,
 } from './page-helpers'
-import { documentRoutes, waitForHydration, type LegRoute } from './routes'
+import { documentRoutes, message, uiLang, waitForHydration, type LegRoute } from './routes'
 import { expectSecurityHeaders } from './security-headers'
 
 const LEG = launchLeg(process.env.E2E_LAUNCH)
@@ -194,6 +197,30 @@ for (const route of documentRoutes(LEG)) {
     // The title.
     expect(await page.title(), 'title').not.toBe('')
     expect(await page.title(), 'title').toBe(route.title)
+
+    // A player page renders its own skip link (the (player) group has no layout): exactly one, the
+    // first focusable element, to the page's main, in the page's language.
+    if (route.kind === 'player') {
+      const skip = await page.evaluate(() => {
+        const focusable = [
+          ...document.querySelectorAll<HTMLElement>(
+            'a[href], button, input, select, textarea, [tabindex]',
+          ),
+        ].filter((element) => element.tabIndex >= 0)
+        return {
+          links: document.querySelectorAll('a[href="#main"]').length,
+          first: focusable[0]?.getAttribute('href') ?? null,
+          text: document.querySelector('a[href="#main"]')?.textContent ?? null,
+          target: document.getElementById('main')?.localName ?? null,
+        }
+      })
+      expect(skip, 'the skip link').toEqual({
+        links: 1,
+        first: '#main',
+        text: message(uiLang(route.lang), 'shell.skipToMain'),
+        target: 'main',
+      })
+    }
 
     // Icon, apple-touch-icon and manifest links on 200 pages; reported on the 404 (R2).
     const links = {

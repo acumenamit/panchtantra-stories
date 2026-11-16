@@ -6,9 +6,10 @@ import 'server-only'
 // filesystem access causes tracing of the whole project" and traces every project file into each
 // root page; with the literal it traces exactly the .content/ files. reader.test.ts pins the
 // literal to CONTENT_DIR. The three root files read `contentMode()` for the staging banner (P1-2c); Step 10
-// adds content pages. Launch gating stays with the caller: storyParams() is content only, and Step
-// 10 combines it with the launch state. Under `next dev` the folder may be stale or absent: run
-// `pnpm content:load` first.
+// adds the player page, which reads listStoriesForLocale() and getStory(). Launch gating stays with
+// the caller: the queries are content only, and the player's generateStaticParams combines
+// listStoriesForLocale() with the launch state (P1-4b). Under `next dev` the folder may be stale
+// or absent: run `pnpm content:load` first.
 import { join } from 'node:path'
 import type { BuildInfo } from '../core/content/build-info'
 import type { GateMode } from '../core/content/gates'

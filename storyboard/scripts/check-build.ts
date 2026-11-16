@@ -11,7 +11,7 @@
 //   Coming-soon markup with no redirect script, no locale link and no Hindi island.
 // - Open: a page for every enabled locale and none for a disabled one, both gate links and the
 //   redirect script exactly once on "/", <html lang> per locale page. Deliberately loose about
-//   deeper routes, so later steps need not edit it.
+//   deeper routes, so later steps need not edit it ([player-pages] below is the one exception).
 // - Both: "/" and /_not-found are built; every /[locale]… pattern has fallback false (with
 //   dynamicParams = false every unlisted param is a 404); noindex, nofollow exactly once on every
 //   200 page and noindex on the 404; no message value of 16 or more UTF-16 code units in client JS,
@@ -33,6 +33,28 @@
 //   (raw or \u-escaped). Every build: neither reaches .next/static JS. Right after the launch line,
 //   every run (pass or fail) prints one value-free line: "content mode: <none|fixtures|staging|
 //   production|invalid>; staging banner pages: <n> of <m>".
+// - [player-pages] (design p1-step10-design.md §9.1 G1; P1-4b): the story player's pages are
+//   <locale>/stories/<storyId>/read.html, in either output layout. "Content loaded" means
+//   .content/build-info.json exists and parses strictly. Open with content loaded: exactly one page
+//   per story build-info lists and per enabled locale of its package (.content/packages/<id>.json,
+//   parsed with the strict StoryPackageV1, as the reader parses it; src/content is server-only, so
+//   it is not imported here), each with exactly one main element, and that one <main id="main">
+//   (attributes in any order), and its <html lang>; with at least one story, a
+//   /[locale]/stories/[storyId]/read pattern entry too. Gated, or no content: no player page.
+// - [package-text-leak] (C-3; design p1-step10-design.md §9.1 G2): no line (split on \n) of 16 or
+//   more UTF-16 code units of any text value of any built package, in any of its locales, in
+//   .next/static JS: raw, JSON-escaped, with every ' written \', with every </ written <\/, and the
+//   two crossings a minifier can make of these (JSON-escaped with <\/; \' with <\/), each also
+//   \u-escaped in either hex case. It fails when build-info lists a story and no value was scanned.
+//   Documented limit: a line split across concatenated string literals is not found.
+// - Right after the content mode line, every run prints one value-free line (design §8): "player
+//   pages: <n> (expected <m>); package text values scanned: <k>" ("unknown" where the build output
+//   or a package could not be read). Failures name files and ids only, never a text value, in the
+//   §8 forms: "[player-pages] missing <path>", "[player-pages] unexpected <path> (<why>)",
+//   "[player-pages] gated build has <path>", "[player-pages] <path>: <main id="main" <k> time(s)",
+//   "[player-pages] <path>: <main <k> time(s)", "[player-pages] <path>: <html lang> is not <code>",
+//   "[package-text-leak] <static file>: storyId <id> locale <l> node <n|-> field <f>" (plus the form
+//   that matched) and "[package-text-leak] content is loaded but 0 values were scanned".
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,10 +67,12 @@ import {
 } from '../src/config/launch'
 import { APP_NAME } from '../src/core/app-info'
 import { BuildInfo } from '../src/core/content/build-info'
-import type { GateMode } from '../src/core/content/gates'
+import { parseStrictJson, type GateMode } from '../src/core/content/gates'
 import {
   BUILD_INFO_FILE,
   CONTENT_DIR,
+  PACKAGES_DIR,
+  packageFileName,
   PUBLIC_BUILD_INFO_FILE,
   PUBLIC_DIR,
 } from '../src/core/content/output-layout'
@@ -58,6 +82,7 @@ import {
   isLocaleCode,
   LOCALE_CODES,
 } from '../src/core/locales'
+import { StoryPackageV1 } from '../src/core/package/v1'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { gateOptions } from '../src/reader/routing'
 import {
@@ -89,9 +114,15 @@ const GATE_LOCALE = 'en'
 const REDIRECT_MARKER = 'getEntriesByType('
 
 const LOCALE_PATTERN = '/[locale]'
+
+/** The story player's route (app/(reader)/[locale]/(player)/stories/[storyId]/read; P1-4b). */
+export const PLAYER_PATTERN = '/[locale]/stories/[storyId]/read'
+
 const REQUIRED_PATTERNS = {
   gated: [LOCALE_PATTERN],
   open: [LOCALE_PATTERN, '/[locale]/grown-ups'],
+  /** Also required when open and build-info lists at least one story (design p1-step10 §9.1 G1). */
+  openWithStories: [PLAYER_PATTERN],
 } as const
 
 /** The four decision input names as a list: "A, B, C or D". */
@@ -180,11 +211,15 @@ function parseManifest(text: string): Manifest | string {
 /** Robots metas of any content: React writes them as <meta name="robots" content="…"/>. */
 const robotsMetas = (html: string): string[] => html.match(/<meta\s+name="robots"[^>]*>/g) ?? []
 
-/** The pure check. `catalogue` holds every message value of every catalogue. */
+/**
+ * The pure check. `catalogue` holds every message value of every catalogue; `content` is what
+ * readBuiltContent read (it adds the player pattern to the open build's required patterns).
+ */
 export function checkBuild(
   output: BuildOutput,
   decision: LaunchDecision,
   catalogue: readonly CatalogueValue[],
+  content: BuiltContent = NO_CONTENT,
 ): CheckReport {
   const failures: string[] = []
   const fail = (rule: string, message: string): void => {
@@ -241,7 +276,13 @@ export function checkBuild(
       )
     }
   }
-  for (const pattern of REQUIRED_PATTERNS[expected]) {
+  const required = [
+    ...REQUIRED_PATTERNS[expected],
+    ...(expected === 'open' && content.storyIds.length > 0
+      ? REQUIRED_PATTERNS.openWithStories
+      : []),
+  ]
+  for (const pattern of required) {
     if (!(pattern in manifest.dynamicRoutes)) {
       fail('dynamic-routes', `dynamicRoutes has no ${pattern} entry (design R23)`)
     }
@@ -641,6 +682,263 @@ export function readContentOutputs(root: string): ContentOutputs {
   }
 }
 
+// ---- [player-pages] and [package-text-leak] (design p1-step10-design.md §9.1 G1, G2; P1-4b) ----
+
+/** What [player-pages] and [package-text-leak] read from .content. */
+export interface BuiltContent {
+  /** build-info's story ids, in its order; [] when no content was loaded. */
+  readonly storyIds: readonly string[]
+  /** The package of each listed story that could be read and strictly parsed, in build-info order. */
+  readonly packages: readonly StoryPackageV1[]
+  /** One line per listed package that could not be read: file names only, never a value. */
+  readonly problems: readonly string[]
+}
+
+/** No content loaded (no build-info, or one that is not strictly valid). */
+export const NO_CONTENT: BuiltContent = { storyIds: [], packages: [], problems: [] }
+
+/**
+ * The packages a build was made from: for each story `buildInfo` (the bytes of
+ * .content/build-info.json) lists, <root>/.content/packages/<id>.json parsed with the strict
+ * StoryPackageV1, as the reader parses it (src/content/reader.ts). Never throws.
+ */
+export function readBuiltContent(root: string, buildInfo: Uint8Array | null): BuiltContent {
+  const info = buildInfo === null ? 'not-json' : parseBuildInfo(buildInfo)
+  if (typeof info === 'string') return NO_CONTENT // not loaded; [content-outputs] names a bad file
+  const packages: StoryPackageV1[] = []
+  const problems: string[] = []
+  for (const { storyId } of info.stories) {
+    const name = `${CONTENT_DIR}/${PACKAGES_DIR}/${packageFileName(storyId)}`
+    let bytes: Uint8Array
+    try {
+      bytes = new Uint8Array(
+        readFileSync(join(root, CONTENT_DIR, PACKAGES_DIR, packageFileName(storyId))),
+      )
+    } catch {
+      problems.push(`${name} is missing`)
+      continue
+    }
+    const parsed = parseStrictJson(bytes, StoryPackageV1, `package ${storyId}`)
+    if (!parsed.ok) problems.push(`${name} failed strict parse`)
+    else if (parsed.value.data.storyId !== storyId) problems.push(`${name} names another storyId`)
+    else packages.push(parsed.value.data)
+  }
+  return { storyIds: info.stories.map((story) => story.storyId), packages, problems }
+}
+
+/** A player page as BuildOutput.html keys it: <locale>/stories/<storyId>/read.html. */
+const PLAYER_PAGE = /^([^/]+)\/stories\/([^/]+)\/read\.html$/
+
+/**
+ * A <main> element with id="main", its attributes in any order: React writes them in JSX prop
+ * order, so a literal `<main id="main"` would miss `<main class="…" id="main">` (C8).
+ */
+const MAIN_ELEMENT = /<main\b[^>]*\sid="main"[\s>]/g
+/**
+ * Any <main> element, with or without an id, or any other element with role="main": a page has
+ * one main landmark only (F1; review R2-G1-7). A <main role="main"> counts once: the scan resumes
+ * after its `<main `. React escapes quotes and `<` in text and attribute values.
+ */
+const ANY_MAIN = /<main[\s>]|<[a-z][^>]*\srole="main"[\s/>]/g
+
+/**
+ * The player pages a build must have, path → locale: open, one per listed story and per enabled
+ * locale of its package; gated, none. null when a listed package could not be read.
+ */
+function expectedPlayerPages(
+  decision: LaunchDecision,
+  content: BuiltContent,
+): Map<string, string> | null {
+  if (content.problems.length > 0) return null
+  const expected = new Map<string, string>()
+  if (!decision.readerRoutes) return expected
+  for (const pkg of content.packages) {
+    for (const code of ENABLED_LOCALE_CODES) {
+      if (pkg.locales.includes(code)) expected.set(`${code}/stories/${pkg.storyId}/read.html`, code)
+    }
+  }
+  return expected
+}
+
+export interface PlayerPagesReport {
+  /** "[player-pages] what failed", naming files and ids only; empty when it holds. */
+  readonly failures: readonly string[]
+  /** The player pages in the output. */
+  readonly pages: number
+  /** The player pages the launch and content call for; null when a package could not be read. */
+  readonly expected: number | null
+}
+
+/** Rule [player-pages] (design p1-step10-design.md §9.1 G1). */
+export function checkPlayerPages(
+  output: BuildOutput,
+  decision: LaunchDecision,
+  content: BuiltContent,
+): PlayerPagesReport {
+  const failures = content.problems.map((problem) => `[player-pages] ${problem}`)
+  const fail = (message: string): void => {
+    failures.push(`[player-pages] ${message}`)
+  }
+  const expected = expectedPlayerPages(decision, content)
+  const listed = new Set(content.storyIds)
+  const packages = new Map(content.packages.map((pkg) => [pkg.storyId, pkg]))
+  /** A page that is not in the expected set, in the §8 form, with why it is not; ids only. */
+  const unexpected = (path: string, code: string, storyId: string): string => {
+    if (!decision.readerRoutes) return `gated build has ${path}`
+    const why = !isEnabledLocale(code)
+      ? `${code} is not an enabled locale`
+      : !listed.has(storyId)
+        ? `build-info lists no story ${storyId}`
+        : packages.has(storyId)
+          ? `package ${storyId} has no ${code} text`
+          : `package ${storyId} could not be read`
+    return `unexpected ${path} (${why})`
+  }
+  const pages = [...output.html].filter(([path]) => PLAYER_PAGE.test(path))
+  for (const [path, html] of pages) {
+    const [, code = '', storyId = ''] = PLAYER_PAGE.exec(path) ?? []
+    if (expected !== null && !expected.has(path)) fail(unexpected(path, code, storyId))
+    const mains = html.match(MAIN_ELEMENT)?.length ?? 0
+    const anyMains = html.match(ANY_MAIN)?.length ?? 0
+    if (mains !== 1) fail(`${path}: <main id="main" ${mains} time(s)`)
+    else if (anyMains !== 1) fail(`${path}: <main ${anyMains} time(s)`)
+    if (!html.includes(`<html lang="${code}"`)) fail(`${path}: <html lang> is not ${code}`)
+  }
+  for (const path of expected?.keys() ?? []) {
+    if (!output.html.has(path)) fail(`missing ${path}`)
+  }
+  return { failures, pages: pages.length, expected: expected?.size ?? null }
+}
+
+/** One line of a package text value, with ids that name where it came from. */
+export interface PackageTextValue {
+  readonly storyId: string
+  readonly locale: string
+  /** "title", "alt.<assetId>", "nodes.<nodeId>.text", "nodes.<nodeId>.choices.<choiceId>", … */
+  readonly field: string
+  readonly line: string
+}
+
+/**
+ * Every line (split on "\n") of MIN_LEAK_LENGTH or more UTF-16 code units of every text value of
+ * `pkg`, in every locale it has: title, description, theme, duration, book, alt values, and each
+ * node's text, question, choice labels and lesson.
+ */
+export function packageTextValues(pkg: StoryPackageV1): PackageTextValue[] {
+  const values: PackageTextValue[] = []
+  const add = (locale: string, field: string, text: string | undefined): void => {
+    for (const line of text?.split('\n') ?? []) {
+      if (line.length >= MIN_LEAK_LENGTH) values.push({ storyId: pkg.storyId, locale, field, line })
+    }
+  }
+  for (const [locale, text] of Object.entries(pkg.text)) {
+    if (text === undefined) continue
+    add(locale, 'title', text.title)
+    add(locale, 'description', text.description)
+    add(locale, 'theme', text.theme)
+    add(locale, 'duration', text.duration)
+    add(locale, 'book', text.book)
+    for (const [assetId, alt] of Object.entries(text.alt ?? {})) add(locale, `alt.${assetId}`, alt)
+    for (const [nodeId, node] of Object.entries(text.nodes)) {
+      add(locale, `nodes.${nodeId}.text`, node.text)
+      add(locale, `nodes.${nodeId}.question`, node.question)
+      for (const [choiceId, label] of Object.entries(node.choices ?? {})) {
+        add(locale, `nodes.${nodeId}.choices.${choiceId}`, label)
+      }
+      add(locale, `nodes.${nodeId}.lesson`, node.lesson)
+    }
+  }
+  return values
+}
+
+/**
+ * The forms a package text line can take in minified JS (design §9.1 G2), each with the note a
+ * failure carries: the line; the JSON-escaped line; the line with every ' written \' (a
+ * single-quoted string: package text, unlike messages, may hold ASCII apostrophes); the line with
+ * every </ written <\/; and the two crossings of these a minifier can write (the JSON-escaped line
+ * with every </ written <\/, and the \' line with every </ written <\/). Each also \u-escaped in
+ * both hex cases (leakForms), so an ASCII-only single-quoted string is found too.
+ */
+export function packageTextForms(line: string): (readonly [form: string, note: string])[] {
+  const json = JSON.stringify(line).slice(1, -1)
+  const quoted = line.replace(/'/g, "\\'")
+  const slash = (text: string): string => text.replace(/<\//g, '<\\/')
+  const bases: readonly (readonly [string, string])[] = [
+    [line, ''],
+    [json, 'JSON-escaped'],
+    [quoted, "with \\'"],
+    [slash(line), 'with <\\/'],
+    [slash(json), 'JSON-escaped with <\\/'],
+    [slash(quoted), "with \\' and <\\/"],
+  ]
+  const note = (base: string, escaped: boolean): string => {
+    if (!escaped) return base === '' ? '' : ` (${base})`
+    if (base === '') return ' (\\u-escaped)'
+    return base === 'JSON-escaped' ? ' (JSON- and \\u-escaped)' : ` (${base}, \\u-escaped)`
+  }
+  const all = bases.flatMap(([text, base]) =>
+    leakForms(text).map((form, i) => [form, note(base, i > 0)] as const),
+  )
+  const seen = new Set<string>()
+  return all.filter(([form]) => {
+    if (seen.has(form)) return false
+    seen.add(form)
+    return true
+  })
+}
+
+export interface PackageTextLeakReport {
+  /** "[package-text-leak] what failed", naming files and ids only; empty when it holds. */
+  readonly failures: readonly string[]
+  /** The package text values (lines) scanned for. */
+  readonly values: number
+}
+
+/** Rule [package-text-leak] (C-3; design p1-step10-design.md §9.1 G2): every .next/static JS file. */
+export function checkPackageTextLeak(
+  output: BuildOutput,
+  content: BuiltContent,
+): PackageTextLeakReport {
+  const failures = new Set<string>()
+  const values = content.packages.flatMap(packageTextValues)
+  // "Content is loaded" for this rule: build-info lists at least one story (an empty catalogue is
+  // valid, so 0 values with 0 stories passes; C9).
+  if (content.storyIds.length > 0 && values.length === 0) {
+    failures.add('[package-text-leak] content is loaded but 0 values were scanned')
+  }
+  for (const { storyId, locale, field, line } of values) {
+    const forms = packageTextForms(line)
+    const [node, name] = nodeAndField(field)
+    for (const [path, js] of output.staticJs) {
+      const found = forms.find(([form]) => js.includes(form))
+      if (found !== undefined) {
+        failures.add(
+          `[package-text-leak] .next/static/${path}: storyId ${storyId} locale ${locale} node ${node} field ${name}${found[1]}`,
+        )
+      }
+    }
+  }
+  return { failures: [...failures], values: values.length }
+}
+
+/** A value's field as design §8 names it: "nodes.<id>.<f>" is node <id> field <f>; else node -. */
+function nodeAndField(field: string): readonly [node: string, field: string] {
+  const match = /^nodes\.([^.]+)\.(.+)$/.exec(field)
+  return match === null ? ['-', field] : [match[1] ?? '-', match[2] ?? field]
+}
+
+/** The one value-free player line every run prints (design p1-step10-design.md §8, §10.1 item 5). */
+export function playerLine(
+  pages: number | null,
+  expected: number | null,
+  values: number | null,
+): string {
+  return (
+    `player pages: ${pages ?? 'unknown'} (expected ${expected ?? 'unknown'}); ` +
+    `package text values scanned: ${values ?? 'unknown'}`
+  )
+}
+
 export interface CheckBuildOptions {
   readonly root: string
   readonly env: Env
@@ -659,6 +957,21 @@ export function runCheckBuild(options: CheckBuildOptions): number {
   const logError = options.logError ?? ((line: string) => console.error(line))
   const platform = options.platform ?? process.platform
   const decision = resolveLaunch(options.env)
+  // C-2 runs whatever the build output gives, so a gated build always proves its content outputs.
+  // It reads first: the player rules need the packages build-info names (P1-4b).
+  let contentFailures: string[]
+  let mode: ContentMode
+  let content: BuiltContent = NO_CONTENT
+  try {
+    const outputs = readContentOutputs(options.root)
+    contentFailures = checkContentOutputs(options.env.CONTENT_SOURCE, outputs)
+    mode = readContentMode(outputs.contentBuildInfo)
+    content = readBuiltContent(options.root, outputs.contentBuildInfo)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown'
+    contentFailures = [`[content-outputs] unreadable: ${reason}`]
+    mode = 'invalid' // unreadable: no banner is allowed, and the build already fails
+  }
   let result: CheckReport
   let output: BuildOutput | undefined
   try {
@@ -670,7 +983,7 @@ export function runCheckBuild(options: CheckBuildOptions): number {
       catalogueError = error instanceof Error ? error.message : 'unreadable'
     }
     output = readBuildOutput(options.root)
-    const report = checkBuild(output, decision, catalogue)
+    const report = checkBuild(output, decision, catalogue, content)
     result = catalogueError
       ? { ...report, failures: [`[catalogue] ${catalogueError}`, ...report.failures] }
       : report
@@ -678,26 +991,33 @@ export function runCheckBuild(options: CheckBuildOptions): number {
     const reason = error instanceof Error ? error.message : 'unknown'
     result = { launchLine: launchLogLine(decision), failures: [`[read] ${reason}`] }
   }
-  // C-2 runs whatever the build output gave, so a gated build always proves its content outputs.
-  let contentFailures: string[]
-  let mode: ContentMode
-  try {
-    const outputs = readContentOutputs(options.root)
-    contentFailures = checkContentOutputs(options.env.CONTENT_SOURCE, outputs)
-    mode = readContentMode(outputs.contentBuildInfo)
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'unknown'
-    contentFailures = [`[content-outputs] unreadable: ${reason}`]
-    mode = 'invalid' // unreadable: no banner is allowed, and the build already fails
-  }
   // [staging-banner] beside C-2 (P1-2c). Without a readable output its second lock still runs.
   const banner = checkStagingBanner(output ?? NO_OUTPUT, mode, options.env, platform)
+  // [player-pages] and [package-text-leak] (P1-4b) need the output; without it the [read] failure
+  // already fails the build, and only the package problems are added.
+  const player = output === undefined ? undefined : checkPlayerPages(output, decision, content)
+  const leak = output === undefined ? undefined : checkPackageTextLeak(output, content)
   result = {
     ...result,
-    failures: [...result.failures, ...contentFailures, ...banner.failures],
+    failures: [
+      ...result.failures,
+      ...contentFailures,
+      ...banner.failures,
+      ...(player?.failures ?? content.problems.map((problem) => `[player-pages] ${problem}`)),
+      ...(leak?.failures ?? []),
+    ],
   }
   log(result.launchLine)
   log(contentModeLine(mode, output === undefined ? null : banner))
+  log(
+    playerLine(
+      player?.pages ?? null,
+      player === undefined
+        ? (expectedPlayerPages(decision, content)?.size ?? null)
+        : player.expected,
+      leak?.values ?? null,
+    ),
+  )
   if (result.failures.length === 0) {
     log('check-build: ok')
     return 0

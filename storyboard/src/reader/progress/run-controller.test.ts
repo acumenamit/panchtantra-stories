@@ -789,3 +789,127 @@ describe('controller properties (fixed seed)', () => {
     expect(cover.untouched).toBeGreaterThan(0)
   })
 })
+
+describe('localePolicy (Step 10, D11-P3): stored-first for the player, caller by default', () => {
+  function storedFirst(locale: LocaleCode, stored?: Record<string, StoryProgress>) {
+    const storage = new FakeWebStorage()
+    if (stored !== undefined) {
+      storage.setItem(PROGRESS_KEY, serializeProgress({ schema: 1, stories: stored }))
+    }
+    storage.calls.length = 0
+    const device = createDeviceStorage({ getStorage: () => storage, getEventSource: () => null })
+    const store = createProgressStore({ device })
+    const controller = createRunController({ graph, store, locale, localePolicy: 'stored-first' })
+    const writes = () => storage.count('setItem') + storage.count('removeItem')
+    return { controller, writes }
+  }
+
+  it('opens in the stored language; the snapshot before open() is the start node in the URL locale', async () => {
+    const hindiRun = {
+      [STORY]: entry({ activeRun: { path: ['start', 'wise_path'], locale: 'hi' } }),
+    }
+    const t = storedFirst('en', hindiRun)
+    expect(t.controller.getSnapshot()).toEqual({
+      phase: 'opening',
+      state: start(graph, { path: ['start'], locale: 'en' }),
+      outcome: null,
+    })
+    const r = await t.controller.open()
+    expect(r.outcome).toBe('resumed')
+    expect(r.state.locale).toBe('hi')
+    expect(r.state.path).toEqual(['start', 'wise_path'])
+    expect(t.controller.getSnapshot()).toEqual({
+      phase: 'open',
+      state: r.state,
+      outcome: 'resumed',
+    })
+    expect(t.writes()).toBe(0)
+    // The other way round: the URL locale is not the story default ('en').
+    const englishRun = {
+      [STORY]: entry({ activeRun: { path: ['start', 'quick_path'], locale: 'en' } }),
+    }
+    const h = storedFirst('hi', englishRun)
+    expect(h.controller.getSnapshot().state).toEqual(
+      start(graph, { path: ['start'], locale: 'hi' }),
+    )
+    const opened = await h.controller.open()
+    expect(opened.outcome).toBe('resumed')
+    expect(opened.state.locale).toBe('en')
+    expect(h.writes()).toBe(0)
+  })
+
+  it('takes the URL locale for a stored language the graph lacks, for nothing stored and at an ending', async () => {
+    const arabic = { [STORY]: entry({ activeRun: { path: ['start', 'wise_path'], locale: 'ar' } }) }
+    const a = await storedFirst('hi', arabic).controller.open()
+    expect(a.outcome).toBe('adjusted')
+    expect(a.state.locale).toBe('hi')
+    expect(a.state.path).toEqual(['start', 'wise_path'])
+    const none = await storedFirst('hi').controller.open()
+    expect(none.outcome).toBe('fresh')
+    expect(none.state).toEqual(start(graph, { path: ['start'], locale: 'hi' }))
+    const ended = {
+      [STORY]: entry({ activeRun: { path: ['start', 'wise_path', 'ending_wise'], locale: 'en' } }),
+    }
+    const e = await storedFirst('hi', ended).controller.open()
+    expect(e.outcome).toBe('fresh')
+    expect(e.state).toEqual(start(graph, { path: ['start'], locale: 'hi' }))
+  })
+
+  it('a rejecting or malformed store opens fresh in the URL locale', async () => {
+    const stores: Pick<ProgressStore, 'get' | 'saveStep'>[] = [
+      { get: () => Promise.reject(new Error('broken store')), saveStep: () => Promise.resolve() },
+      {
+        get: () => Promise.resolve({ activeRun: { path: null } } as unknown as StoryProgress),
+        saveStep: () => Promise.resolve(),
+      },
+    ]
+    for (const store of stores) {
+      const r = await createRunController({
+        graph,
+        store,
+        locale: 'hi',
+        localePolicy: 'stored-first',
+      }).open()
+      expect(r.outcome).toBe('fresh')
+      expect(r.state).toEqual(start(graph, { path: ['start'], locale: 'hi' }))
+    }
+  })
+
+  it('stored-first needs a locale; an unknown policy is a TypeError', () => {
+    const store = setup().store
+    expect(() => createRunController({ graph, store, localePolicy: 'stored-first' })).toThrow(
+      TypeError,
+    )
+    expect(() =>
+      createRunController({
+        graph,
+        store,
+        locale: 'en',
+        localePolicy: 'url' as unknown as 'caller',
+      }),
+    ).toThrow(TypeError)
+  })
+
+  it("the default is the Step 5 'caller' policy, and naming it changes nothing", async () => {
+    const stored = { [STORY]: entry({ activeRun: { path: ['start', 'wise_path'], locale: 'hi' } }) }
+    for (const localePolicy of [undefined, 'caller'] as const) {
+      const t = setup({ stored })
+      const store = t.store
+      const named = createRunController({
+        graph,
+        store,
+        locale: 'en',
+        ...(localePolicy === undefined ? {} : { localePolicy }),
+      })
+      const r = await named.open()
+      expect(r.outcome).toBe('adjusted')
+      expect(r.state.locale).toBe('en')
+      const unnamed = createRunController({
+        graph,
+        store,
+        ...(localePolicy === undefined ? {} : { localePolicy }),
+      })
+      expect((await unnamed.open()).state.locale).toBe('hi')
+    }
+  })
+})

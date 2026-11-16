@@ -4,11 +4,23 @@
 //   request, and a stored uiLocale never sends anyone on.
 // - Every reader route, /ar included, is the bilingual 404 with the four security headers, also
 //   for an RSC request; /build-info.json is 404 while CONTENT_SOURCE=none (the gated leg's build).
+// - P1-4b (design p1-step10-design.md §9.3 gated leg, C19, O4; Step 10a): every player page an open
+//   build serves and every unmatched player-shaped URL is the same 404, also when requested with
+//   RSC: 1. Next answers a bare RSC: 1 GET on a route-pattern path with a 307 to <path>?_rsc=…
+//   (all four headers on it); the request follows it, as for /en, and the final response is the
+//   404 with the four headers.
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { expect, test } from './fixtures'
 import { fontFamilies, seedPrefs, servedFontFaces, settleFonts, storageAfter } from './page-helpers'
-import { message, readerPaths, waitForHydration } from './routes'
+import {
+  message,
+  NOT_FOUND_TITLE,
+  PLAYER_NOT_FOUND_PATHS,
+  playerPaths,
+  readerPaths,
+  waitForHydration,
+} from './routes'
 import { expectSecurityHeaders } from './security-headers'
 
 const COMING_SOON = '<main><h1>Storyboard</h1><p>Coming soon.</p></main>'
@@ -97,6 +109,30 @@ test.describe('the gated build', { tag: '@gated' }, () => {
     const response = await request.get('/en', { headers: { RSC: '1' } })
     expect(response.status()).toBe(404)
     expectSecurityHeaders(response.headers(), '/en (RSC: 1)')
+  })
+
+  test('every player path is the bilingual 404 with the security headers, also as an RSC request', async ({
+    page,
+    request,
+  }) => {
+    const paths = [...playerPaths().map((player) => player.path), ...PLAYER_NOT_FOUND_PATHS]
+    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(12)
+    for (const routePath of paths) {
+      const response = await page.goto(routePath)
+      if (!response) throw new Error(`no response for ${routePath}`)
+      expect(response.status(), routePath).toBe(404)
+      expectSecurityHeaders(await response.allHeaders(), routePath)
+      expect(await page.locator('html').getAttribute('lang'), routePath).toBe('en')
+      expect(await page.title(), routePath).toBe(NOT_FOUND_TITLE)
+      const h1 = page.locator('h1')
+      await expect(h1, routePath).toHaveCount(1)
+      await expect(h1, routePath).toContainText(message('en', 'notFound.title'))
+      await expect(h1.locator('[lang="hi"]'), routePath).toHaveText(message('hi', 'notFound.title'))
+
+      const rsc = await request.get(routePath, { headers: { RSC: '1' } })
+      expect(rsc.status(), `${routePath} (RSC: 1)`).toBe(404)
+      expectSecurityHeaders(rsc.headers(), `${routePath} (RSC: 1)`)
+    }
   })
 
   test('/build-info.json is 404', async ({ request }) => {

@@ -4,7 +4,14 @@ import { start, step, toGraph } from '../engine'
 import type { EngineState, Graph, GraphNode } from '../engine'
 import type { LocaleCode } from '../locales'
 import { StoryPackageV1 } from '../package/v1'
-import { MAX_RUN_PATH, StepWriteSchema, endingIdsOf, resumeRun, stepWriteOf } from './index'
+import {
+  MAX_RUN_PATH,
+  StepWriteSchema,
+  endingIdsOf,
+  openRun,
+  resumeRun,
+  stepWriteOf,
+} from './index'
 
 const graph = toGraph(StoryPackageV1.parse(fixture))
 
@@ -181,5 +188,82 @@ describe('stepWriteOf: one save per accepted step (spec §6.3)', () => {
 
   it('lists the ending ids in package order', () => {
     expect(endingIdsOf(graph)).toEqual(['ending_wise', 'ending_quick'])
+  })
+})
+
+describe('openRun: the player opens stored-first (Step 10, D11-P3)', () => {
+  it('resumes in the stored language when the graph has it, whatever the page language', () => {
+    const r = openRun(graph, { path: ['start', 'wise_path'], locale: 'hi' }, 'en')
+    expect(r.outcome).toBe('resumed')
+    expect(r.state.locale).toBe('hi')
+    expect(r.state.path).toEqual(['start', 'wise_path'])
+    expect(openRun(graph, { path: ['start', 'quick_path'], locale: 'en' }, 'hi').state.locale).toBe(
+      'en',
+    )
+  })
+
+  it('takes the page language, never the story default, for a stored language the graph lacks', () => {
+    // 'ar' is registered but not in this graph; the page is 'hi' and the default is 'en'.
+    expect(graph.defaultLocale).toBe('en')
+    const r = openRun(graph, { path: ['start', 'wise_path'], locale: 'ar' }, 'hi')
+    expect(r.outcome).toBe('adjusted')
+    expect(r.state.locale).toBe('hi')
+    expect(r.state.path).toEqual(['start', 'wise_path'])
+    // A page that offers English only (graphOf restricts the locales): a stored Hindi run reads in English.
+    const englishOnly: Graph = { ...graph, locales: ['en'], defaultLocale: 'en' }
+    const e = openRun(englishOnly, { path: ['start', 'quick_path'], locale: 'hi' }, 'en')
+    expect(e.outcome).toBe('adjusted')
+    expect(e.state.locale).toBe('en')
+    expect(e.state.path).toEqual(['start', 'quick_path'])
+  })
+
+  it('opens fresh in the page language when nothing is stored', () => {
+    const r = openRun(graph, null, 'hi')
+    expect(r.outcome).toBe('fresh')
+    expect(r.state).toEqual(start(graph, { path: ['start'], locale: 'hi' }))
+  })
+
+  it('opens a stored run that ends at an ending fresh in the page language, not the stored one', () => {
+    const r = openRun(graph, { path: ['start', 'wise_path', 'ending_wise'], locale: 'hi' }, 'en')
+    expect(r.outcome).toBe('fresh')
+    expect(r.state).toEqual(start(graph, { path: ['start'], locale: 'en' }))
+  })
+
+  it('keeps the longest valid prefix in the stored language, and a start-only run literally', () => {
+    const trimmed = openRun(graph, { path: ['start', 'quick_path', 'gone'], locale: 'hi' }, 'en')
+    expect(trimmed.outcome).toBe('adjusted')
+    expect(trimmed.state.path).toEqual(['start', 'quick_path'])
+    expect(trimmed.state.locale).toBe('hi')
+    const atStart = openRun(graph, { path: ['start'], locale: 'hi' }, 'en')
+    expect(atStart.outcome).toBe('resumed')
+    expect(atStart.state.locale).toBe('hi')
+  })
+
+  it('every stored path and language: the stored language if the graph has it, else the page one', () => {
+    const paths = [
+      ['start'],
+      ['start', 'wise_path'],
+      ['start', 'quick_path'],
+      ['start', 'wise_path', 'ending_wise'],
+      ['start', 'quick_path', 'ending_quick'],
+      ['wise_path'],
+      ['start', 'nope'],
+    ]
+    let cases = 0
+    for (const path of paths) {
+      for (const storedLocale of ['en', 'hi', 'ar'] as const) {
+        for (const page of ['en', 'hi'] as const) {
+          const stored = { path, locale: storedLocale }
+          const r = openRun(graph, stored, page)
+          const base = resumeRun(graph, stored, 'en')
+          const usable = storedLocale !== 'ar' && base.outcome !== 'fresh'
+          expect(r.state.locale).toBe(usable ? storedLocale : page)
+          expect(r.state.path).toEqual(base.state.path)
+          expect(r.outcome === 'fresh').toBe(base.outcome === 'fresh')
+          cases++
+        }
+      }
+    }
+    expect(cases).toBe(42)
   })
 })
