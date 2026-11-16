@@ -6,6 +6,10 @@
 //   controller's live seq), so a second tap of a double tap is a stale-seq no-op in the engine.
 // - setLocale(locale): the story-language switch (10d) sits in the header, which is not settled,
 //   so it is never refused here; the controller still refuses it before open().
+// - menuRestart(seq) (Step 10b, D11-P11, D11-P19): the menu's Start again and its confirm dialog
+//   send RESTART from the header, which is not settled (D11-P7 settles only run-area controls),
+//   so it is never refused here either; the controller still refuses it before open(). The run
+//   area's restart(seq) (10c's Try another path) stays settled.
 // - Each returns the engine's result untouched. On an accepted result onAccepted(result) runs
 //   synchronously before the action returns (Step 10: the island's focus, inert and ending
 //   bookkeeping; Step 11: the narration call). The controller schedules the save after that.
@@ -26,6 +30,8 @@ export interface PlayerActions {
   choose(seq: number, choiceId: string): StepResult
   back(seq: number): StepResult
   restart(seq: number): StepResult
+  /** RESTART from the menu (a header control): never refused by isInteractive. */
+  menuRestart(seq: number): StepResult
   setLocale(locale: LocaleCode): StepResult
 }
 
@@ -54,6 +60,7 @@ export function createPlayerActions(options: PlayerActionsOptions): PlayerAction
     choose: (seq, choiceId) => runAreaEvent({ type: 'CHOOSE', seq, choiceId }),
     back: (seq) => runAreaEvent({ type: 'BACK', seq }),
     restart: (seq) => runAreaEvent({ type: 'RESTART', seq }),
+    menuRestart: (seq) => send({ type: 'RESTART', seq }),
     setLocale: (locale) => send({ type: 'SET_LOCALE', locale }),
   }
 }

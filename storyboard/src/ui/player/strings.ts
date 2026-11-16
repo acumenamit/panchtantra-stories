@@ -4,7 +4,10 @@ import 'server-only'
 // "Page n" live-region text is pre-formatted for every n the story can reach, so no catalogue,
 // template or formatter reaches the browser (spec §6.7). Story text is not a message: it comes
 // from the package through PlayerData.
+// Step 10b: Back, the menu, the restart dialog, the text-size labels (one per TEXT_SCALES value)
+// and the progress bar's value text for every count from 0 to the story's step count.
 import type { LocaleCode } from '../../core/locales'
+import { TEXT_SCALES, type TextScale } from '../../core/progress'
 import type { PlayerData } from '../../reader/player/player-data'
 import { translator } from '../i18n/messages'
 import type { PlayerFallbackStrings, PlayerStrings } from './types'
@@ -21,16 +24,35 @@ export function playerFallbackStringsOf(locale: LocaleCode): PlayerFallbackStrin
   }
 }
 
-/** Every string the player island shows in the route locale; page[n - 1] is "Page n". */
+/**
+ * Every string the player island shows in the route locale; page[n - 1] is "Page n" and
+ * progressValue[filled] is "{filled} of {total}".
+ */
 export function playerStringsOf(
   locale: LocaleCode,
-  data: Pick<PlayerData, 'nodes'>,
+  data: Pick<PlayerData, 'nodes' | 'progressSteps'>,
 ): PlayerStrings {
   const t = translator(locale)
+  const total = data.progressSteps.length
+  const textSizeOption = {} as Record<TextScale, string>
+  for (const percent of TEXT_SCALES) {
+    textSizeOption[percent] = t('player.textSizeOption', { percent })
+  }
   return {
     ...playerFallbackStringsOf(locale),
     navLabel: t('header.navLabel'),
     grownUps: t('header.grownUps'),
     page: data.nodes.map((_, index) => t('player.page', { n: index + 1 })),
+    back: t('player.back'),
+    menu: t('player.menu'),
+    textSize: t('player.textSize'),
+    textSizeOption,
+    restart: t('player.restart'),
+    restartQuestion: t('player.restartQuestion'),
+    keepReading: t('player.keepReading'),
+    progress: t('player.progress'),
+    progressValue: Array.from({ length: total + 1 }, (_, filled) =>
+      t('player.progressValue', { filled, total }),
+    ),
   }
 }

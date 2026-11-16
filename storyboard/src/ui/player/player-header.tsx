@@ -2,10 +2,11 @@
 // The player's header (Step 10a; design p1-step10-design.md §4.1 row 1, D11-P15, P16, P18; spec
 // §6.6 3.2.6). In flow, never fixed or sticky. Row 1: "All stories" (the exit, next/link to
 // /{locale}) at the brand's place, then the nav with Grown-ups last, as on the site pages. 10b adds
-// row 2 (segments, Menu) and 10d the story-language switch before Grown-ups. Strings arrive
-// finished from the server; the island scrolls this header to the top after each step (D11-P8).
+// row 2 (segments, Menu) and the menu panel as children, after the nav; 10d adds the
+// story-language switch before Grown-ups. Strings arrive finished from the server; the island
+// scrolls this header to the top after each step (D11-P8).
 import Link from 'next/link'
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import type { LocaleCode } from '../../core/locales'
 import shell from '../shell/shell.module.css'
 
@@ -15,9 +16,18 @@ export interface PlayerHeaderProps {
   readonly navLabel: string
   readonly grownUps: string
   readonly ref?: Ref<HTMLElement>
+  /** Step 10b: header row 2 and the menu panel (PlayerMenu), after row 1. */
+  readonly children?: ReactNode
 }
 
-export function PlayerHeader({ locale, allStories, navLabel, grownUps, ref }: PlayerHeaderProps) {
+export function PlayerHeader({
+  locale,
+  allStories,
+  navLabel,
+  grownUps,
+  ref,
+  children,
+}: PlayerHeaderProps) {
   return (
     <header ref={ref} className={shell.header}>
       <Link href={`/${locale}`} data-exit="" className={shell.link}>
@@ -28,6 +38,7 @@ export function PlayerHeader({ locale, allStories, navLabel, grownUps, ref }: Pl
           <span className={shell.label}>{grownUps}</span>
         </Link>
       </nav>
+      {children}
     </header>
   )
 }

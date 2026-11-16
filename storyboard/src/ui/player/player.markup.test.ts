@@ -13,6 +13,13 @@
 // Hindi 0.12em paint offset on the choice and action labels (D11-P26); the saved-run hint rule and
 // its 3 s failsafe (D11-P5, §4.4). CSS is read as text (Vitest does not apply it); CSS Module class
 // names are Vitest's stable ones, imported here as the components import them.
+// Step 10b (design §4.1, D11-P10 to P12, P19, P11): header row 2 with one named progressbar and
+// the Menu button (inert while opening), the hidden menu panel (text-size radios with the server
+// snapshot's 100 checked, Start again with its seq), the closed restart dialog after main, Back in
+// the run footer from page 2 on (an ending included) and never at page 1, the new strings, and the
+// CSS the segments, the radios and the panel rely on. Fixer pass (review A11Y-1, A11Y-2, A11Y-3,
+// PIF-5): the radio and dialog labels carry the action label class (D11-P26), the segments'
+// forced-colours rule, and Start again's seq at a part after the first.
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -27,11 +34,16 @@ import { start, type StepResult } from '../../core/engine'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../../core/locales'
 import { StoryPackageV1 } from '../../core/package/v1'
 import { graphOf, playerDataOf, type PlayerData } from '../../reader/player/player-data'
+import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf } from '../../reader/player/view'
+import { readerStores } from '../../reader/progress'
 import { translator } from '../i18n/messages'
 import { Player } from './player'
 import { PlayerFallback } from './player-boundary'
+import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
 import styles from './player.module.css'
+import { ProgressSegments } from './progress-segments'
+import { dialogClosed, RESTART_QUESTION_ID, RestartDialog } from './restart-dialog'
 import { QUESTION_ID, StoryPart } from './story-part'
 import { playerFallbackStringsOf, playerStringsOf } from './strings'
 
@@ -265,7 +277,7 @@ describe('one part: endings and steps', () => {
   })
 
   it.each(parts)(
-    '%s %s/%s: an ending shows its passage only (no question, no choices)',
+    '%s %s/%s: an ending shows its passage (no question, no choices) and Back (10b)',
     (_, ending, locale, pkg, data) => {
       const state = start(graphOf(data), { path: pathTo(data, ending), locale })
       expect(state.status).toBe('ended')
@@ -277,13 +289,72 @@ describe('one part: endings and steps', () => {
           revealDone: false,
           firstParagraphRef: createRef<HTMLParagraphElement>(),
           onChoose: refuse,
+          backLabel: 'Back',
+          onBack: refuse,
         }),
       )
       expect(html).toContain(` data-node="${ending}"`)
       expect(paragraphsIn(html).join('\n\n')).toBe(pkg.text[locale]?.nodes[ending]?.text)
       expect(html).not.toContain('<ul')
-      expect(html).not.toContain('<button')
       expect(html).not.toContain('data-question')
+      // BACK from an ending is allowed (the engine's BACK), so its footer shows Back (D11-P10).
+      expect(startTags(html, 'button')).toHaveLength(1)
+      expect(startTags(html, 'button')[0]).toContain(' data-back=""')
+    },
+  )
+
+  it.each(cases)(
+    '%s/%s: Back in the run footer from page 2 on, never at page 1 (D11-P10)',
+    (_, locale, pkg) => {
+      const data = dataOf(pkg)
+      const graph = graphOf(data)
+      const back = translator(locale)('player.back')
+      const render = (path: string[], interactive: boolean): string =>
+        renderToString(
+          createElement(StoryPart, {
+            view: partViewOf(data, start(graph, { path, locale })),
+            interactive,
+            animate: false,
+            revealDone: false,
+            firstParagraphRef: createRef<HTMLParagraphElement>(),
+            onChoose: refuse,
+            backLabel: back,
+            onBack: refuse,
+          }),
+        )
+      // Page 1: no footer, no Back (the engine refuses BACK there; Exit is in the header).
+      const first = render([data.startNodeId], true)
+      expect(first).not.toContain('data-back')
+      expect(first).not.toContain('data-part-controls')
+      expect(first).not.toContain('<footer')
+      // Every other node of the story, by its first path: one footer, one Back with the part's seq.
+      const others = data.nodes.filter((n) => n.id !== data.startNodeId)
+      expect(others.length).toBeGreaterThan(2)
+      for (const node of others) {
+        const path = pathTo(data, node.id)
+        // The seq the part was rendered with (a resumed state starts at 0).
+        const seq = String(start(graph, { path, locale }).seq)
+        for (const interactive of [true, false]) {
+          const html = render(path, interactive)
+          const footers = startTags(html, 'footer')
+          expect(footers, node.id).toHaveLength(1)
+          expect(footers[0]).toContain(' data-part-controls=""')
+          // Inert exactly while the run opens or this part settles, like the choices.
+          expect(footers[0]?.includes(' inert=""'), `${node.id} inert`).toBe(!interactive)
+          const buttons = all(html, /<button\b([^>]*)>([\s\S]*?)<\/button>/g).filter((m) =>
+            (m[1] ?? '').includes(' data-back=""'),
+          )
+          expect(buttons, node.id).toHaveLength(1)
+          expect(buttons[0]?.[1]).toMatch(
+            new RegExp(`^ type="button" data-back="" data-seq="${seq}"`),
+          )
+          expect(unescapeHtml((buttons[0]?.[2] ?? '').replace(/<[^>]+>/g, ''))).toBe(back)
+          expect(buttons[0]?.[2]).toContain(`<span class="${styles.actionLabel}">`)
+          // The footer is the part's last child, outside the story container: the page's language.
+          expect(html).toMatch(/<\/div><\/div><footer\b[^>]*>[\s\S]*<\/footer><\/div>$/)
+          expect(footers[0]).not.toContain(' lang=')
+        }
+      }
     },
   )
 
@@ -299,14 +370,259 @@ describe('one part: endings and steps', () => {
           revealDone,
           firstParagraphRef: createRef<HTMLParagraphElement>(),
           onChoose: refuse,
+          backLabel: 'Back',
+          onBack: refuse,
         }),
       )
     const settling = render(false, true, false)
     expect(startTags(settling, 'div')[0]).toMatch(/\sdata-seq="1"\sdata-animate=""/)
     expect(startTags(settling, 'ul')[0]).toContain(' inert=""')
+    // Back settles with the choices (D11-P7: every control inside the run area) and carries the
+    // seq this part was rendered with.
+    expect(startTags(settling, 'footer')[0]).toContain(' inert=""')
+    expect(startTags(settling, 'button').filter((tag) => tag.includes(' data-back=""'))).toEqual([
+      `<button type="button" data-back="" data-seq="1" class="${styles.action}">`,
+    ])
+    expect(startTags(render(true, true, true), 'footer')[0]).not.toContain('inert')
     expect(choicesIn(settling).every(([, seq]) => seq === '1')).toBe(true)
     expect(startTags(render(true, true, true), 'div')[0]).toContain(' data-reveal="done"')
     expect(startTags(render(true, true, true), 'ul')[0]).not.toContain('inert')
+  })
+})
+
+/** The text of an element's inner HTML, tags removed and unescaped. */
+const textOf = (inner: string | undefined): string =>
+  unescapeHtml((inner ?? '').replace(/<[^>]+>/g, ''))
+
+/** One attribute's value from a start tag's attribute text, or null. */
+const attrOf = (attributes: string | undefined, name: string): string | null =>
+  new RegExp(`\\s${name}="([^"]*)"`).exec(attributes ?? '')?.[1] ?? null
+
+describe('Step 10b: header row 2, the menu and the restart dialog (server markup)', () => {
+  const headerOf = (html: string): string =>
+    /<header\b[^>]*>([\s\S]*?)<\/header>/.exec(html)?.[1] ?? ''
+
+  it.each(cases)(
+    '%s/%s: one named progressbar, then the Menu button (inert while opening), after row 1',
+    (_, locale, pkg) => {
+      const data = dataOf(pkg)
+      const t = translator(locale)
+      const html = renderPlayer(data, locale)
+      const header = headerOf(html)
+      const total = data.progressSteps.length
+      // One progressbar on the page, in the header (D11-P12); start is the first step: 1 filled.
+      expect(all(html, /\srole="progressbar"/g)).toHaveLength(1)
+      const bars = startTags(header, 'div').filter((tag) => /\srole="progressbar"/.test(tag))
+      expect(bars).toEqual([
+        `<div role="progressbar" data-segments="" aria-label="${t('player.progress')}"` +
+          ` aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="1"` +
+          ` aria-valuetext="${t('player.progressValue', { filled: 1, total })}"` +
+          ` class="${styles.segments} ${styles.runDependent}">`,
+      ])
+      const spans = all(header, /<span\b([^>]*)><\/span>/g)
+        .map((m) => m[1] ?? '')
+        .filter((attributes) => attributes.includes(` class="${styles.segment}"`))
+      expect(spans).toHaveLength(total)
+      expect(spans.every((attributes) => attributes.includes(' aria-hidden="true"'))).toBe(true)
+      expect(spans.map((attributes) => attributes.includes(' data-filled=""'))).toEqual(
+        Array.from({ length: total }, (_n, i) => i === 0),
+      )
+      // The Menu button: a disclosure for the panel, inert until open() (D11-P5, P19).
+      const menus = all(header, /<button\b([^>]*)>([\s\S]*?)<\/button>/g).filter((m) =>
+        (m[1] ?? '').includes(' data-menu=""'),
+      )
+      expect(menus).toHaveLength(1)
+      expect(menus[0]?.[1]).toBe(
+        ` type="button" data-menu="" aria-expanded="false" aria-controls="${PLAYER_MENU_ID}"` +
+          ` inert="" class="${styles.action}"`,
+      )
+      expect(textOf(menus[0]?.[2])).toBe(t('player.menu'))
+      expect(menus[0]?.[2]).toBe(`<span class="${styles.actionLabel}">${t('player.menu')}</span>`)
+      // Row 2 (progressbar, then Menu, in one row) comes after row 1 (the nav).
+      const row = new RegExp(
+        `</nav><div class="${styles.headerRow}"><div role="progressbar"[\\s\\S]*?</div><button\\b[^>]*\\sdata-menu=""`,
+      )
+      expect(header).toMatch(row)
+    },
+  )
+
+  it.each(cases)(
+    '%s/%s: the menu panel is hidden: text-size radios (100 checked) and Start again with its seq',
+    (_, locale, pkg) => {
+      const data = dataOf(pkg)
+      const t = translator(locale)
+      const html = renderPlayer(data, locale)
+      const header = headerOf(html)
+      expect(all(html, new RegExp(`\\sid="${PLAYER_MENU_ID}"`, 'g'))).toHaveLength(1)
+      const panel = new RegExp(
+        `<div id="${PLAYER_MENU_ID}" hidden="" class="${styles.menuPanel}">([\\s\\S]*)</div>$`,
+      ).exec(header)
+      expect(panel, 'the panel, hidden, last in the header').not.toBeNull()
+      const inside = panel?.[1] ?? ''
+      expect(header.indexOf(`id="${PLAYER_MENU_ID}"`)).toBeGreaterThan(header.indexOf('data-menu'))
+      // The fieldset: legend "Text size", then 3 native radios, 100 checked (the server snapshot).
+      const legend = /<fieldset\b[^>]*><legend\b[^>]*>([\s\S]*?)<\/legend>/.exec(inside)
+      expect(textOf(legend?.[1])).toBe(t('player.textSize'))
+      // Each label's text carries the action label class: the Hindi 0.12em offset (A11Y-1, D11-P26).
+      const radios = all(
+        inside,
+        new RegExp(
+          `<label class="([^"]*)"><input\\b([^>]*)><span class="${styles.actionLabel}">([\\s\\S]*?)</span></label>`,
+          'g',
+        ),
+      )
+      expect(
+        radios.map((m) => [
+          m[1],
+          attrOf(m[2], 'type'),
+          attrOf(m[2], 'name'),
+          attrOf(m[2], 'value'),
+          (m[2] ?? '').includes(' checked=""'),
+          textOf(m[3]),
+        ]),
+      ).toEqual(
+        [100, 125, 150].map((percent) => [
+          styles.option,
+          'radio',
+          TEXT_SIZE_NAME,
+          String(percent),
+          percent === 100,
+          t('player.textSizeOption', { percent }),
+        ]),
+      )
+      expect(all(inside, /<input\b/g)).toHaveLength(3)
+      // Start again: the panel's one button, with the seq it was rendered with.
+      const buttons = all(inside, /<button\b([^>]*)>([\s\S]*?)<\/button>/g)
+      expect(buttons).toHaveLength(1)
+      expect(buttons[0]?.[1]).toBe(
+        ` type="button" data-restart="" data-seq="0" class="${styles.action}"`,
+      )
+      expect(buttons[0]?.[2]).toBe(
+        `<span class="${styles.actionLabel}">${t('player.restart')}</span>`,
+      )
+      expect(inside).not.toContain('<a ')
+    },
+  )
+
+  it.each(cases)(
+    '%s/%s: the restart dialog is closed, a sibling after main: Keep reading first, then Start again',
+    (_, locale, pkg) => {
+      const data = dataOf(pkg)
+      const t = translator(locale)
+      const html = renderPlayer(data, locale)
+      expect(startTags(html, 'dialog')).toEqual([
+        `<dialog data-restart-confirm="" aria-labelledby="${RESTART_QUESTION_ID}" class="${styles.dialog}">`,
+      ])
+      // After main and last in the player root: never inside the header or the menu panel (F6).
+      expect(html).toMatch(/<\/main><dialog\b[^>]*>[\s\S]*<\/dialog><\/div>$/)
+      const inside = /<dialog\b[^>]*>([\s\S]*?)<\/dialog>/.exec(html)?.[1] ?? ''
+      const question = new RegExp(`^<p id="${RESTART_QUESTION_ID}"[^>]*>([\\s\\S]*?)</p>`).exec(
+        inside,
+      )
+      expect(textOf(question?.[1])).toBe(t('player.restartQuestion'))
+      // Both labels carry the action label class: the Hindi 0.12em offset (A11Y-3, D11-P26).
+      const buttons = all(inside, /<button\b([^>]*)>([\s\S]*?)<\/button>/g)
+      expect(buttons.map((m) => [m[1], m[2]])).toEqual([
+        [
+          ` type="button" data-keep-reading="" class="${styles.action}"`,
+          `<span class="${styles.actionLabel}">${t('player.keepReading')}</span>`,
+        ],
+        [
+          ` type="button" data-restart-accept="" data-seq="0" class="${styles.action}"`,
+          `<span class="${styles.actionLabel}">${t('player.restart')}</span>`,
+        ],
+      ])
+    },
+  )
+
+  it('Start again, in the menu and in the dialog, carries the seq it was rendered with (D11-P7)', () => {
+    // The opening snapshot renders seq 0 only; a later part's seq must reach both buttons (PIF-5).
+    const [pkg] = fixtures
+    if (pkg === undefined) throw new Error('no fixture')
+    const strings = playerStringsOf('en', dataOf(pkg))
+    const returnFocus = createRef<HTMLButtonElement>()
+    const none = (): void => {}
+    const menu = renderToString(
+      createElement(PlayerMenu, {
+        strings,
+        prefs: readerStores().prefs,
+        open: true,
+        confirmOpen: false,
+        opening: false,
+        seq: 7,
+        leading: null,
+        restartRef: returnFocus,
+        onToggle: none,
+        onClose: none,
+        onStartAgain: none,
+      }),
+    )
+    expect(startTags(menu, 'button').filter((tag) => tag.includes(' data-restart=""'))).toEqual([
+      `<button type="button" data-restart="" data-seq="7" class="${styles.action}">`,
+    ])
+    const dialog = renderToString(
+      createElement(RestartDialog, {
+        strings,
+        open: false,
+        seq: 7,
+        returnFocus,
+        onConfirm: () => false,
+        onCancelled: none,
+        onClosed: none,
+      }),
+    )
+    expect(
+      startTags(dialog, 'button').filter((tag) => tag.includes(' data-restart-accept=""')),
+    ).toEqual([
+      `<button type="button" data-restart-accept="" data-seq="7" class="${styles.action}">`,
+    ])
+  })
+
+  const nodes = fixtures.flatMap((pkg) => {
+    const data = dataOf(pkg)
+    return data.nodes.map((node) => [pkg.storyId, node.id, data] as const)
+  })
+
+  it.each(nodes)(
+    '%s %s: the filled segments start at the first, with no gap; all of them at an ending',
+    (_, nodeId, data) => {
+      const state = start(graphOf(data), { path: pathTo(data, nodeId), locale: 'en' })
+      const { total, reached } = segmentsOf(data, state)
+      const html = renderToString(
+        createElement(ProgressSegments, { total, reached, label: 'L', valueText: 'V' }),
+      )
+      expect(startTags(html, 'div')[0]).toContain(
+        ` aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${reached}" aria-valuetext="V"`,
+      )
+      const filled = all(html, /<span\b([^>]*)><\/span>/g).map((m) =>
+        (m[1] ?? '').includes(' data-filled=""'),
+      )
+      expect(filled).toEqual(Array.from({ length: total }, (_n, i) => i < reached))
+      if (state.status === 'ended') expect(filled.every(Boolean)).toBe(true)
+    },
+  )
+})
+
+// Second review R2-STRESS-1 (D11-P7 amended at 10b): a close without an accepted Start again holds
+// the run area (the island's hold) and focuses the menu's Start again; an accepted one does
+// neither. The wiring into the dialog's close event is proven by e2e T-b10.
+describe("the restart dialog's close: a cancel holds the run area, an accepted restart does not", () => {
+  const calls = (restarted: boolean): string[] => {
+    const seen: string[] = []
+    dialogClosed(restarted, {
+      focusBack: () => seen.push('focusBack'),
+      onCancelled: () => seen.push('onCancelled'),
+      onClosed: () => seen.push('onClosed'),
+    })
+    return seen
+  }
+
+  it('a cancel (Keep reading, Escape, a refused restart): focus back, onCancelled, then onClosed', () => {
+    expect(calls(false)).toEqual(['focusBack', 'onCancelled', 'onClosed'])
+  })
+
+  it('an accepted Start again: onClosed only (no hold, no focus back to the menu)', () => {
+    expect(calls(true)).toEqual(['onClosed'])
   })
 })
 
@@ -334,7 +650,29 @@ describe('the player strings (server-only)', () => {
         navLabel: t('header.navLabel'),
         grownUps: t('header.grownUps'),
         page: strings.page,
+        back: t('player.back'),
+        menu: t('player.menu'),
+        textSize: t('player.textSize'),
+        textSizeOption: {
+          100: t('player.textSizeOption', { percent: 100 }),
+          125: t('player.textSizeOption', { percent: 125 }),
+          150: t('player.textSizeOption', { percent: 150 }),
+        },
+        restart: t('player.restart'),
+        restartQuestion: t('player.restartQuestion'),
+        keepReading: t('player.keepReading'),
+        progress: t('player.progress'),
+        progressValue: strings.progressValue,
       })
+      // Step 10b: "{filled} of {total}" for every count from 0 to the step count (D11-P12).
+      const total = data.progressSteps.length
+      expect(strings.progressValue).toEqual(
+        Array.from({ length: total + 1 }, (_n, filled) =>
+          t('player.progressValue', { filled, total }),
+        ),
+      )
+      expect(strings.progressValue[1]).toBe(locale === 'hi' ? `${total} में से 1` : `1 of ${total}`)
+      expect(Object.values(strings.textSizeOption)).toEqual(['100%', '125%', '150%'])
     },
   )
 })
@@ -368,6 +706,53 @@ describe('player CSS that the markup relies on (read as text)', () => {
     const actions = all(fallback, /<(?:button|a)\b[^>]*><span\b([^>]*)>/g)
     expect(actions).toHaveLength(2)
     for (const action of actions) expect(action[1]).toBe(` class="${styles.actionLabel}"`)
+    // Step 10b: the menu's three text-size radio labels, header controls too (review A11Y-1).
+    const options = all(html, /<label\b[^>]*><input\b[^>]*><span\b([^>]*)>/g)
+    expect(options).toHaveLength(3)
+    for (const option of options) expect(option[1]).toBe(` class="${styles.actionLabel}"`)
+  })
+
+  it('progress segments: the same box filled or empty, a fill against an outline (D11-P12)', () => {
+    const css = playerCss()
+    expect(ruleBody(css, '.segment')).toBe(
+      [
+        '  flex: 1 1 0;',
+        '  block-size: var(--space-3);',
+        '  border: 2px solid var(--color-line-strong);',
+        '  border-radius: var(--radius-pill);',
+        '  background-color: transparent;',
+        '',
+      ].join('\n'),
+    )
+    // Filled changes only colours, never the box: the same border width, the same size.
+    expect(ruleBody(css, '.segment[data-filled]')).toBe(
+      '  border-color: var(--color-accent);\n  background-color: var(--color-accent);\n',
+    )
+    // Forced colours force every background to Canvas; a filled segment keeps a CanvasText fill,
+    // so it never looks like an empty one (review A11Y-2; T-b6 checks it in Chromium).
+    expect(css).toContain(
+      [
+        '\n@media (forced-colors: active) {',
+        '  .segment[data-filled] {',
+        '    forced-color-adjust: none;',
+        '    border-color: CanvasText;',
+        '    background-color: CanvasText;',
+        '  }',
+        '}\n',
+      ].join('\n'),
+    )
+  })
+
+  it('the menu: the panel sets no display (hidden keeps it out); radio labels are 44 px targets (D11-P19)', () => {
+    const css = playerCss()
+    const panel = ruleBody(css, '.menuPanel')
+    expect(panel).not.toMatch(/(^|\n)\s*display:/)
+    expect(css).not.toMatch(/\.menuPanel[^{,]*\{[^}]*\bdisplay:/)
+    const option = ruleBody(css, '.option')
+    expect(option).toContain('\n  min-block-size: var(--target-min);\n')
+    expect(option).toContain('\n  touch-action: manipulation;\n')
+    // Row 2 starts under row 1: a full-width item of the header.
+    expect(ruleBody(css, '.headerRow')).toContain('\n  flex-basis: 100%;\n')
   })
 
   it('the saved-run hint hides the run area while opening, with a one-shot 3 s failsafe (D11-P5, §4.4)', () => {

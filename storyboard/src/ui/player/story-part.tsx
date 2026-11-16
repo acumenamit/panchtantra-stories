@@ -8,7 +8,13 @@
 //   is the focus target after a step (tabIndex -1, no ring).
 // - An ending shows its passage only in 10a (no question, no choices; the card comes in 10c).
 // - data-animate marks a part that a step rendered (the reveal runs); data-reveal="done" ends it.
-import type { Ref } from 'react'
+// - Step 10b (D11-P10, P7): the run footer (data-part-controls) holds Back, which is not rendered at
+//   path length 1 (the engine refuses BACK there; Exit is in the header) and is shown on every
+//   other part, an ending included. In-app only: no history entry. The footer sits outside the
+//   story container, so it carries the page's language. It is inert while the run opens or this
+//   part settles, like the choices; Back carries the seq it was rendered with, and an accepted Back
+//   makes the footer inert at once on its DOM node (C28).
+import { useRef, type Ref } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { PartView } from '../../reader/player/view'
 import { ChoiceList } from './choice-list'
@@ -19,7 +25,7 @@ export const QUESTION_ID = 'player-question'
 
 export interface StoryPartProps {
   readonly view: PartView
-  /** False while the run is opening or this part is settling: the choices are inert. */
+  /** False while the run is opening or this part is settling: the choices and Back are inert. */
   readonly interactive: boolean
   /** True when an accepted step rendered this part (the reveal runs). */
   readonly animate: boolean
@@ -27,6 +33,9 @@ export interface StoryPartProps {
   readonly revealDone: boolean
   readonly firstParagraphRef: Ref<HTMLParagraphElement>
   readonly onChoose: (seq: number, choiceId: string) => StepResult
+  /** Back's label in the page's language (player.back). */
+  readonly backLabel: string
+  readonly onBack: (seq: number) => StepResult
 }
 
 export function StoryPart({
@@ -36,7 +45,10 @@ export function StoryPart({
   revealDone,
   firstParagraphRef,
   onChoose,
+  backLabel,
+  onBack,
 }: StoryPartProps) {
+  const controls = useRef<HTMLElement>(null)
   const hasQuestion = view.question !== null
   return (
     <div
@@ -79,6 +91,27 @@ export function StoryPart({
           )}
         </div>
       </div>
+      {view.page > 1 ? (
+        <footer
+          ref={controls}
+          data-part-controls=""
+          inert={!interactive}
+          className={styles.partControls}
+        >
+          <button
+            type="button"
+            data-back=""
+            data-seq={view.seq}
+            className={styles.action}
+            onClick={() => {
+              const result = onBack(view.seq)
+              if (result.accepted && controls.current !== null) controls.current.inert = true
+            }}
+          >
+            <span className={styles.actionLabel}>{backLabel}</span>
+          </button>
+        </footer>
+      ) : null}
     </div>
   )
 }

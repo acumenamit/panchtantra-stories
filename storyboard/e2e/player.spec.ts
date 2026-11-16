@@ -14,20 +14,32 @@
 // - Opening frames: an init-script sampler records, every animation frame, whether the opening
 //   player's passage is painted (computed visibility not hidden); T-a9, T-a10 and T-a14 read it.
 // - JavaScript chunks are held by page.route where a test needs an unhydrated page; CSS never is.
+// Step 10b (design §4.1, §4.3, D11-P10 to P12, P19, P20, C13, F6; §9.3 T-b1 to T-b8): Back in the
+// run footer, the menu (text size, Start again), the restart dialog, the progress segments and the
+// text-size sync. T-b2 measures its click point and reads its commit and tap times in the page, as
+// T-a4 does (C7, F4). T-b10 (second review R2-STRESS-1) times the restart dialog's hold from its
+// close event in the page.
 import type { Page, Request } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY } from '../src/core/progress/records'
+import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
+import { SETTLE_MS } from '../src/reader/player/view'
 import { expect, test as base } from './fixtures'
 import {
   consoleErrors,
+  endingsOf,
   fixtureGraph,
   focusByKeyboard,
+  pathTo,
   prefsText,
   progressSpy,
+  scaleSeen,
   seedPrefs,
   seedProgressOnce,
   settleFonts,
+  storageAfter,
   walk,
+  watchScaleAttribute,
   type ConsoleErrors,
   type FixtureGraph,
 } from './page-helpers'
@@ -1495,6 +1507,1236 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
       .poll(() => storedStory(page, 'two-paths'), 'the stored story after Start this story again')
       .toMatchObject({ activeRun: null, endingsFound: ['ending_wise'] })
   })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Step 10b (design §4.1, §4.3, §4.6 hooks)
+
+const FOOTER = 'footer[data-part-controls]'
+const MENU = 'header button[data-menu]'
+const PANEL = '#player-menu'
+const MENU_RESTART = '#player-menu button[data-restart]'
+const DIALOG = 'dialog[data-restart-confirm]'
+const KEEP_READING = `${DIALOG} button[data-keep-reading]`
+const RESTART_ACCEPT = `${DIALOG} button[data-restart-accept]`
+const PROGRESS = 'header [role="progressbar"][data-segments]'
+const FIRST_PARAGRAPH = '[data-part] [data-passage] p'
+const RUN = '[data-run]'
+/** A computed background-color with no fill, on both engines. */
+const NO_FILL = 'rgba(0, 0, 0, 0)'
+/** Chromium's layout unit (1/64 px): the largest difference between equal flex items' boxes. */
+const LAYOUT_UNIT = 1 / 64
+
+/** Back, in the part on screen or in the part of `node`. */
+function back(node?: string): string {
+  return `${node === undefined ? PART : `[data-part][data-node="${node}"]`} button[data-back]`
+}
+
+/** One of the menu panel's text-size radios. */
+function textSize(scale: 100 | 125 | 150): string {
+  return `${PANEL} input[name="text-size"][value="${scale}"]`
+}
+
+/** Waits until the run footer on screen is no longer inert (the settle after a step has ended). */
+async function waitBackSettled(page: Page): Promise<void> {
+  await expect(page.locator(FOOTER)).not.toHaveAttribute('inert')
+}
+
+/** The textScale of the stored prefs record (seedPrefs's reader), or what that reader returned. */
+async function storedTextScale(page: Page): Promise<unknown> {
+  const { stored } = await storageAfter(page)
+  if (typeof stored !== 'string') return stored
+  return (JSON.parse(stored) as { textScale?: unknown }).textScale
+}
+
+/**
+ * Before a click that must not open the restart dialog: records in the page whether the dialog's
+ * open attribute is ever set from now on (a MutationObserver), read back as __e2eDialogOpened.
+ */
+async function watchDialogOpen(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    const w = window as unknown as Record<string, unknown>
+    const dialog = document.querySelector<HTMLDialogElement>(selector)
+    if (dialog === null) throw new Error(`no ${selector}`)
+    w['__e2eDialogOpened'] = dialog.open
+    new MutationObserver(() => {
+      if (dialog.open) w['__e2eDialogOpened'] = true
+    }).observe(dialog, { attributes: true, attributeFilter: ['open'] })
+  }, DIALOG)
+}
+
+interface TapTimes {
+  readonly commitAt: number | null
+  readonly downs: readonly { t: number; node: string | null; hit: boolean }[]
+}
+
+/**
+ * In the page (F4), for T-b2: the time the part of `seq` commits (a MutationObserver), and for
+ * every pointerdown (capture phase on document) its time and whether the box of a `target`
+ * element holds the pointer, inert or not, with that element's part.
+ */
+async function watchTaps(page: Page, seq: number, target: string): Promise<void> {
+  await page.evaluate(
+    ([wantedSeq, wanted]) => {
+      const record: {
+        commitAt: number | null
+        downs: { t: number; node: string | null; hit: boolean }[]
+      } = { commitAt: null, downs: [] }
+      ;(window as unknown as Record<string, unknown>)['__e2eTaps'] = record
+      const observer = new MutationObserver(() => {
+        if (record.commitAt !== null) return
+        if (document.querySelector(`[data-part][data-seq="${wantedSeq}"]`) === null) return
+        record.commitAt = performance.now()
+        observer.disconnect()
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+      document.addEventListener(
+        'pointerdown',
+        (event) => {
+          const element = [...document.querySelectorAll(wanted)].find((candidate) => {
+            const box = candidate.getBoundingClientRect()
+            return (
+              event.clientX >= box.left &&
+              event.clientX <= box.right &&
+              event.clientY >= box.top &&
+              event.clientY <= box.bottom
+            )
+          })
+          record.downs.push({
+            t: performance.now(),
+            node: element?.closest('[data-part]')?.getAttribute('data-node') ?? null,
+            hit: element !== undefined,
+          })
+        },
+        { capture: true },
+      )
+    },
+    [seq, target] as const,
+  )
+}
+
+interface SettleTap {
+  readonly commitAt: number | null
+  readonly downs: readonly {
+    t: number
+    onRestart: boolean
+    node: string | null
+    runInert: boolean | null
+  }[]
+}
+
+/**
+ * In the page, for the T-b4 settle case (review FB-1): the time the part of `seq` commits, and
+ * for every click (capture phase on document; the action runs on the click) its time, whether it
+ * is on the menu's Start again, the part on screen and whether that part's choices are inert (the
+ * settle) at that moment.
+ */
+async function watchSettleTap(page: Page, seq: number): Promise<void> {
+  await page.evaluate(
+    ([wantedSeq, restart, choices]) => {
+      const record: SettleTap & {
+        commitAt: number | null
+        downs: SettleTap['downs'][number][]
+      } = { commitAt: null, downs: [] }
+      ;(window as unknown as Record<string, unknown>)['__e2eSettleTap'] = record
+      const observer = new MutationObserver(() => {
+        if (record.commitAt !== null) return
+        if (document.querySelector(`[data-part][data-seq="${wantedSeq}"]`) === null) return
+        record.commitAt = performance.now()
+        observer.disconnect()
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+      document.addEventListener(
+        'click',
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          record.downs.push({
+            t: performance.now(),
+            onRestart: target?.closest(restart) !== null && target !== null,
+            node: document.querySelector('[data-part]')?.getAttribute('data-node') ?? null,
+            runInert: document.querySelector(choices)?.hasAttribute('inert') ?? null,
+          })
+        },
+        { capture: true },
+      )
+    },
+    [seq, MENU_RESTART, `[data-part] ${CHOICES}`] as const,
+  )
+}
+
+interface HoldTap {
+  readonly t: number
+  /** The run-area control whose box holds the pointer, inert or not: a choice id or 'back'. */
+  readonly control: string | null
+  /** The pointerdown's target (hit testing skips inert elements). */
+  readonly target: string
+  readonly choicesInert: boolean | null
+  readonly backInert: boolean | null
+}
+
+interface HoldRecord {
+  readonly closeAt: number | null
+  readonly heldAt: number | null
+  readonly releasedAt: number | null
+  readonly downs: readonly HoldTap[]
+}
+
+/**
+ * In the page, for T-b10 (R2-STRESS-1): the time the restart dialog's close event is dispatched
+ * (a capturing listener on document, so it runs before the dialog's own close handler and the
+ * hold it starts); after that close, the times the run area's choices became inert (the hold) and
+ * then lost inert again (the release), from a MutationObserver on the run area; and for every
+ * pointerdown (capture phase on document) its time, the run-area control whose box holds the
+ * pointer (inert or not, as T-b2 measures), its target, and whether the choices and Back are inert.
+ */
+async function watchHold(page: Page): Promise<void> {
+  await page.evaluate(
+    ([dialog, run, choices, footer, controls]) => {
+      const record: {
+        closeAt: number | null
+        heldAt: number | null
+        releasedAt: number | null
+        downs: HoldTap[]
+      } = { closeAt: null, heldAt: null, releasedAt: null, downs: [] }
+      ;(window as unknown as Record<string, unknown>)['__e2eHold'] = record
+      const inertOf = (selector: string): boolean | null =>
+        document.querySelector(selector)?.hasAttribute('inert') ?? null
+      document.addEventListener(
+        'close',
+        (event) => {
+          if (record.closeAt !== null) return
+          if (event.target instanceof Element && event.target.matches(dialog)) {
+            record.closeAt = performance.now()
+          }
+        },
+        { capture: true },
+      )
+      const area = document.querySelector(run)
+      if (area === null) throw new Error(`no ${run}`)
+      new MutationObserver(() => {
+        if (record.closeAt === null) return
+        const inert = inertOf(choices)
+        if (inert === true && record.heldAt === null) record.heldAt = performance.now()
+        else if (inert === false && record.heldAt !== null && record.releasedAt === null) {
+          record.releasedAt = performance.now()
+        }
+      }).observe(area, { attributes: true, attributeFilter: ['inert'], subtree: true })
+      document.addEventListener(
+        'pointerdown',
+        (event) => {
+          const control = [...document.querySelectorAll(controls)].find((candidate) => {
+            const box = candidate.getBoundingClientRect()
+            return (
+              event.clientX >= box.left &&
+              event.clientX <= box.right &&
+              event.clientY >= box.top &&
+              event.clientY <= box.bottom
+            )
+          })
+          const target = event.target instanceof Element ? event.target : null
+          record.downs.push({
+            t: performance.now(),
+            control: control === undefined ? null : (control.getAttribute('data-choice') ?? 'back'),
+            target:
+              target === null
+                ? 'none'
+                : `${target.tagName.toLowerCase()}${[...target.attributes]
+                    .filter((attribute) => attribute.name.startsWith('data-'))
+                    .map((attribute) => `[${attribute.name}]`)
+                    .join('')}`,
+            choicesInert: inertOf(choices),
+            backInert: inertOf(footer),
+          })
+        },
+        { capture: true },
+      )
+    },
+    [
+      DIALOG,
+      RUN,
+      `[data-part] ${CHOICES}`,
+      FOOTER,
+      `[data-part] button[data-choice], [data-part] button[data-back]`,
+    ] as const,
+  )
+}
+
+interface ControlBox {
+  readonly name: string
+  readonly left: number
+  readonly right: number
+  readonly top: number
+  readonly bottom: number
+}
+
+/** The border boxes of the elements `selector` matches (viewport coordinates), named by text. */
+async function controlBoxes(page: Page, selector: string): Promise<ControlBox[]> {
+  return page.locator(selector).evaluateAll((elements) =>
+    elements.map((element) => {
+      const box = element.getBoundingClientRect()
+      return {
+        name: (element.textContent ?? '').trim() || element.tagName.toLowerCase(),
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+      }
+    }),
+  )
+}
+
+/**
+ * Every box is laid out (not 0 x 0, so a hidden control never passes), lies inside `within`, and
+ * overlaps no other box by more than half a pixel each way (the shell's 320 px rule).
+ */
+function expectLaidOutApart(
+  boxes: readonly ControlBox[],
+  within: { readonly left: number; readonly right: number },
+  what: string,
+): void {
+  expect(boxes.length, `${what}: the controls`).toBeGreaterThan(0)
+  for (const box of boxes) {
+    expect(box.right - box.left > 0 && box.bottom - box.top > 0, `${box.name} laid out`).toBe(true)
+    expect(box.left, `${what}: ${box.name} inside`).toBeGreaterThanOrEqual(within.left)
+    expect(box.right, `${what}: ${box.name} inside`).toBeLessThanOrEqual(within.right)
+  }
+  for (const [i, a] of boxes.entries()) {
+    for (const b of boxes.slice(i + 1)) {
+      const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+      const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      expect(
+        overlapX > 0.5 && overlapY > 0.5,
+        `${what}: ${a.name} and ${b.name} overlap (${overlapX.toFixed(1)} x ${overlapY.toFixed(1)} px)`,
+      ).toBe(false)
+    }
+  }
+}
+
+/**
+ * C7: the centre of the intersection of two boxes (viewport coordinates), and whether it can be
+ * used: the intersection is not empty and its centre lies inside the viewport.
+ */
+async function sharedPoint(
+  page: Page,
+  first: Box,
+  second: Box,
+): Promise<{ x: number; y: number; usable: boolean }> {
+  const viewport = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    height: window.innerHeight,
+  }))
+  const overlap = {
+    left: Math.max(first.left, second.left),
+    top: Math.max(first.top, second.top),
+    right: Math.min(first.right, second.right),
+    bottom: Math.min(first.bottom, second.bottom),
+  }
+  const x = (overlap.left + overlap.right) / 2
+  const y = (overlap.top + overlap.bottom) / 2
+  const usable =
+    overlap.right > overlap.left &&
+    overlap.bottom > overlap.top &&
+    x >= 0 &&
+    y >= 0 &&
+    x < viewport.width &&
+    y < viewport.height
+  return { x, y, usable }
+}
+
+test.describe('the story player, Step 10b', { tag: '@review' }, () => {
+  for (const code of ENABLED_LOCALE_CODES) {
+    test(`T-b1 /${code}: Back is absent at the start, shown after a choice, and goes back one node`, async ({
+      page,
+    }) => {
+      const lang = uiLang(code)
+      await recordAnnouncements(page)
+      await openPlayer(page, playerPath(code, 'river-stones'))
+      await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+      await expect(page.locator(FOOTER), 'the run footer at the start').toHaveCount(0)
+      await expect(page.locator('button[data-back]'), 'Back at the start').toHaveCount(0)
+
+      await walk(page, 'river-stones', ['c1'])
+      const backButton = page.locator(back('flat_stones'))
+      await expect(backButton, 'Back after a choice').toHaveCount(1)
+      await expect(backButton).toHaveText(message(lang, 'player.back'))
+      await expect(backButton).toHaveAttribute('data-seq', '1')
+      expect(
+        await page.locator(FOOTER).evaluate((footer) => ({
+          inStory: footer.closest('[data-story]') !== null,
+          lang: footer.closest('[lang]')?.getAttribute('lang') ?? null,
+        })),
+        'the run footer, outside the story container, in the page language (§4.1)',
+      ).toEqual({ inStory: false, lang: code })
+      await waitBackSettled(page)
+      await backButton.click()
+
+      await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+      await expect(page.locator(PART)).toHaveAttribute('data-seq', '2')
+      await expectPart(page, fixtureGraph('river-stones'), code, 'start')
+      await expect(page.locator('button[data-back]'), 'Back at the start again').toHaveCount(0)
+      await expect(page.locator(FIRST_PARAGRAPH).first(), 'focus after Back').toBeFocused()
+      await expect(page.locator('#live-region')).toHaveText(
+        formatted(lang, 'player.page', { n: 1 }),
+      )
+      expect(await announcements(page), 'announced').toEqual([
+        formatted(lang, 'player.page', { n: 2 }),
+        formatted(lang, 'player.page', { n: 1 }),
+      ])
+      await expect
+        .poll(() => storedStory(page, 'river-stones'), 'the stored story back at the start')
+        .toMatchObject({ activeRun: null })
+    })
+  }
+
+  test('T-b2 a double tap on Back goes back one node only: big_rock to flat_stones, stored path 2', async ({
+    page,
+  }) => {
+    const firstBack = back('big_rock')
+    const nextBack = back('flat_stones')
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await settleFonts(page)
+    await walk(page, 'river-stones', ['c1', 'c1'])
+    await waitBackSettled(page)
+    // One real Back first: where flat_stones' Back sits after the commit and its header scroll.
+    await page.locator(firstBack).click()
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'flat_stones')
+    await frames(page)
+    const second = await boxOf(page, nextBack)
+    // Then forward to big_rock again: that step scrolls the header to the top, as the first did.
+    await walk(page, 'river-stones', ['c1'])
+    await waitBackSettled(page)
+    await frames(page)
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+    const seq = Number(await page.locator(PART).getAttribute('data-seq'))
+    const point = await sharedPoint(page, await boxOf(page, firstBack), second)
+
+    await watchTaps(page, seq + 1, '[data-part] button[data-back]')
+    const notes: string[] = []
+    if (point.usable) {
+      notes.push(`double tap at ${Math.round(point.x)},${Math.round(point.y)}`)
+      await page.mouse.dblclick(point.x, point.y, { delay: 100 })
+    } else {
+      notes.push('geometry fallback')
+      const tap = await centreInViewport(page, firstBack)
+      await page.mouse.click(tap.x, tap.y)
+      await page.locator(nextBack).waitFor({ state: 'attached' })
+      const again = await centreInViewport(page, nextBack)
+      if (again.scrolled) notes.push('scrolled')
+      await page.mouse.click(again.x, again.y)
+    }
+    await page.waitForTimeout(800)
+    const taps = await pageValue<TapTimes>(page, '__e2eTaps')
+    const secondDown = taps.downs[1]
+    const late =
+      taps.commitAt === null || secondDown === undefined ? null : secondDown.t - taps.commitAt
+    notes.push(`second tap ${late === null ? 'never' : `${late.toFixed(0)} ms`} after the commit`)
+    test.info().annotations.push({ type: 'T-b2', description: notes.join('; ') })
+    console.log(`[player] T-b2 (${test.info().project.name}): ${notes.join('; ')}`)
+
+    expect(
+      taps.downs.map((down) => [down.node, down.hit]),
+      "the taps: big_rock's Back, then the new part's Back",
+    ).toEqual([
+      ['big_rock', true],
+      ['flat_stones', true],
+    ])
+    expect(late, 'the commit and second-tap times').not.toBeNull()
+    expect(
+      (late ?? Number.POSITIVE_INFINITY) < LATE_TAP_MS,
+      `timing: the second tap came ${late} ms after the commit (450 ms or more proves nothing)`,
+    ).toBe(true)
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'flat_stones')
+    await expect(page.locator(PART)).toHaveAttribute('data-seq', String(seq + 1))
+    await expect.poll(() => storedPath(page, 'river-stones')).toEqual(['start', 'flat_stones'])
+  })
+
+  test('T-b3 Start again at big_rock (path 3) asks first: Escape keeps the node; confirming starts a new run, endings kept', async ({
+    page,
+  }) => {
+    await seedProgressOnce(page, {
+      'river-stones': {
+        activeRun: { path: ['start', 'flat_stones', 'big_rock'], locale: 'en' },
+        endingsFound: ['ending_wet'],
+      },
+    })
+    await recordAnnouncements(page)
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', '0')
+    const seq = (await page.locator(PART).getAttribute('data-seq')) ?? ''
+    await page.evaluate((selector) => {
+      const w = window as unknown as Record<string, unknown>
+      w['__e2eRunArea'] = document.querySelector(selector)
+    }, RUN)
+    const dialog = page.locator(DIALOG)
+    await expect(dialog, 'the dialog at load').toHaveJSProperty('open', false)
+
+    await page.locator(MENU).click()
+    await page.locator(MENU_RESTART).click()
+    await expect(dialog, 'the dialog after Start again').toHaveJSProperty('open', true)
+    await expect(dialog).toHaveAccessibleName(message('en', 'player.restartQuestion'))
+    await expect(dialog.locator('button')).toHaveText([
+      message('en', 'player.keepReading'),
+      message('en', 'player.restart'),
+    ])
+    await expect(page.locator(KEEP_READING), 'the safe default has focus').toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog, 'the dialog after Escape').toHaveJSProperty('open', false)
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+    await expect(page.locator(PART)).toHaveAttribute('data-seq', seq)
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', '0')
+    expect(await storedPath(page, 'river-stones'), 'the stored run after Escape').toEqual([
+      'start',
+      'flat_stones',
+      'big_rock',
+    ])
+    expect(await announcements(page), 'announced after Escape').toEqual([])
+
+    await page.locator(MENU_RESTART).click()
+    await expect(dialog, 'the dialog after Start again').toHaveJSProperty('open', true)
+    await page.locator(RESTART_ACCEPT).click()
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', '1')
+    await expect(dialog, 'the dialog after confirming').toHaveJSProperty('open', false)
+    expect(
+      await page.evaluate(
+        () =>
+          ((window as unknown as Record<string, unknown>)['__e2eRunArea'] as Element).isConnected,
+      ),
+      'the old run area is connected (the run area is keyed by runEpoch)',
+    ).toBe(false)
+    await expectPart(page, fixtureGraph('river-stones'), 'en', 'start')
+    await expect(page.locator(FIRST_PARAGRAPH).first(), 'focus after the restart').toBeFocused()
+    await expect(page.locator('#live-region')).toHaveText(formatted('en', 'player.page', { n: 1 }))
+    expect(await announcements(page), 'announced').toEqual([
+      formatted('en', 'player.page', { n: 1 }),
+    ])
+    await expect
+      .poll(() => storedStory(page, 'river-stones'), 'the stored story after the restart')
+      .toMatchObject({ activeRun: null, endingsFound: ['ending_wet'] })
+  })
+
+  const AT_ONCE = [
+    {
+      name: 'at path 2 (river-stones, a resumed flat_stones)',
+      storyId: 'river-stones',
+      seed: ['start', 'flat_stones'],
+      walk: [],
+      node: 'flat_stones',
+    },
+    {
+      name: 'at an ending with path 3 (lantern-walk ending_light)',
+      storyId: 'lantern-walk',
+      seed: null,
+      walk: ['c1', 'c1'],
+      node: 'ending_light',
+    },
+  ] as const
+  for (const at of AT_ONCE) {
+    test(`T-b4 ${at.name}: Start again restarts at once, with no dialog`, async ({ page }) => {
+      if (at.seed !== null) {
+        await seedProgressOnce(page, {
+          [at.storyId]: { activeRun: { path: at.seed, locale: 'en' } },
+        })
+      }
+      await recordAnnouncements(page)
+      await openPlayer(page, playerPath('en', at.storyId))
+      if (at.walk.length > 0) await walk(page, at.storyId, at.walk)
+      await expect(page.locator(PART)).toHaveAttribute('data-node', at.node)
+      const epoch = Number(await page.locator(RUN).getAttribute('data-epoch'))
+      await watchDialogOpen(page)
+
+      await page.locator(MENU).click()
+      await page.locator(MENU_RESTART).click()
+      await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+      await expect(page.locator(RUN)).toHaveAttribute('data-epoch', String(epoch + 1))
+      await expect(page.locator(DIALOG)).toHaveJSProperty('open', false)
+      expect(await pageValue(page, '__e2eDialogOpened'), 'the dialog ever opened').toBe(false)
+      await expect(page.locator(MENU), 'the menu after the restart').toHaveAttribute(
+        'aria-expanded',
+        'false',
+      )
+      await expect(page.locator(PANEL)).toBeHidden()
+      await expect(page.locator(FIRST_PARAGRAPH).first(), 'focus after the restart').toBeFocused()
+      await expect(page.locator('#live-region')).toHaveText(
+        formatted('en', 'player.page', { n: 1 }),
+      )
+    })
+  }
+
+  // Review FB-1: the menu's Start again is a header control, never held by the run area's settle
+  // (D11-P7; the lead's decision). The page records that the run area was still settling (its
+  // choices inert) when Start again was tapped, so a pass never depends on how fast the runner is.
+  test('T-b4 inside the settle: a step to path 2, then Start again at once restarts, with no dialog', async ({
+    page,
+  }) => {
+    await recordAnnouncements(page)
+    // A Start again tap that lands after the settle proves nothing (the restart is then allowed
+    // anyway), so a late tap is retried from a fresh open, at most 3 attempts in all; the run area's
+    // inert state is read at the click, when the action runs.
+    let tap: SettleTap['downs'][number] | undefined
+    let commitAt: number | null = null
+    const notes: string[] = []
+    for (let attempt = 1; ; attempt++) {
+      await openPlayer(page, playerPath('en', 'river-stones'))
+      await waitSettled(page)
+      await page.locator(MENU).click()
+      await expect(page.locator(PANEL)).toBeVisible()
+      await watchDialogOpen(page)
+      await watchSettleTap(page, 1)
+      // The step commits inside its click; Start again is tapped straight after, while flat_stones
+      // settles for SETTLE_MS. Both are mouse clicks at a centre measured in the page (F4: scrolled
+      // into view by evaluate when outside the viewport), Start again's after the step's header
+      // scroll, with no actionability wait (a locator click took 270-300 ms of the 500 in WebKit).
+      const c1 = await centreInViewport(page, choice('c1'))
+      await page.mouse.click(c1.x, c1.y)
+      const restart = await centreInViewport(page, MENU_RESTART)
+      await page.mouse.click(restart.x, restart.y)
+      const taps = await pageValue<SettleTap>(page, '__e2eSettleTap')
+      tap = taps.downs.find((down) => down.onRestart)
+      commitAt = taps.commitAt
+      notes.push(
+        `attempt ${attempt}: Start again ${taps.commitAt === null || tap === undefined ? 'never' : `${(tap.t - taps.commitAt).toFixed(0)} ms`} after the commit${c1.scrolled || restart.scrolled ? '; scrolled' : ''}`,
+      )
+      if (tap?.runInert !== false || attempt === 3) break
+    }
+    test.info().annotations.push({ type: 'T-b4 settle', description: notes.join('; ') })
+    console.log(`[player] T-b4 settle (${test.info().project.name}): ${notes.join('; ')}`)
+    expect(commitAt, 'the step to flat_stones committed').not.toBeNull()
+    expect(tap, 'a tap on Start again').toBeDefined()
+    expect(tap?.node, 'the part on screen when Start again was tapped').toBe('flat_stones')
+    expect(
+      tap?.runInert,
+      'timing: the run area had settled before Start again was tapped, 3 times, which proves nothing',
+    ).toBe(true)
+
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', '1')
+    expect(await pageValue(page, '__e2eDialogOpened'), 'the dialog ever opened').toBe(false)
+    await expect(page.locator(MENU), 'the menu after the restart').toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    await expect(page.locator(PANEL)).toBeHidden()
+    await expect(page.locator(FIRST_PARAGRAPH).first(), 'focus after the restart').toBeFocused()
+    await expect(page.locator('#live-region')).toHaveText(formatted('en', 'player.page', { n: 1 }))
+    expect(await announcements(page), 'announced').toEqual([
+      formatted('en', 'player.page', { n: 2 }),
+      formatted('en', 'player.page', { n: 1 }),
+    ])
+  })
+
+  // Review PIF-7: the T-b5 cases come from endingsOf(); this pins the list by hand, so a helper
+  // that drops an ending fails here instead of silently running fewer cases.
+  test('T-b5 the scan: every ending of the 3 fixtures (7, 4 of them alternates) in en and hi', () => {
+    expect(
+      playerPaths().flatMap(({ path, storyId }) =>
+        endingsOf(fixtureGraph(storyId)).map((ending) => `${path} ${ending}`),
+      ),
+    ).toEqual([
+      '/en/stories/lantern-walk/read ending_light',
+      '/en/stories/lantern-walk/read ending_shadow',
+      '/hi/stories/lantern-walk/read ending_light',
+      '/hi/stories/lantern-walk/read ending_shadow',
+      '/en/stories/river-stones/read ending_dry',
+      '/en/stories/river-stones/read ending_wet',
+      '/en/stories/river-stones/read ending_back',
+      '/hi/stories/river-stones/read ending_dry',
+      '/hi/stories/river-stones/read ending_wet',
+      '/hi/stories/river-stones/read ending_back',
+      '/en/stories/two-paths/read ending_wise',
+      '/en/stories/two-paths/read ending_quick',
+      '/hi/stories/two-paths/read ending_wise',
+      '/hi/stories/two-paths/read ending_quick',
+    ])
+  })
+
+  for (const { path: url, code, storyId } of playerPaths()) {
+    const graph = fixtureGraph(storyId)
+    for (const ending of endingsOf(graph)) {
+      test(`T-b5 ${url} ${ending}: every segment is filled and aria-valuenow is the total`, async ({
+        page,
+      }) => {
+        const lang = uiLang(code)
+        const total = graph.progressSteps.length
+        const bar = page.locator(PROGRESS)
+        const segments = () =>
+          bar
+            .locator('span')
+            .evaluateAll((spans) =>
+              spans.map((span) => [
+                span.hasAttribute('data-filled'),
+                span.getAttribute('aria-hidden'),
+              ]),
+            )
+        await openPlayer(page, url)
+        await expect(bar).toHaveAttribute('aria-label', message(lang, 'player.progress'))
+        await expect(bar).toHaveAttribute('aria-valuemin', '0')
+        await expect(bar).toHaveAttribute('aria-valuemax', String(total))
+        await expect(bar, 'at the start').toHaveAttribute(
+          'aria-valuenow',
+          String(graph.progressSteps.includes(graph.startNodeId) ? 1 : 0),
+        )
+
+        await walk(page, storyId, pathTo(graph, ending))
+        await expectPart(page, graph, code, ending)
+        await expect(bar, `at ${ending}`).toHaveAttribute('aria-valuenow', String(total))
+        await expect(bar).toHaveAttribute('aria-valuemax', String(total))
+        await expect(bar).toHaveAttribute(
+          'aria-valuetext',
+          formatted(lang, 'player.progressValue', { filled: total, total }),
+        )
+        expect(await segments(), `the segments at ${ending}`).toEqual(
+          Array.from({ length: total }, () => [true, 'true']),
+        )
+      })
+    }
+  }
+
+  test('T-b6 an empty segment is an outline with no fill, a filled one is filled, and both keep one box', async ({
+    page,
+    browserName,
+  }) => {
+    const total = fixtureGraph('river-stones').progressSteps.length
+    const look = () =>
+      page.locator(PROGRESS).evaluate((bar) =>
+        [...bar.querySelectorAll('span')].map((span) => {
+          const style = getComputedStyle(span)
+          const box = span.getBoundingClientRect()
+          return {
+            filled: span.hasAttribute('data-filled'),
+            background: style.backgroundColor,
+            border: `${style.borderTopWidth} ${style.borderTopStyle}`,
+            borderColor: style.borderTopColor,
+            width: box.width,
+            height: box.height,
+          }
+        }),
+      )
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await settleFonts(page)
+    const before = await look()
+    console.log(`[player] T-b6 (${test.info().project.name}): ${JSON.stringify(before)}`)
+    expect(
+      before.map((segment) => segment.filled),
+      'filled at the start',
+    ).toEqual(Array.from({ length: total }, (_, index) => index === 0))
+    const [filled, ...empty] = before
+    const [firstEmpty] = empty
+    if (filled === undefined || firstEmpty === undefined) throw new Error('too few segments')
+    for (const [index, segment] of empty.entries()) {
+      const name = `empty segment ${index + 2}`
+      expect(segment.background, `${name}: no fill`).toBe(NO_FILL)
+      expect(segment.border, `${name}: an outline`).toBe('2px solid')
+      expect(segment.borderColor, `${name}: the outline colour`).toBe(firstEmpty.borderColor)
+    }
+    expect(filled.background, 'the filled segment has a fill').not.toBe(NO_FILL)
+    expect(filled.background, 'filled and empty backgrounds').not.toBe(firstEmpty.background)
+    expect(filled.background, 'the fill and its border are one colour').toBe(filled.borderColor)
+    expect(filled.borderColor, 'filled and empty borders').not.toBe(firstEmpty.borderColor)
+    expect(filled.border, 'the same border box when filled').toBe(firstEmpty.border)
+    // Equal flex items may differ by one layout unit: Chromium lays out in 1/64 px and hands the
+    // remainder to some of them (measured: 54.6875 and 54.703125 on chromium-phone).
+    for (const [index, segment] of before.entries()) {
+      expect(
+        Math.abs(segment.width - filled.width),
+        `segment ${index + 1} width`,
+      ).toBeLessThanOrEqual(LAYOUT_UNIT)
+      expect(
+        Math.abs(segment.height - filled.height),
+        `segment ${index + 1} height`,
+      ).toBeLessThanOrEqual(LAYOUT_UNIT)
+    }
+
+    // A step fills the second segment: the same box, now filled.
+    await walk(page, 'river-stones', ['c1'])
+    await frames(page)
+    const after = await look()
+    expect(
+      after.map((segment) => segment.filled),
+      'filled at flat_stones',
+    ).toEqual(Array.from({ length: total }, (_, index) => index < 2))
+    const [, nowFilled] = after
+    const [, wasEmpty] = before
+    if (nowFilled === undefined || wasEmpty === undefined) throw new Error('too few segments')
+    expect(nowFilled.background, 'the second segment, filled').toBe(filled.background)
+    expect(
+      Math.abs(nowFilled.width - wasEmpty.width),
+      'its width, empty then filled',
+    ).toBeLessThanOrEqual(LAYOUT_UNIT)
+    expect(
+      Math.abs(nowFilled.height - wasEmpty.height),
+      'its height, empty then filled',
+    ).toBeLessThanOrEqual(LAYOUT_UNIT)
+
+    // Forced colours (Windows High Contrast; review A11Y-2): the browser forces backgrounds to
+    // Canvas, so only the forced-colors rule keeps a filled segment filled. Chromium emulates the
+    // mode; Playwright's WebKit does not.
+    if (browserName === 'chromium') {
+      await page.emulateMedia({ forcedColors: 'active' })
+      expect(
+        await page.evaluate(() => matchMedia('(forced-colors: active)').matches),
+        'forced colours emulated',
+      ).toBe(true)
+      const forced = await look()
+      // The page background is on <html> (base.css); forced colours make it the Canvas colour.
+      const canvas = await page.evaluate(
+        () => getComputedStyle(document.documentElement).backgroundColor,
+      )
+      console.log(
+        `[player] T-b6 forced colours (${test.info().project.name}): canvas ${canvas}; ` +
+          JSON.stringify(
+            forced.map(({ filled, background, borderColor }) => [filled, background, borderColor]),
+          ),
+      )
+      const [forcedFilled, , forcedEmpty] = forced
+      if (forcedFilled === undefined || forcedEmpty === undefined) {
+        throw new Error('too few segments')
+      }
+      expect([forcedFilled.filled, forcedEmpty.filled], 'forced colours: filled, empty').toEqual([
+        true,
+        false,
+      ])
+      expect(forcedFilled.background, 'forced colours: the fill is its border colour').toBe(
+        forcedFilled.borderColor,
+      )
+      expect(forcedFilled.background, 'forced colours: the fill is not the canvas').not.toBe(canvas)
+      expect(forcedEmpty.background, 'forced colours: an empty segment has no fill').toMatch(
+        /^rgba\(.*,\s*0\)$/,
+      )
+      expect(forcedEmpty.border, 'forced colours: an empty segment is an outline').toBe('2px solid')
+      expect(forcedEmpty.borderColor, 'forced colours: the outline colour').toBe(
+        forcedFilled.borderColor,
+      )
+    }
+  })
+
+  test('T-b7 text size: 150 is applied and saved, kept before paint on reload; another tab syncs; 100 removes it', async ({
+    page,
+    context,
+    browserName,
+    errors,
+  }) => {
+    const url = playerPath('en', 'two-paths')
+    const html = page.locator('html')
+    await seedPrefs(page, null)
+    await openPlayer(page, url)
+    const quiet = trackRequests(page)
+    await expect(html, 'nothing stored').not.toHaveAttribute(TEXT_SCALE_ATTRIBUTE)
+    await page.locator(MENU).click()
+    await expect(page.locator(`${PANEL} label`)).toHaveText(
+      [100, 125, 150].map((percent) => formatted('en', 'player.textSizeOption', { percent })),
+    )
+    await expect(page.locator(textSize(100)), 'nothing stored').toBeChecked()
+    const writesBefore = (await storageAfter(page)).writes.length
+    await page.locator(textSize(150)).check()
+    await expect(html).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
+    expect((await storageAfter(page)).writes.slice(writesBefore), 'writes for 150').toEqual([
+      'setItem',
+    ])
+    expect(await storedTextScale(page), 'the stored text size').toBe(150)
+
+    // A reload: the boot script sets 150 before the body exists, and hydration keeps it. The
+    // reload waits until no request is in flight (WebKit, see T-a4).
+    await watchScaleAttribute(page)
+    // Every change of the attribute from document start (review PIF-2): the boot script's set is
+    // the only one, so hydration never applies the hydration snapshot, not even for a moment
+    // (D11-P20). Each entry is the value before the change.
+    await page.addInitScript((attribute) => {
+      const before: (string | null)[] = []
+      ;(window as unknown as Record<string, unknown>)['__e2eScaleChanges'] = before
+      new MutationObserver((records) => {
+        for (const record of records) before.push(record.oldValue)
+      }).observe(document, {
+        subtree: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: [attribute],
+      })
+    }, TEXT_SCALE_ATTRIBUTE)
+    await quiet()
+    await page.reload()
+    await waitOpen(page)
+    await frames(page)
+    const seen = await scaleSeen(page)
+    expect(seen?.value, 'the attribute when it first appeared').toBe('150')
+    expect(seen?.bodyWasNull, 'document.body when it first appeared').toBe(true)
+    if (browserName === 'chromium') {
+      expect(seen?.paintEntries, 'paint entries when it first appeared').toBe(0)
+    }
+    await expect(html, 'after hydration').toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
+    expect(
+      await pageValue(page, '__e2eScaleChanges'),
+      'changes of the attribute on the reload: only the boot script set it',
+    ).toEqual([null])
+    expect((await storageAfter(page)).writes, 'writes on the reload').toEqual([])
+    await page.locator(MENU).click()
+    await expect(page.locator(textSize(150)), 'after the reload').toBeChecked()
+
+    // Another tab chooses 125: this tab follows.
+    const other = await context.newPage()
+    errors.watch(other)
+    await openPlayer(other, url)
+    await expect(other.locator('html')).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
+    await other.locator(MENU).click()
+    await other.locator(textSize(125)).check()
+    await expect(other.locator('html')).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '125')
+    await expect(html, 'after the other tab chose 125').toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '125')
+    await expect(page.locator(textSize(125)), 'after the other tab chose 125').toBeChecked()
+
+    // 100 removes the attribute.
+    await page.locator(textSize(100)).check()
+    await expect(html, 'after 100').not.toHaveAttribute(TEXT_SCALE_ATTRIBUTE)
+    expect(await storedTextScale(page), 'the stored text size').toBe(100)
+  })
+
+  test("T-b8 the menu: aria-expanded toggles; Escape returns focus to Menu; the dialog's Escape leaves it open on Start again; an accepted Start again closes it", async ({
+    page,
+  }) => {
+    await seedProgressOnce(page, {
+      'river-stones': { activeRun: { path: ['start', 'flat_stones', 'big_rock'], locale: 'en' } },
+    })
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    const menu = page.locator(MENU)
+    const panel = page.locator(PANEL)
+    const dialog = page.locator(DIALOG)
+    await expect(menu).toHaveText(message('en', 'player.menu'))
+    await expect(menu).toHaveAttribute('aria-controls', 'player-menu')
+    await expect(menu).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toBeHidden()
+
+    // A click toggles it.
+    await menu.click()
+    await expect(menu).toHaveAttribute('aria-expanded', 'true')
+    await expect(panel).toBeVisible()
+    await menu.click()
+    await expect(menu).toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toBeHidden()
+
+    // Opened by a click, Escape closes it too (review FB-2): a click does not focus a button in
+    // WebKit, so the Menu button focuses itself and gets the Escape its handler takes (F6).
+    await menu.click()
+    await expect(menu).toHaveAttribute('aria-expanded', 'true')
+    await expect(menu, 'focus after a click on Menu').toBeFocused()
+    console.log(
+      `[player] T-b8 (${test.info().project.name}): Menu :focus-visible after a click: ` +
+        `${await menu.evaluate((element) => element.matches(':focus-visible'))}`,
+    )
+    await page.keyboard.press('Escape')
+    await expect(menu, 'after Escape, opened by a click').toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toBeHidden()
+    await expect(menu, 'focus after Escape, opened by a click').toBeFocused()
+
+    // Escape in the panel closes it and returns focus to Menu; so does Escape on Menu itself.
+    await menu.focus()
+    await page.keyboard.press('Enter')
+    await expect(menu, 'opened by Enter').toHaveAttribute('aria-expanded', 'true')
+    await page.locator(textSize(100)).focus()
+    await page.keyboard.press('Escape')
+    await expect(menu, 'after Escape in the panel').toHaveAttribute('aria-expanded', 'false')
+    await expect(panel).toBeHidden()
+    await expect(menu, 'focus after Escape in the panel').toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(menu, 'opened by Enter').toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Escape')
+    await expect(menu, 'after Escape on Menu').toHaveAttribute('aria-expanded', 'false')
+    await expect(menu, 'focus after Escape on Menu').toBeFocused()
+
+    // C13, F6: the dialog's Escape (and Keep reading) close the dialog only. The menu stays open
+    // with focus on its Start again, and the run stays where it was.
+    await menu.click()
+    await expect(panel).toBeVisible()
+    for (const close of ['Escape', 'Keep reading'] as const) {
+      await page.locator(MENU_RESTART).click()
+      await expect(dialog, 'the dialog after Start again').toHaveJSProperty('open', true)
+      await expect(page.locator(KEEP_READING)).toBeFocused()
+      if (close === 'Escape') await page.keyboard.press('Escape')
+      else await page.locator(KEEP_READING).click()
+      await expect(dialog, `the dialog after ${close}`).toHaveJSProperty('open', false)
+      await expect(menu, `the menu after ${close} in the dialog`).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      )
+      await expect(panel, `the panel after ${close} in the dialog`).toBeVisible()
+      await expect(page.locator(MENU_RESTART), `focus after ${close} in the dialog`).toBeFocused()
+      await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+    }
+
+    // An accepted Start again closes the menu.
+    await page.locator(MENU_RESTART).click()
+    await expect(dialog).toHaveJSProperty('open', true)
+    await page.locator(RESTART_ACCEPT).click()
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'start')
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', '1')
+    await expect(menu, 'the menu after an accepted Start again').toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    await expect(panel).toBeHidden()
+    await expect(page.locator(FIRST_PARAGRAPH).first(), 'focus after the restart').toBeFocused()
+  })
+
+  // Second review R2-STRESS-2: the Menu button focuses itself on a click (FB-2), and that focus
+  // must not scroll the page under the finger when Menu is partly above the viewport. As on iOS
+  // Safari, a tap never focuses the button here (a capturing mousedown preventDefault, a no-op in
+  // WebKit, which never focuses a clicked button), so the onClick's focus() is the only one.
+  test('T-b8 a tap on Menu partly scrolled above the viewport opens it without scrolling the page', async ({
+    page,
+  }) => {
+    const viewport = page.viewportSize()
+    if (!viewport) throw new Error('the project sets no viewport')
+    // A short viewport and 150%, so the page scrolls past the top of Menu on every project.
+    await page.setViewportSize({ width: viewport.width, height: 420 })
+    await seedPrefs(page, prefsText(150))
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await settleFonts(page)
+    const menu = page.locator(MENU)
+    const tap = await menu.evaluate((element) => {
+      element.addEventListener('mousedown', (event) => event.preventDefault(), { capture: true })
+      const start = element.getBoundingClientRect()
+      window.scrollTo(0, start.top + window.scrollY + start.height * 0.6)
+      const box = element.getBoundingClientRect()
+      const x = box.left + box.width / 2
+      const y = box.bottom / 2
+      return {
+        x,
+        y,
+        top: box.top,
+        bottom: box.bottom,
+        scrollY: window.scrollY,
+        hit: element.contains(document.elementFromPoint(x, y)),
+      }
+    })
+    console.log(`[player] T-b8 scroll (${test.info().project.name}): ${JSON.stringify(tap)}`)
+    expect(tap.top, 'precondition: Menu starts above the viewport').toBeLessThan(0)
+    expect(tap.bottom, 'precondition: a strip of Menu is still visible').toBeGreaterThan(8)
+    expect(tap.hit, 'precondition: the tap point is on Menu').toBe(true)
+
+    await page.mouse.click(tap.x, tap.y)
+    await expect(menu).toHaveAttribute('aria-expanded', 'true')
+    await expect(menu, 'focus after a tap on Menu').toBeFocused()
+    await frames(page)
+    expect(
+      await page.evaluate(() => window.scrollY),
+      'the page scrolled when Menu was tapped',
+    ).toBe(tap.scrollY)
+  })
+
+  // Review FB-4 (design §6 Reflow, "tested at 320 px and 150%"): the shell's 320 px test measures
+  // the header with the menu closed, where Start again is a 0 x 0 box. Here the panel and the
+  // dialog are open, in both languages.
+  for (const code of ENABLED_LOCALE_CODES) {
+    test(`T-b9 /${code}: at 320 px and 150%, the open menu and the restart dialog fit, with no overlap`, async ({
+      page,
+    }) => {
+      const viewport = page.viewportSize()
+      if (!viewport) throw new Error('the project sets no viewport')
+      await seedProgressOnce(page, {
+        'river-stones': {
+          activeRun: { path: ['start', 'flat_stones', 'big_rock'], locale: code },
+        },
+      })
+      await page.setViewportSize({ width: 320, height: viewport.height })
+      await seedPrefs(page, prefsText(150))
+      await openPlayer(page, playerPath(code, 'river-stones'))
+      await settleFonts(page)
+      await expect(page.locator('html')).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
+      const scroll = () =>
+        page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }))
+      const project = test.info().project.name
+      const lang = uiLang(code)
+
+      await page.locator(MENU).click()
+      await expect(page.locator(PANEL)).toBeVisible()
+      const page1 = await scroll()
+      const menuControls = await controlBoxes(page, `header a, header button, ${PANEL} label`)
+      console.log(
+        `[player] T-b9 /${code} menu (${project}): scroll ${page1.scrollWidth}/${page1.clientWidth}; ` +
+          JSON.stringify(
+            menuControls.map((c) => [
+              c.name,
+              Math.round(c.left),
+              Math.round(c.right),
+              Math.round(c.top),
+            ]),
+          ),
+      )
+      expect(page1.scrollWidth, 'horizontal scroll, the menu open').toBeLessThanOrEqual(
+        page1.clientWidth,
+      )
+      // In DOM order: the 3 radio labels, then Start again (the panel's last control).
+      expect(menuControls.map((c) => c.name).slice(-4), 'the panel controls').toEqual([
+        ...[100, 125, 150].map((percent) => formatted(lang, 'player.textSizeOption', { percent })),
+        message(lang, 'player.restart'),
+      ])
+      expectLaidOutApart(menuControls, { left: 0, right: page1.clientWidth }, 'the menu open')
+
+      await page.locator(MENU_RESTART).click()
+      const dialog = page.locator(DIALOG)
+      await expect(dialog).toHaveJSProperty('open', true)
+      const page2 = await scroll()
+      const [dialogBox] = await controlBoxes(page, DIALOG)
+      const dialogButtons = await controlBoxes(page, `${DIALOG} button`)
+      const inner = await dialog.evaluate((element) => ({
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      }))
+      console.log(
+        `[player] T-b9 /${code} dialog (${project}): scroll ${page2.scrollWidth}/${page2.clientWidth}; ` +
+          `dialog ${dialogBox ? `${Math.round(dialogBox.left)}-${Math.round(dialogBox.right)}` : 'none'}, ` +
+          `inner ${inner.scrollWidth}/${inner.clientWidth}; ` +
+          JSON.stringify(
+            dialogButtons.map((c) => [
+              c.name,
+              Math.round(c.left),
+              Math.round(c.right),
+              Math.round(c.top),
+            ]),
+          ),
+      )
+      if (dialogBox === undefined) throw new Error('no dialog box')
+      expect(page2.scrollWidth, 'horizontal scroll, the dialog open').toBeLessThanOrEqual(
+        page2.clientWidth,
+      )
+      expectLaidOutApart([dialogBox], { left: 0, right: page2.clientWidth }, 'the dialog')
+      expect(inner.scrollWidth, 'horizontal scroll inside the dialog').toBeLessThanOrEqual(
+        inner.clientWidth,
+      )
+      expect(dialogButtons.map((c) => c.name)).toEqual([
+        message(lang, 'player.keepReading'),
+        message(lang, 'player.restart'),
+      ])
+      expectLaidOutApart(dialogButtons, dialogBox, 'the dialog buttons')
+      await page.keyboard.press('Escape')
+      await expect(dialog).toHaveJSProperty('open', false)
+    })
+  }
+
+  // Second review R2-STRESS-1 (D11-P7 amended at 10b): the dialog closes on the first tap of a
+  // double tap on Keep reading, and the second tap lands on whatever lies under it (big_rock's
+  // choice c1 on webkit-ipad at en 100%). A close without an accepted Start again (Keep reading or
+  // Escape) holds the run area for SETTLE_MS like a step. The page records what lies under the
+  // tap (a choice or Back, by its box) and whether the run area was inert at the tap, so the test
+  // proves the hold on a project where nothing interactive lies there too; the release is timed
+  // from the close event in the page.
+  for (const cancel of ['Keep reading', 'Escape'] as const) {
+    const name =
+      cancel === 'Keep reading'
+        ? 'T-b10 a double tap on Keep reading never moves the story'
+        : 'T-b10 Escape on the restart dialog holds the run area too: a tap under Keep reading never moves the story'
+    test(name, async ({ page }) => {
+      const path = ['start', 'flat_stones', 'big_rock']
+      // A tap that lands after the hold proves nothing (and may then move the story, as it should),
+      // so a late tap is retried from a fresh seed and open, at most 3 attempts in all (as T-b4's
+      // settle case). The double tap is one dblclick (two taps 120 ms apart, down to down: the
+      // first closes the dialog), so no round trip of the runner sits between the close and the
+      // second tap; the tap after Escape follows the close event as soon as the page has seen it.
+      const notes: string[] = []
+      let seq = ''
+      let epoch = ''
+      let keep: Point = { x: 0, y: 0, scrolled: false }
+      let taps: HoldRecord = { closeAt: null, heldAt: null, releasedAt: null, downs: [] }
+      let late: number | null = null
+      for (let attempt = 1; ; attempt++) {
+        await seedProgressOnce(page, { 'river-stones': { activeRun: { path, locale: 'en' } } })
+        await openPlayer(page, playerPath('en', 'river-stones'))
+        await settleFonts(page)
+        await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+        await waitSettled(page)
+        seq = (await page.locator(PART).getAttribute('data-seq')) ?? ''
+        epoch = (await page.locator(RUN).getAttribute('data-epoch')) ?? ''
+        await page.locator(MENU).click()
+        await expect(page.locator(PANEL)).toBeVisible()
+        await page.locator(MENU_RESTART).click()
+        await expect(page.locator(DIALOG), 'the dialog after Start again').toHaveJSProperty(
+          'open',
+          true,
+        )
+        keep = await centreInViewport(page, KEEP_READING)
+        await watchHold(page)
+        if (cancel === 'Keep reading') {
+          await page.mouse.dblclick(keep.x, keep.y, { delay: 60 })
+        } else {
+          await page.keyboard.press('Escape')
+          // The close event is a queued task, and Chromium may dispatch a tap's input before it
+          // (seen: a pointerdown 1-2 ms before the close), so the tap waits for it in the page.
+          await page.waitForFunction(() => {
+            const hold = (window as unknown as { __e2eHold?: HoldRecord }).__e2eHold
+            return hold !== undefined && hold.closeAt !== null
+          })
+          await page.mouse.click(keep.x, keep.y)
+        }
+        taps = await pageValue<HoldRecord>(page, '__e2eHold')
+        const last = taps.downs[taps.downs.length - 1]
+        late = taps.closeAt === null || last === undefined ? null : last.t - taps.closeAt
+        notes.push(
+          `attempt ${attempt}: tap ${late === null ? 'never' : `${late.toFixed(0)} ms`} after the close`,
+        )
+        if ((late !== null && late < LATE_TAP_MS) || attempt === 3) break
+      }
+      const tap = taps.downs[taps.downs.length - 1]
+      notes.push(
+        `Keep reading centre ${Math.round(keep.x)},${Math.round(keep.y)}`,
+        tap === undefined || tap.control === null
+          ? 'nothing interactive under the tap: the hold is asserted through the inert run area'
+          : `under the tap: ${tap.control === 'back' ? 'Back' : `choice ${tap.control}`}`,
+        `target ${tap?.target ?? 'none'}`,
+      )
+      test.info().annotations.push({ type: 'T-b10', description: notes.join('; ') })
+      console.log(`[player] T-b10 ${cancel} (${test.info().project.name}): ${notes.join('; ')}`)
+
+      expect(taps.downs.length, 'the taps').toBe(cancel === 'Keep reading' ? 2 : 1)
+      expect(late, 'the close and tap times').not.toBeNull()
+      expect(
+        late !== null && late > 0 && late < LATE_TAP_MS,
+        `timing: the tap came ${late} ms after the close (450 ms or more proves nothing)`,
+      ).toBe(true)
+      // The story never moved.
+      await expect(page.locator(PART), 'the node after the taps').toHaveAttribute(
+        'data-node',
+        'big_rock',
+      )
+      await expect(page.locator(PART), 'the seq after the taps').toHaveAttribute('data-seq', seq)
+      await expect(page.locator(RUN), 'the run after the taps').toHaveAttribute('data-epoch', epoch)
+      // The hold, on every project, whatever lies under the tap: the choices and Back were inert.
+      expect(
+        [tap?.choicesInert, tap?.backInert],
+        'the run area held (choices and Back inert) at the tap',
+      ).toEqual([true, true])
+
+      // The release, timed from the close event in the page: interactive again SETTLE_MS after it.
+      await expect
+        .poll(async () => (await pageValue<HoldRecord>(page, '__e2eHold')).releasedAt, {
+          message: 'the run area interactive again after the hold',
+          timeout: 5_000,
+        })
+        .not.toBeNull()
+      const done = await pageValue<HoldRecord>(page, '__e2eHold')
+      const heldFor = (done.releasedAt ?? 0) - (done.closeAt ?? 0)
+      const onset = (done.heldAt ?? 0) - (done.closeAt ?? 0)
+      console.log(
+        `[player] T-b10 ${cancel} (${test.info().project.name}): held ${onset.toFixed(0)} ms ` +
+          `after the close, released ${heldFor.toFixed(0)} ms after it`,
+      )
+      expect(heldFor, 'the hold, from the close to the release').toBeGreaterThanOrEqual(
+        SETTLE_MS - 20,
+      )
+      expect(heldFor, 'the hold, from the close to the release').toBeLessThan(4 * SETTLE_MS)
+      await expect(page.locator(CHOICES), 'the choices after the hold').not.toHaveAttribute('inert')
+      await expect(page.locator(FOOTER), 'Back after the hold').not.toHaveAttribute('inert')
+      expect(await storedPath(page, 'river-stones'), 'the stored run after the taps').toEqual(path)
+      // And the island takes a tap again (its settle ref was released with the state).
+      await page.locator(choice('c1')).click()
+      await expect(page.locator(PART), 'a choice after the hold').toHaveAttribute(
+        'data-node',
+        'far_bank',
+      )
+      await expect(page.locator(PART)).toHaveAttribute('data-seq', String(Number(seq) + 1))
+    })
+  }
 })
 
 // The collector's own negative tests (design §9.3 C4, F5): each must fail in the auto fixture's

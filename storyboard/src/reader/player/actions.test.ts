@@ -98,6 +98,56 @@ describe('isInteractive: refused with no dispatch while opening or settling', ()
     expect(node(t)).toBe('flat_stones')
   })
 
+  it('menuRestart (the menu, a header control, never settled) is not refused by isInteractive', async () => {
+    // Step 10b (D11-P7, P11, P19): the run area settles after the step; the menu's Start again
+    // still restarts at once with the seq it was rendered with.
+    const t = await setup()
+    expect(t.actions.choose(0, 'c1').accepted).toBe(true)
+    t.interactive.value = false
+    expect(t.actions.back(1).accepted).toBe(false)
+    expect(t.actions.restart(1).accepted).toBe(false)
+    const before = t.controller.getSnapshot().state
+    t.log.push('call')
+    const r = t.actions.menuRestart(1)
+    t.log.push('returned')
+    expect(r.accepted).toBe(true)
+    expect(r).toEqual(step(graph, before, { type: 'RESTART', seq: 1 }))
+    expect(r.state.runEpoch).toBe(1)
+    expect(node(t)).toBe('start')
+    expect(t.dispatched.map((d) => d.event)).toEqual([
+      { type: 'CHOOSE', seq: 0, choiceId: 'c1' },
+      { type: 'RESTART', seq: 1 },
+    ])
+    expect(t.accepted.at(-1)).toBe(r)
+    expect(t.log.slice(-3)).toEqual(['call', 'accepted start', 'returned'])
+    // A stale seq is the engine's no-op, with no onAccepted.
+    expect(t.actions.menuRestart(1).accepted).toBe(false)
+    expect(t.accepted).toHaveLength(2)
+  })
+
+  it('menuRestart before open() is refused by the controller (no step, nothing saved)', async () => {
+    const tasks: (() => void)[] = []
+    const controller = createRunController({
+      graph,
+      store: { get: () => Promise.resolve(null), saveStep: () => Promise.resolve() },
+      locale: 'en',
+      localePolicy: 'stored-first',
+      schedule: (task) => tasks.push(task),
+    })
+    const accepted: StepResult[] = []
+    const actions = createPlayerActions({
+      controller,
+      isInteractive: () => true,
+      onAccepted: (result) => accepted.push(result),
+    })
+    const before = controller.getSnapshot().state
+    expect(actions.menuRestart(0)).toEqual({ state: before, accepted: false, effects: [] })
+    expect(accepted).toHaveLength(0)
+    expect(tasks).toHaveLength(0)
+    await controller.open()
+    expect(actions.menuRestart(0).accepted).toBe(true)
+  })
+
   it('setLocale (a header control, never settled) is not refused by isInteractive', async () => {
     const t = await setup({ value: false })
     const r = t.actions.setLocale('hi')

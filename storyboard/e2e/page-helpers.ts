@@ -4,6 +4,7 @@
 // another, so look, assets, fonts, text-scale and specimen all take these from here.
 // P1-4b (design p1-step10-design.md §2.1 e2e/page-helpers.ts, §9.3; Step 10a): the story player's
 // helpers: seedProgressOnce, progressSpy, walk, fixtureGraph and the consoleErrors collector.
+// Step 10b adds fixtureGraph's progressSteps, endingsOf and pathTo (T-b5, T-b6).
 //
 // INJECTION: the specs append test elements to <body>, never inside <main>. React may hydrate
 // <main> after the load event that page.goto waits for, and an extra node inside it is a hydration
@@ -540,6 +541,8 @@ export interface FixtureGraph {
   readonly text: PlayerFixture['text']
   /** The path that takes the first choice at every node: choice ids, and node ids from the start. */
   readonly firstPath: { readonly choices: readonly string[]; readonly nodes: readonly string[] }
+  /** Step 10b: the story's progress steps in package order, one segment each (D11-P12). */
+  readonly progressSteps: readonly string[]
 }
 
 export function fixtureGraph(storyId: string): FixtureGraph {
@@ -550,6 +553,13 @@ export function fixtureGraph(storyId: string): FixtureGraph {
       { id: node.id, type: node.type, choices: node.choices ?? [] },
     ]),
   )
+  const { progressSteps } = fixture as PlayerFixture & { readonly progressSteps?: unknown }
+  if (
+    !Array.isArray(progressSteps) ||
+    !progressSteps.every((step) => typeof step === 'string' && nodes.has(step))
+  ) {
+    throw new Error(`${storyId}: progressSteps is not a list of the package's node ids`)
+  }
   const choices: string[] = []
   const visited = [fixture.startNodeId]
   let node = nodes.get(fixture.startNodeId)
@@ -568,7 +578,32 @@ export function fixtureGraph(storyId: string): FixtureGraph {
     nodes,
     text: fixture.text,
     firstPath: { choices, nodes: visited },
+    progressSteps: progressSteps as string[],
   }
+}
+
+/** Step 10b: the ending nodes of a fixture story, in package order (T-b5). */
+export function endingsOf(graph: FixtureGraph): string[] {
+  return [...graph.nodes.values()].filter((node) => node.type === 'ending').map((node) => node.id)
+}
+
+/**
+ * Step 10b: the shortest list of choice ids that takes a fresh run from the start node to
+ * `nodeId` (breadth first, choices in package order), for walk(). Throws when none reaches it.
+ */
+export function pathTo(graph: FixtureGraph, nodeId: string): string[] {
+  const routes = new Map<string, string[]>([[graph.startNodeId, []]])
+  const queue = [graph.startNodeId]
+  for (let at = queue.shift(); at !== undefined; at = queue.shift()) {
+    const route = routes.get(at) ?? []
+    if (at === nodeId) return route
+    for (const choice of graph.nodes.get(at)?.choices ?? []) {
+      if (routes.has(choice.next)) continue
+      routes.set(choice.next, [...route, choice.id])
+      queue.push(choice.next)
+    }
+  }
+  throw new Error(`${graph.storyId}: no path from ${graph.startNodeId} to ${nodeId}`)
 }
 
 /** One story's saved progress for seedProgressOnce. */

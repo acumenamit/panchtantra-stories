@@ -6,6 +6,8 @@
 // P1-4b (design p1-step10-design.md §0.2, §9.1 G5): Step 10a adds the 4 player keys (owner drafts),
 // the 'player' surface, an explicit table of the arguments each key takes, and a Latin check that
 // reads only the parsed literal text, plural branches included (argument names are not text).
+// Step 10b adds its 9 player keys (owner-approved as §0.2 drafts them) and two table entries:
+// player.textSizeOption {percent, number} and player.progressValue {filled} {total}.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,7 +43,10 @@ const ALL = LOCALES.flatMap((locale) =>
   entries(locale).map(([key, text]) => [locale, key, text] as const),
 )
 
-/** Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4 player keys (p1-step10 §0.2), sorted. */
+/**
+ * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4 and Step 10b's 9 player keys
+ * (p1-step10 §0.2), sorted.
+ */
 const DESIGN_KEYS = [
   'gate.prompt',
   'gate.remember',
@@ -57,9 +62,18 @@ const DESIGN_KEYS = [
   'notFound.link',
   'notFound.title',
   'player.allStories',
+  'player.back',
   'player.errorTitle',
+  'player.keepReading',
+  'player.menu',
   'player.page',
+  'player.progress',
+  'player.progressValue',
+  'player.restart',
+  'player.restartQuestion',
   'player.startThisAgain',
+  'player.textSize',
+  'player.textSizeOption',
   'shell.skipToMain',
   'storage.body',
   'storage.title',
@@ -96,6 +110,16 @@ const ARGUMENTS: Readonly<
     sample: { n: 7 },
     formatted: { en: 'Page 7', hi: 'पेज 7' },
   },
+  'player.progressValue': {
+    kinds: { filled: 'any', total: 'any' },
+    sample: { filled: 2, total: 5 },
+    formatted: { en: '2 of 5', hi: '5 में से 2' },
+  },
+  'player.textSizeOption': {
+    kinds: { percent: 'numeric' },
+    sample: { percent: 125 },
+    formatted: { en: '125%', hi: '125%' },
+  },
 }
 
 /** Latin letters, ASCII and fullwidth (U+FF21-FF3A, U+FF41-FF5A). */
@@ -126,7 +150,7 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the design keys (Step 7 and Step 10a), sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7, Step 10a and Step 10b), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)
