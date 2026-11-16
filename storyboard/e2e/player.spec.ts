@@ -19,6 +19,9 @@
 // text-size sync. T-b2 measures its click point and reads its commit and tap times in the page, as
 // T-a4 does (C7, F4). T-b10 (second review R2-STRESS-1) times the restart dialog's hold from its
 // close event in the page.
+// Step 10c (design D11-P9): at an ending the live region says "Ending x of y found" instead of
+// "Page n", so T-a3 and T-a15 expect the count at their last step (stepAnnouncement). The ending
+// card, Share and Try another path are in player-share.spec.ts.
 import type { Page, Request } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY } from '../src/core/progress/records'
@@ -26,22 +29,41 @@ import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
 import { SETTLE_MS } from '../src/reader/player/view'
 import { expect, test as base } from './fixtures'
 import {
+  announcements,
+  boxOf,
+  centreInViewport,
+  choice,
   consoleErrors,
+  DIALOG,
   endingsOf,
+  FIRST_PARAGRAPH,
   fixtureGraph,
   focusByKeyboard,
+  frames,
+  LATE_TAP_MS,
+  openPlayer,
+  pageValue,
+  PART,
   pathTo,
+  PLAYER,
   prefsText,
   progressSpy,
+  recordAnnouncements,
+  RUN,
   scaleSeen,
   seedPrefs,
   seedProgressOnce,
   settleFonts,
+  sharedPoint,
   storageAfter,
+  storedStory,
+  waitOpen,
   walk,
+  watchDialogOpen,
   watchScaleAttribute,
   type ConsoleErrors,
   type FixtureGraph,
+  type Point,
 } from './page-helpers'
 import {
   blockStorage,
@@ -69,8 +91,6 @@ const test = base.extend<{ errors: ConsoleErrors }>({
   ],
 })
 
-const PLAYER = '[data-player]'
-const PART = '[data-part]'
 const CHOICES = 'ul[data-choices]'
 /** The 404 document's one console line, on both engines (probe P-CON, design §16). */
 const NOT_FOUND_LINE =
@@ -80,15 +100,8 @@ const CHUNK_FAILED_LINE = /^Failed to load resource: net::ERR_FAILED$/
 const PLANTED_MESSAGE = 'e2e planted scrollIntoView failure'
 /** Next logs each error a boundary catches: WebKit the line alone, Chromium with the stack after. */
 const PLANTED_LINE = new RegExp(`^Error: ${PLANTED_MESSAGE}(?:\\n|$)`)
-/** A second tap this long after the commit says nothing about the settle (F4). */
-const LATE_TAP_MS = 450
 const LORA_FILE = /\/_next\/static\/media\/lora[^/]*\.woff2$/
 const NOTO_FILE = /\/_next\/static\/media\/noto[-_]sans[-_]devanagari[^/]*\.woff2$/
-
-/** A choice button, in the part on screen or in the part of `node`. */
-function choice(id: string, node?: string): string {
-  return `${node === undefined ? PART : `[data-part][data-node="${node}"]`} button[data-choice="${id}"]`
-}
 
 function escapeHtml(text: string): string {
   return text
@@ -103,60 +116,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function waitOpen(page: Page): Promise<void> {
-  await expect(page.locator(PLAYER)).toHaveAttribute('data-run-phase', 'open')
-}
-
 /** Waits until the choices on screen are no longer inert (the settle after a step has ended). */
 async function waitSettled(page: Page): Promise<void> {
   await expect(page.locator(CHOICES)).not.toHaveAttribute('inert')
-}
-
-async function openPlayer(page: Page, url: string): Promise<void> {
-  const response = await page.goto(url)
-  expect(response?.status(), url).toBe(200)
-  await waitOpen(page)
-}
-
-/** Resolves after `count` animation frames of the page. */
-async function frames(page: Page, count = 2): Promise<void> {
-  await page.evaluate(
-    (n) =>
-      new Promise<void>((resolve) => {
-        const next = (left: number): void => {
-          if (left === 0) resolve()
-          else requestAnimationFrame(() => next(left - 1))
-        }
-        next(n)
-      }),
-    count,
-  )
-}
-
-/** A window property the page holds (set by an init script or an earlier evaluate). */
-async function pageValue<T>(page: Page, name: string): Promise<T> {
-  return page.evaluate(
-    (key) => (window as unknown as Record<string, unknown>)[key],
-    name,
-  ) as Promise<T>
-}
-
-interface StoredStory {
-  readonly activeRun: { readonly path: readonly string[]; readonly locale: string } | null
-  readonly endingsFound: readonly string[]
-}
-
-/** The stored progress of one story, or null when there is none. */
-async function storedStory(page: Page, storyId: string): Promise<StoredStory | null> {
-  return page.evaluate(
-    ([key, id]) => {
-      const raw = window.localStorage.getItem(key)
-      if (raw === null) return null
-      const record = JSON.parse(raw) as { stories?: Record<string, StoredStory> }
-      return record.stories?.[id] ?? null
-    },
-    [PROGRESS_KEY, storyId] as const,
-  )
 }
 
 /** The stored run's path of one story, or null. */
@@ -210,52 +172,6 @@ async function holdChunks(
     },
   )
   return () => held
-}
-
-interface Point {
-  readonly x: number
-  readonly y: number
-  readonly scrolled: boolean
-}
-
-/**
- * The centre of `selector` in viewport coordinates, for a coordinate click (F4): when it lies
- * outside the viewport, the element is scrolled into view by evaluate and measured again.
- */
-async function centreInViewport(page: Page, selector: string): Promise<Point> {
-  return page.evaluate((wanted) => {
-    const element = document.querySelector(wanted)
-    if (element === null) throw new Error(`no ${wanted}`)
-    const centre = () => {
-      const box = element.getBoundingClientRect()
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-    }
-    const inside = (p: { x: number; y: number }) =>
-      p.x >= 0 && p.y >= 0 && p.x < document.documentElement.clientWidth && p.y < window.innerHeight
-    let point = centre()
-    let scrolled = false
-    if (!inside(point)) {
-      element.scrollIntoView({ block: 'center', inline: 'center' })
-      point = centre()
-      scrolled = true
-    }
-    if (!inside(point)) throw new Error(`${wanted} stays outside the viewport`)
-    return { ...point, scrolled }
-  }, selector)
-}
-
-interface Box {
-  readonly left: number
-  readonly top: number
-  readonly right: number
-  readonly bottom: number
-}
-
-async function boxOf(page: Page, selector: string): Promise<Box> {
-  return page.locator(selector).evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { left: box.left, top: box.top, right: box.right, bottom: box.bottom }
-  })
 }
 
 /** Checks the part on screen against the fixture: node, content lang, title, passage, choices. */
@@ -341,23 +257,20 @@ async function openingFrames(page: Page) {
   }
 }
 
-/** Before any page script: every value the live region holds, in order, without repeats. */
-async function recordAnnouncements(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const w = window as unknown as Record<string, unknown>
-    const seen: string[] = []
-    w['__e2eLiveRegion'] = seen
-    new MutationObserver(() => {
-      const region = document.getElementById('live-region')
-      if (region === null) return
-      const text = region.textContent ?? ''
-      if (seen[seen.length - 1] !== text) seen.push(text)
-    }).observe(document, { subtree: true, childList: true, characterData: true })
-  })
-}
-
-async function announcements(page: Page): Promise<string[]> {
-  return (await pageValue<string[]>(page, '__e2eLiveRegion')).filter((text) => text !== '')
+/**
+ * What a fresh run announces after step `index` of the first-choice path (index 0 is the first
+ * choice): "Page n" (n = the path length), or at an ending "Ending 1 of y found" instead (Step 10c,
+ * D11-P9; the first ending a fresh run finds).
+ */
+function stepAnnouncement(code: LocaleCode, graph: FixtureGraph, index: number): string {
+  const reached = graph.firstPath.nodes[index + 1] ?? ''
+  if (graph.nodes.get(reached)?.type === 'ending') {
+    return formatted(uiLang(code), 'player.endingCount', {
+      found: 1,
+      total: endingsOf(graph).length,
+    })
+  }
+  return formatted(uiLang(code), 'player.page', { n: index + 2 })
 }
 
 /**
@@ -526,9 +439,7 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
         const [reached = ''] = await walk(page, storyId, [choiceId])
         expect(reached, `step ${index + 1}`).toBe(graph.firstPath.nodes[index + 1])
         await expectPart(page, graph, code, reached)
-        await expect(page.locator('#live-region')).toHaveText(
-          formatted(uiLang(code), 'player.page', { n: index + 2 }),
-        )
+        await expect(page.locator('#live-region')).toHaveText(stepAnnouncement(code, graph, index))
       }
       const ending = graph.firstPath.nodes[graph.firstPath.nodes.length - 1] ?? ''
       await expect
@@ -972,8 +883,9 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
       await walk(page, 'two-paths', graph.firstPath.choices)
       const ending = graph.firstPath.nodes[graph.firstPath.nodes.length - 1] ?? ''
       await expectPart(page, graph, code, ending)
+      // With storage blocked the ending just reached still counts (the session's endings, §8).
       const pages = graph.firstPath.choices.map((_choice, index) =>
-        formatted(lang, 'player.page', { n: index + 2 }),
+        stepAnnouncement(code, graph, index),
       )
       await expect(page.locator('#live-region')).toHaveText(pages[pages.length - 1] ?? '')
       expect(await announcements(page), 'announced once, then the pages').toEqual([
@@ -1121,6 +1033,65 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
         (passage?.delay ?? 0) + (passage?.duration ?? 0),
       )
     }
+  })
+
+  test('T-a18 at an ending the card fades in with the second stage, when the passage has ended', async ({
+    page,
+  }) => {
+    // D11-P6 amended at 10c (A11Y-10c-2): the ending card fades in like the question and choices,
+    // so it never paints before the passage. Read once every animation in the part has started
+    // (its ready promise), from each one's start time on the document timeline and its timing,
+    // never from frames or the click time.
+    await openPlayer(page, playerPath('en', 'lantern-walk'))
+    await walk(page, 'lantern-walk', ['c1', 'c1'])
+    await expect(page.locator(PART)).toHaveAttribute('data-node', 'ending_light')
+    const reveal = await page.evaluate(async () => {
+      const part = document.querySelector('[data-part]')
+      if (part === null) throw new Error('no part')
+      const animations = document.getAnimations().filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target
+        return target instanceof Element && part.contains(target)
+      })
+      await Promise.all(animations.map((animation) => animation.ready))
+      return animations
+        .map((animation) => {
+          const element = (animation.effect as KeyframeEffect).target as Element
+          const timing = animation.effect?.getTiming() ?? {}
+          return {
+            target: element.hasAttribute('data-passage')
+              ? 'passage'
+              : element.hasAttribute('data-ending')
+                ? 'card'
+                : element.localName,
+            startTime: animation.startTime === null ? null : Number(animation.startTime),
+            delay: Number(timing.delay ?? 0),
+            duration: Number(timing.duration ?? 0),
+          }
+        })
+        .sort((a, b) => a.target.localeCompare(b.target))
+    })
+    console.log(`[player] T-a18 ending (${test.info().project.name}): ${JSON.stringify(reveal)}`)
+    expect(
+      reveal.map((r) => r.target),
+      'the animated parts at an ending',
+    ).toEqual(['card', 'passage'])
+    const [card, passage] = reveal
+    if (card?.startTime == null || passage?.startTime == null) {
+      throw new Error('a reveal animation has no start time after its ready promise')
+    }
+    expect(
+      card.startTime + card.delay,
+      'the card starts when the passage has ended (ms on the document timeline)',
+    ).toBeGreaterThanOrEqual(passage.startTime + passage.delay + passage.duration)
+    expect(card.delay + card.duration, 'card delay + duration (ms)').toBeLessThanOrEqual(2500)
+    const calm = await durationToken(page, '--duration-calm')
+    const quick = await durationToken(page, '--duration-quick')
+    expect({ calm, quick }, 'the reveal tokens (tokens.css)').toEqual({ calm: 300, quick: 150 })
+    expect(passage, 'the passage').toMatchObject({ delay: 0, duration: calm })
+    expect(card, 'the card, with the question and choices').toMatchObject({
+      delay: calm,
+      duration: quick,
+    })
   })
 
   test('T-a18 under reduced motion the choices show fully within a frame of the step', async ({
@@ -1516,12 +1487,9 @@ const FOOTER = 'footer[data-part-controls]'
 const MENU = 'header button[data-menu]'
 const PANEL = '#player-menu'
 const MENU_RESTART = '#player-menu button[data-restart]'
-const DIALOG = 'dialog[data-restart-confirm]'
 const KEEP_READING = `${DIALOG} button[data-keep-reading]`
 const RESTART_ACCEPT = `${DIALOG} button[data-restart-accept]`
 const PROGRESS = 'header [role="progressbar"][data-segments]'
-const FIRST_PARAGRAPH = '[data-part] [data-passage] p'
-const RUN = '[data-run]'
 /** A computed background-color with no fill, on both engines. */
 const NO_FILL = 'rgba(0, 0, 0, 0)'
 /** Chromium's layout unit (1/64 px): the largest difference between equal flex items' boxes. */
@@ -1547,22 +1515,6 @@ async function storedTextScale(page: Page): Promise<unknown> {
   const { stored } = await storageAfter(page)
   if (typeof stored !== 'string') return stored
   return (JSON.parse(stored) as { textScale?: unknown }).textScale
-}
-
-/**
- * Before a click that must not open the restart dialog: records in the page whether the dialog's
- * open attribute is ever set from now on (a MutationObserver), read back as __e2eDialogOpened.
- */
-async function watchDialogOpen(page: Page): Promise<void> {
-  await page.evaluate((selector) => {
-    const w = window as unknown as Record<string, unknown>
-    const dialog = document.querySelector<HTMLDialogElement>(selector)
-    if (dialog === null) throw new Error(`no ${selector}`)
-    w['__e2eDialogOpened'] = dialog.open
-    new MutationObserver(() => {
-      if (dialog.open) w['__e2eDialogOpened'] = true
-    }).observe(dialog, { attributes: true, attributeFilter: ['open'] })
-  }, DIALOG)
 }
 
 interface TapTimes {
@@ -1810,37 +1762,6 @@ function expectLaidOutApart(
       ).toBe(false)
     }
   }
-}
-
-/**
- * C7: the centre of the intersection of two boxes (viewport coordinates), and whether it can be
- * used: the intersection is not empty and its centre lies inside the viewport.
- */
-async function sharedPoint(
-  page: Page,
-  first: Box,
-  second: Box,
-): Promise<{ x: number; y: number; usable: boolean }> {
-  const viewport = await page.evaluate(() => ({
-    width: document.documentElement.clientWidth,
-    height: window.innerHeight,
-  }))
-  const overlap = {
-    left: Math.max(first.left, second.left),
-    top: Math.max(first.top, second.top),
-    right: Math.min(first.right, second.right),
-    bottom: Math.min(first.bottom, second.bottom),
-  }
-  const x = (overlap.left + overlap.right) / 2
-  const y = (overlap.top + overlap.bottom) / 2
-  const usable =
-    overlap.right > overlap.left &&
-    overlap.bottom > overlap.top &&
-    x >= 0 &&
-    y >= 0 &&
-    x < viewport.width &&
-    y < viewport.height
-  return { x, y, usable }
 }
 
 test.describe('the story player, Step 10b', { tag: '@review' }, () => {

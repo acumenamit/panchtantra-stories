@@ -5,6 +5,8 @@
 // P1-4b (design p1-step10-design.md §2.1 e2e/page-helpers.ts, §9.3; Step 10a): the story player's
 // helpers: seedProgressOnce, progressSpy, walk, fixtureGraph and the consoleErrors collector.
 // Step 10b adds fixtureGraph's progressSteps, endingsOf and pathTo (T-b5, T-b6).
+// Step 10c second review: the helpers player.spec.ts and player-share.spec.ts share (the last
+// section), moved here from player.spec.ts with no change of behaviour.
 //
 // INJECTION: the specs append test elements to <body>, never inside <main>. React may hydrate
 // <main> after the load event that page.goto waits for, and an extra node inside it is a hydration
@@ -792,4 +794,185 @@ export function consoleErrors(
       expect(unused, `expected error patterns that matched nothing (${browserName})`).toEqual([])
     },
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The story player specs' shared helpers (player.spec.ts and player-share.spec.ts; moved here from
+// player.spec.ts at the 10c second review): selectors, opening the player, frames, page values, the
+// stored story, the live-region recorder, the restart dialog watcher and coordinate-click geometry.
+
+export const PLAYER = '[data-player]'
+export const PART = '[data-part]'
+export const RUN = '[data-run]'
+export const DIALOG = 'dialog[data-restart-confirm]'
+export const FIRST_PARAGRAPH = '[data-part] [data-passage] p'
+/** A tap this long after the commit says nothing about the settle (F4). */
+export const LATE_TAP_MS = 450
+
+/** A choice button, in the part on screen or in the part of `node`. */
+export function choice(id: string, node?: string): string {
+  return `${node === undefined ? PART : `[data-part][data-node="${node}"]`} button[data-choice="${id}"]`
+}
+
+export async function waitOpen(page: Page): Promise<void> {
+  await expect(page.locator(PLAYER)).toHaveAttribute('data-run-phase', 'open')
+}
+
+export async function openPlayer(page: Page, url: string): Promise<void> {
+  const response = await page.goto(url)
+  expect(response?.status(), url).toBe(200)
+  await waitOpen(page)
+}
+
+/** Resolves after `count` animation frames of the page. */
+export async function frames(page: Page, count = 2): Promise<void> {
+  await page.evaluate(
+    (n) =>
+      new Promise<void>((resolve) => {
+        const next = (left: number): void => {
+          if (left === 0) resolve()
+          else requestAnimationFrame(() => next(left - 1))
+        }
+        next(n)
+      }),
+    count,
+  )
+}
+
+/** A window property the page holds (set by an init script or an earlier evaluate). */
+export async function pageValue<T>(page: Page, name: string): Promise<T> {
+  return page.evaluate(
+    (key) => (window as unknown as Record<string, unknown>)[key],
+    name,
+  ) as Promise<T>
+}
+
+export interface StoredStory {
+  readonly activeRun: { readonly path: readonly string[]; readonly locale: string } | null
+  readonly endingsFound: readonly string[]
+}
+
+/** The stored progress of one story, or null when there is none. */
+export async function storedStory(page: Page, storyId: string): Promise<StoredStory | null> {
+  return page.evaluate(
+    ([key, id]) => {
+      const raw = window.localStorage.getItem(key)
+      if (raw === null) return null
+      const record = JSON.parse(raw) as { stories?: Record<string, StoredStory> }
+      return record.stories?.[id] ?? null
+    },
+    [PROGRESS_KEY, storyId] as const,
+  )
+}
+
+/** Before any page script: every value the live region holds, in order, without repeats. */
+export async function recordAnnouncements(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>
+    const seen: string[] = []
+    w['__e2eLiveRegion'] = seen
+    new MutationObserver(() => {
+      const region = document.getElementById('live-region')
+      if (region === null) return
+      const text = region.textContent ?? ''
+      if (seen[seen.length - 1] !== text) seen.push(text)
+    }).observe(document, { subtree: true, childList: true, characterData: true })
+  })
+}
+
+export async function announcements(page: Page): Promise<string[]> {
+  return (await pageValue<string[]>(page, '__e2eLiveRegion')).filter((text) => text !== '')
+}
+
+/**
+ * Before a click that must not open the restart dialog: records in the page whether the dialog's
+ * open attribute is ever set from now on (a MutationObserver), read back as __e2eDialogOpened.
+ */
+export async function watchDialogOpen(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    const w = window as unknown as Record<string, unknown>
+    const dialog = document.querySelector<HTMLDialogElement>(selector)
+    if (dialog === null) throw new Error(`no ${selector}`)
+    w['__e2eDialogOpened'] = dialog.open
+    new MutationObserver(() => {
+      if (dialog.open) w['__e2eDialogOpened'] = true
+    }).observe(dialog, { attributes: true, attributeFilter: ['open'] })
+  }, DIALOG)
+}
+
+export interface Point {
+  readonly x: number
+  readonly y: number
+  readonly scrolled: boolean
+}
+
+/**
+ * The centre of `selector` in viewport coordinates, for a coordinate click (F4): when it lies
+ * outside the viewport, the element is scrolled into view by evaluate and measured again.
+ */
+export async function centreInViewport(page: Page, selector: string): Promise<Point> {
+  return page.evaluate((wanted) => {
+    const element = document.querySelector(wanted)
+    if (element === null) throw new Error(`no ${wanted}`)
+    const centre = () => {
+      const box = element.getBoundingClientRect()
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+    }
+    const inside = (p: { x: number; y: number }) =>
+      p.x >= 0 && p.y >= 0 && p.x < document.documentElement.clientWidth && p.y < window.innerHeight
+    let point = centre()
+    let scrolled = false
+    if (!inside(point)) {
+      element.scrollIntoView({ block: 'center', inline: 'center' })
+      point = centre()
+      scrolled = true
+    }
+    if (!inside(point)) throw new Error(`${wanted} stays outside the viewport`)
+    return { ...point, scrolled }
+  }, selector)
+}
+
+export interface Box {
+  readonly left: number
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+}
+
+export async function boxOf(page: Page, selector: string): Promise<Box> {
+  return page.locator(selector).evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    return { left: box.left, top: box.top, right: box.right, bottom: box.bottom }
+  })
+}
+
+/**
+ * C7: the centre of the intersection of two boxes (viewport coordinates), and whether it can be
+ * used: the intersection is not empty and its centre lies inside the viewport.
+ */
+export async function sharedPoint(
+  page: Page,
+  first: Box,
+  second: Box,
+): Promise<{ x: number; y: number; usable: boolean }> {
+  const viewport = await page.evaluate(() => ({
+    width: document.documentElement.clientWidth,
+    height: window.innerHeight,
+  }))
+  const overlap = {
+    left: Math.max(first.left, second.left),
+    top: Math.max(first.top, second.top),
+    right: Math.min(first.right, second.right),
+    bottom: Math.min(first.bottom, second.bottom),
+  }
+  const x = (overlap.left + overlap.right) / 2
+  const y = (overlap.top + overlap.bottom) / 2
+  const usable =
+    overlap.right > overlap.left &&
+    overlap.bottom > overlap.top &&
+    x >= 0 &&
+    y >= 0 &&
+    x < viewport.width &&
+    y < viewport.height
+  return { x, y, usable }
 }

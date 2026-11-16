@@ -8,6 +8,9 @@
 // reads only the parsed literal text, plural branches included (argument names are not text).
 // Step 10b adds its 9 player keys (owner-approved as §0.2 drafts them) and two table entries:
 // player.textSizeOption {percent, number} and player.progressValue {filled} {total}.
+// Step 10c adds its 7 player keys (owner-approved as §0.2 drafts them) and one table entry:
+// player.endingCount {found} {total}, a plural on found in Hindi (=0, one, other), so found is
+// numeric and total any.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,8 +47,8 @@ const ALL = LOCALES.flatMap((locale) =>
 )
 
 /**
- * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4 and Step 10b's 9 player keys
- * (p1-step10 §0.2), sorted.
+ * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4, Step 10b's 9 and Step 10c's 7 player
+ * keys (p1-step10 §0.2), sorted.
  */
 const DESIGN_KEYS = [
   'gate.prompt',
@@ -62,18 +65,25 @@ const DESIGN_KEYS = [
   'notFound.link',
   'notFound.title',
   'player.allStories',
+  'player.altEnding',
   'player.back',
+  'player.copyLink',
+  'player.endingCount',
   'player.errorTitle',
   'player.keepReading',
+  'player.lessonHeading',
+  'player.linkCopied',
   'player.menu',
   'player.page',
   'player.progress',
   'player.progressValue',
   'player.restart',
   'player.restartQuestion',
+  'player.share',
   'player.startThisAgain',
   'player.textSize',
   'player.textSizeOption',
+  'player.tryAnother',
   'shell.skipToMain',
   'storage.body',
   'storage.title',
@@ -105,6 +115,11 @@ const ARGUMENTS: Readonly<
     }
   >
 > = {
+  'player.endingCount': {
+    kinds: { found: 'numeric', total: 'any' },
+    sample: { found: 2, total: 3 },
+    formatted: { en: 'Ending 2 of 3 found', hi: '3 में से 2 अंत मिले' },
+  },
   'player.page': {
     kinds: { n: 'any' },
     sample: { n: 7 },
@@ -150,7 +165,7 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the design keys (Step 7, Step 10a and Step 10b), sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7 and Steps 10a to 10c), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)

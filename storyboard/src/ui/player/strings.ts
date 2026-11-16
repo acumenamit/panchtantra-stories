@@ -6,6 +6,8 @@ import 'server-only'
 // from the package through PlayerData.
 // Step 10b: Back, the menu, the restart dialog, the text-size labels (one per TEXT_SCALES value)
 // and the progress bar's value text for every count from 0 to the story's step count.
+// Step 10c: the ending card (D11-P13, P14) and the ending count "Ending {found} of {total} found"
+// for every found from 0 to the story's ending count (the card and the live region, D11-P9).
 import type { LocaleCode } from '../../core/locales'
 import { TEXT_SCALES, type TextScale } from '../../core/progress'
 import type { PlayerData } from '../../reader/player/player-data'
@@ -25,15 +27,17 @@ export function playerFallbackStringsOf(locale: LocaleCode): PlayerFallbackStrin
 }
 
 /**
- * Every string the player island shows in the route locale; page[n - 1] is "Page n" and
- * progressValue[filled] is "{filled} of {total}".
+ * Every string the player island shows in the route locale; page[n - 1] is "Page n",
+ * progressValue[filled] is "{filled} of {total}" and endingCount[found] is "Ending {found} of
+ * {total} found".
  */
 export function playerStringsOf(
   locale: LocaleCode,
-  data: Pick<PlayerData, 'nodes' | 'progressSteps'>,
+  data: Pick<PlayerData, 'nodes' | 'progressSteps' | 'endingIds'>,
 ): PlayerStrings {
   const t = translator(locale)
   const total = data.progressSteps.length
+  const endings = data.endingIds.length
   const textSizeOption = {} as Record<TextScale, string>
   for (const percent of TEXT_SCALES) {
     textSizeOption[percent] = t('player.textSizeOption', { percent })
@@ -54,5 +58,14 @@ export function playerStringsOf(
     progressValue: Array.from({ length: total + 1 }, (_, filled) =>
       t('player.progressValue', { filled, total }),
     ),
+    endingCount: Array.from({ length: endings + 1 }, (_, found) =>
+      t('player.endingCount', { found, total: endings }),
+    ),
+    lessonHeading: t('player.lessonHeading'),
+    altEnding: t('player.altEnding'),
+    tryAnother: t('player.tryAnother'),
+    share: t('player.share'),
+    linkCopied: t('player.linkCopied'),
+    copyLink: t('player.copyLink'),
   }
 }

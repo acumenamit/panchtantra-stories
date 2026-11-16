@@ -6,7 +6,7 @@
 //   page's after a stored-first resume); every text element inside sets its own size and leading.
 // - The passage is one <p> per "\n\n" paragraph, as stored (white-space: pre-wrap). The first one
 //   is the focus target after a step (tabIndex -1, no ring).
-// - An ending shows its passage only in 10a (no question, no choices; the card comes in 10c).
+// - An ending shows its passage with no question and no choices; the card follows it (10c).
 // - data-animate marks a part that a step rendered (the reveal runs); data-reveal="done" ends it.
 // - Step 10b (D11-P10, P7): the run footer (data-part-controls) holds Back, which is not rendered at
 //   path length 1 (the engine refuses BACK there; Exit is in the header) and is shown on every
@@ -14,7 +14,9 @@
 //   story container, so it carries the page's language. It is inert while the run opens or this
 //   part settles, like the choices; Back carries the seq it was rendered with, and an accepted Back
 //   makes the footer inert at once on its DOM node (C28).
-import { useRef, type Ref } from 'react'
+// - Step 10c (D11-P13, §4.1): at an ending the island passes the ending card, which renders after
+//   the story container and before the run footer, so the passage stays first and the focus target.
+import { useRef, type ReactNode, type Ref } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { PartView } from '../../reader/player/view'
 import { ChoiceList } from './choice-list'
@@ -36,6 +38,8 @@ export interface StoryPartProps {
   /** Back's label in the page's language (player.back). */
   readonly backLabel: string
   readonly onBack: (seq: number) => StepResult
+  /** Step 10c: the ending card at an ending (after the story, before the run footer). */
+  readonly ending?: ReactNode
 }
 
 export function StoryPart({
@@ -47,6 +51,7 @@ export function StoryPart({
   onChoose,
   backLabel,
   onBack,
+  ending,
 }: StoryPartProps) {
   const controls = useRef<HTMLElement>(null)
   const hasQuestion = view.question !== null
@@ -91,6 +96,7 @@ export function StoryPart({
           )}
         </div>
       </div>
+      {ending}
       {view.page > 1 ? (
         <footer
           ref={controls}

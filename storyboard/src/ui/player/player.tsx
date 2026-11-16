@@ -26,6 +26,15 @@
 // - The restart dialog's cancel (Keep reading, Escape) holds the run area for SETTLE_MS like a step
 //   (hold(); D11-P7 amended at 10b, R2-STRESS-1): the dialog closes on the first tap of a double
 //   tap, and the second would land on a choice or Back under it. The header stays unsettled.
+// - Step 10c (§4.2 steps 4 and 6, §4.3, §5, D11-P9, P11, P13, P14): at an ending the part shows
+//   the ending card after its passage. The count x = |(stored ∪ session endings) ∩ endingIds|:
+//   the open effect reads the stored endings once (progress.get; reads never write, SPEC:470) and
+//   again on every later change (progress.subscribe: this tab's saves, other tabs); an accepted
+//   step's recordEnding adds its node to the session endings at once, so the ending just found
+//   counts before the save lands and with storage blocked. The step's announcement at an ending is
+//   that count instead of "Page n". Try another path is a run-area RESTART with no dialog, refused
+//   while the run area settles; the card's actions (Try another path, Share, All stories) settle
+//   with the run area.
 // Strings arrive finished from the server (src/ui/player/strings.ts); no catalogue here. Imports
 // are relative (C15).
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -33,6 +42,7 @@ import type { StepResult } from '../../core/engine'
 import type { LocaleCode } from '../../core/locales'
 import { SAVED_RUN_ATTRIBUTE } from '../../core/progress/saved-run-hint'
 import { createPlayerActions, type PlayerActions } from '../../reader/player/actions'
+import { endingCountOf } from '../../reader/player/endings'
 import { graphOf, type PlayerData } from '../../reader/player/player-data'
 import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf, SETTLE_MS, tokenOf } from '../../reader/player/view'
@@ -41,6 +51,7 @@ import { announce } from '../a11y/announce'
 import { LiveRegion } from '../a11y/live-region'
 import shell from '../shell/shell.module.css'
 import { StorageBanner } from '../shell/storage-banner'
+import { EndingCard } from './ending-card'
 import { PlayerHeader } from './player-header'
 import { PlayerMenu } from './player-menu'
 import styles from './player.module.css'
@@ -71,6 +82,9 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   // Bumped by hold(): runs the settle effect again for the part on screen (R2-STRESS-1).
   const [holds, setHolds] = useState(0)
+  // Step 10c (§5): the stored endings (read, never written) and the endings this page reached.
+  const [storedEndings, setStoredEndings] = useState<readonly string[]>([])
+  const [sessionEndings, setSessionEndings] = useState<readonly string[]>([])
   const settlingToken = useRef<string | null>(null)
   const pendingFocus = useRef<string | null>(null)
   const header = useRef<HTMLElement>(null)
@@ -98,6 +112,8 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const opening = snapshot.phase === 'opening'
   const view = partViewOf(data, snapshot.state)
   const segments = segmentsOf(data, snapshot.state)
+  // "Ending x of y found": stored or found on this page, current ending ids only (D11-P13).
+  const endingsFound = endingCountOf(data.endingIds, storedEndings, sessionEndings)
 
   useLayoutEffect(() => {
     actions.current = createPlayerActions({
@@ -107,6 +123,12 @@ export function Player({ data, strings, locale }: PlayerProps) {
         return phase === 'open' && settlingToken.current !== tokenOf(state)
       },
       onAccepted: (result) => {
+        // A found ending counts at once, before the controller's save lands (§4.2 step 6).
+        for (const effect of result.effects) {
+          if (effect.type !== 'recordEnding') continue
+          const found = effect.nodeId
+          setSessionEndings((ids) => (ids.includes(found) ? ids : [...ids, found]))
+        }
         if (!isStep(result)) return
         const token = tokenOf(result.state)
         settlingToken.current = token
@@ -116,7 +138,30 @@ export function Player({ data, strings, locale }: PlayerProps) {
       },
     })
     void controller.open()
-  }, [controller])
+
+    // The stored endings (§4.2 step 4): read once now and again on every later change of the
+    // record; get() never writes (SPEC:470). Only the latest read is applied, never after unmount.
+    const progress = readerStores().progress
+    let live = true
+    let latest = 0
+    const readEndings = (): void => {
+      const read = ++latest
+      progress.get(data.storyId).then(
+        (story) => {
+          if (live && read === latest) setStoredEndings(story?.endingsFound ?? [])
+        },
+        () => {
+          // A store that rejects (it should not) leaves the count to this session's endings.
+        },
+      )
+    }
+    readEndings()
+    const unsubscribe = progress.subscribe(readEndings)
+    return () => {
+      live = false
+      unsubscribe()
+    }
+  }, [controller, data.storyId])
 
   useLayoutEffect(() => {
     if (!opening) document.documentElement.removeAttribute(SAVED_RUN_ATTRIBUTE)
@@ -124,25 +169,29 @@ export function Player({ data, strings, locale }: PlayerProps) {
 
   useLayoutEffect(() => () => document.documentElement.removeAttribute(SAVED_RUN_ATTRIBUTE), [])
 
-  // A new part: focus, scroll and announce when a step rendered it, then settle. A hold runs it
-  // again for the same part (holds): the running timer is cleared and a new SETTLE_MS one starts;
-  // a new part or an unmount clears it.
+  // A new part: focus, scroll and announce when a step rendered it ("Page n", or at an ending the
+  // ending count, D11-P9), then settle. The settle is its own effect (declared after, so it runs
+  // after), so a later change of the announcement (stored endings landing) never restarts the
+  // timer. A hold runs the settle again for the same part (holds): the running timer is cleared and
+  // a new SETTLE_MS one starts; a new part or an unmount clears it.
   const { token, page } = view
+  const announcement = view.ending ? strings.endingCount[endingsFound] : strings.page[page - 1]
   useLayoutEffect(() => {
-    if (pendingFocus.current === token) {
-      pendingFocus.current = null
-      header.current?.scrollIntoView({ block: 'start' })
-      firstParagraph.current?.focus({ preventScroll: true })
-      const text = strings.page[page - 1]
-      if (text !== undefined) announce(text)
-    }
+    if (pendingFocus.current !== token) return
+    pendingFocus.current = null
+    header.current?.scrollIntoView({ block: 'start' })
+    firstParagraph.current?.focus({ preventScroll: true })
+    if (announcement !== undefined) announce(announcement)
+  }, [token, announcement])
+
+  useLayoutEffect(() => {
     if (settlingToken.current !== token) return
     const timer = window.setTimeout(() => {
       settlingToken.current = null
       setSettling(null)
     }, SETTLE_MS)
     return () => window.clearTimeout(timer)
-  }, [token, page, strings.page, holds])
+  }, [token, holds])
 
   // The restart dialog closed with no accepted restart (Keep reading, Escape): the run area is held
   // for SETTLE_MS like a step, through isInteractive and inert, so the second tap of a double tap
@@ -163,6 +212,8 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const choose = (seq: number, choiceId: string): StepResult =>
     actions.current?.choose(seq, choiceId) ?? refused()
   const back = (seq: number): StepResult => actions.current?.back(seq) ?? refused()
+  // Try another path: RESTART from the run area, no dialog, held by the settle (D11-P11, P7).
+  const tryAnother = (seq: number): StepResult => actions.current?.restart(seq) ?? refused()
 
   // Start again from the menu or its dialog: RESTART, not held by the settle; an accepted one
   // closes the menu (D11-P11, P19, C13).
@@ -234,6 +285,19 @@ export function Player({ data, strings, locale }: PlayerProps) {
             onChoose={choose}
             backLabel={strings.back}
             onBack={back}
+            ending={
+              view.ending ? (
+                <EndingCard
+                  view={view}
+                  storyId={data.storyId}
+                  locale={locale}
+                  strings={strings}
+                  count={strings.endingCount[endingsFound] ?? ''}
+                  interactive={!opening && settling !== token}
+                  onTryAnother={tryAnother}
+                />
+              ) : null
+            }
           />
         </div>
         <LiveRegion />

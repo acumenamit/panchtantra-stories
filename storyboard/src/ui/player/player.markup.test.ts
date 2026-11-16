@@ -20,6 +20,14 @@
 // CSS the segments, the radios and the panel rely on. Fixer pass (review A11Y-1, A11Y-2, A11Y-3,
 // PIF-5): the radio and dialog labels carry the action label class (D11-P26), the segments'
 // forced-colours rule, and Start again's seq at a part after the first.
+// Step 10c (design §4.1, §4.6, D11-P13, P14, P7): the ending card at every ending of every fixture,
+// rendered in the part as the island renders it (after the story container, before the run
+// footer): the hidden icon, the alternate label on alternate endings only, h2 "The lesson" naming
+// the section, the lesson as stored in the content lang, the count, then Try another path (with
+// its seq), Share and All stories (route locale), the actions inert exactly while not interactive;
+// the share feedback ("Link copied." or the read-only field), the new strings and the card CSS.
+// Second review (A11Y-10c-2, D11-P6 amended at 10c): the card fades in with the reveal's second
+// stage, checked as text with a negative test per way it could leave that stage.
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -38,12 +46,14 @@ import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf } from '../../reader/player/view'
 import { readerStores } from '../../reader/progress'
 import { translator } from '../i18n/messages'
+import { EndingCard, LESSON_HEADING_ID } from './ending-card'
 import { Player } from './player'
 import { PlayerFallback } from './player-boundary'
 import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
 import { dialogClosed, RESTART_QUESTION_ID, RestartDialog } from './restart-dialog'
+import { ShareControl, ShareFeedback } from './share-control'
 import { QUESTION_ID, StoryPart } from './story-part'
 import { playerFallbackStringsOf, playerStringsOf } from './strings'
 
@@ -663,7 +673,31 @@ describe('the player strings (server-only)', () => {
         keepReading: t('player.keepReading'),
         progress: t('player.progress'),
         progressValue: strings.progressValue,
+        endingCount: strings.endingCount,
+        lessonHeading: t('player.lessonHeading'),
+        altEnding: t('player.altEnding'),
+        tryAnother: t('player.tryAnother'),
+        share: t('player.share'),
+        linkCopied: t('player.linkCopied'),
+        copyLink: t('player.copyLink'),
       })
+      // Step 10c: "Ending {found} of {total} found" for every found from 0 to the ending count.
+      const endings = data.endingIds.length
+      expect(endings).toBeGreaterThan(1)
+      expect(strings.endingCount).toEqual(
+        Array.from({ length: endings + 1 }, (_n, found) =>
+          t('player.endingCount', { found, total: endings }),
+        ),
+      )
+      expect(strings.endingCount[1]).toBe(
+        locale === 'hi' ? `${endings} में से 1 अंत मिला` : `Ending 1 of ${endings} found`,
+      )
+      expect(strings.endingCount[2]).toBe(
+        locale === 'hi' ? `${endings} में से 2 अंत मिले` : `Ending 2 of ${endings} found`,
+      )
+      expect(strings.endingCount[0]).toBe(
+        locale === 'hi' ? 'अभी कोई अंत नहीं मिला' : `Ending 0 of ${endings} found`,
+      )
       // Step 10b: "{filled} of {total}" for every count from 0 to the step count (D11-P12).
       const total = data.progressSteps.length
       expect(strings.progressValue).toEqual(
@@ -817,4 +851,355 @@ describe('the error fallback (D11-P17)', () => {
       expect(html.indexOf('<h1')).toBeLessThan(html.indexOf('role="status"'))
     },
   )
+})
+
+/** Text as React writes it into HTML. */
+const escapeHtml = (text: string): string =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+
+describe('Step 10c: the ending card (server markup)', () => {
+  // Every ending of every fixture, in every content locale, on a page in every route locale (a
+  // stored-first resume can read in a language other than the page's).
+  const endings = fixtures.flatMap((pkg) => {
+    const data = dataOf(pkg)
+    return data.endingIds.flatMap((ending) =>
+      data.locales.flatMap((content) =>
+        ENABLED_LOCALE_CODES.map(
+          (route) => [pkg.storyId, ending, content, route, pkg, data] as const,
+        ),
+      ),
+    )
+  })
+
+  /** The part at `ending` with the card in its slot, as the island renders it. */
+  function renderEnding(
+    data: PlayerData,
+    ending: string,
+    content: LocaleCode,
+    route: LocaleCode,
+    interactive: boolean,
+  ): { html: string; seq: number; count: string } {
+    const view = partViewOf(
+      data,
+      start(graphOf(data), { path: pathTo(data, ending), locale: content }),
+    )
+    const strings = playerStringsOf(route, data)
+    const count = strings.endingCount[1] ?? ''
+    const html = renderToString(
+      createElement(StoryPart, {
+        view,
+        interactive,
+        animate: false,
+        revealDone: false,
+        firstParagraphRef: createRef<HTMLParagraphElement>(),
+        onChoose: refuse,
+        backLabel: strings.back,
+        onBack: refuse,
+        ending: createElement(EndingCard, {
+          view,
+          storyId: data.storyId,
+          locale: route,
+          strings,
+          count,
+          interactive,
+          onTryAnother: refuse,
+        }),
+      }),
+    )
+    return { html, seq: view.seq, count }
+  }
+
+  it('covers every ending of every fixture in both content and route locales (the scan is not empty)', () => {
+    expect(endings).toHaveLength(28)
+    const alternates = endings.filter(
+      ([, ending, , , , data]) => data.nodes.find((n) => n.id === ending)?.isAlternate === true,
+    )
+    expect(alternates).toHaveLength(16)
+    expect(endings.filter(([, , content, route]) => content !== route)).toHaveLength(14)
+  })
+
+  it.each(endings)(
+    '%s %s, read in %s on /%s: passage first, then the card in D11-P13 order, then Back',
+    (_, ending, content, route, pkg, data) => {
+      const t = translator(route)
+      const node = data.nodes.find((n) => n.id === ending)
+      const lesson = pkg.text[content]?.nodes[ending]?.lesson
+      if (node === undefined || lesson === undefined) throw new Error(`no ${ending}`)
+      expect(node.lessonIcon).not.toBeNull()
+      for (const interactive of [true, false]) {
+        const { html, seq, count } = renderEnding(data, ending, content, route, interactive)
+        const where = `${ending} interactive=${interactive}`
+        // The part: the story (the ending passage, the focus target) first, then the section,
+        // then the run footer, nothing else.
+        expect(html, where).toMatch(
+          /^<div\b[^>]*\sdata-part=""[^>]*><div\b[^>]*\sdata-story=""[\s\S]*?<\/div><\/div><section\b[^>]*>[\s\S]*<\/section><footer\b[^>]*>[\s\S]*<\/footer><\/div>$/,
+        )
+        expect(paragraphsIn(html).join('\n\n'), where).toBe(pkg.text[content]?.nodes[ending]?.text)
+        expect(all(html, /<section\b/g), where).toHaveLength(1)
+        const section = /<section\b([^>]*)>([\s\S]*)<\/section>/.exec(html)
+        expect(section?.[1], where).toBe(
+          ` data-ending="" aria-labelledby="${LESSON_HEADING_ID}" class="${styles.ending}"`,
+        )
+        const inner = section?.[2] ?? ''
+        // Icon (hidden), the alternate label only on an alternate ending, h2 naming the section,
+        // the lesson as stored in the content lang, the count, then the actions.
+        const head =
+          `<p data-lesson-icon="" aria-hidden="true" class="${styles.lessonIcon}">` +
+          `${escapeHtml(node.lessonIcon ?? '')}</p>` +
+          (node.isAlternate
+            ? `<p data-alternate="" class="${styles.alternate}">${escapeHtml(t('player.altEnding'))}</p>`
+            : '') +
+          `<h2 id="${LESSON_HEADING_ID}" class="${styles.lessonHeading}">` +
+          `${escapeHtml(t('player.lessonHeading'))}</h2>` +
+          `<p data-lesson="" lang="${content}" dir="ltr" class="${styles.lesson}">` +
+          `${escapeHtml(lesson)}</p>` +
+          `<p data-ending-count="" class="${styles.endingCount}">${escapeHtml(count)}</p>` +
+          `<div data-ending-actions=""${interactive ? '' : ' inert=""'} class="${styles.actions}">`
+        expect(inner.slice(0, head.length), where).toBe(head)
+        expect(inner.endsWith('</div>'), where).toBe(true)
+        const actions = inner.slice(head.length, -'</div>'.length)
+        // Try another path (with the seq it was rendered with), Share, All stories (route locale).
+        const tryAnother =
+          `<button type="button" data-try-another="" data-seq="${seq}" class="${styles.action}">` +
+          `<span class="${styles.actionLabel}">${escapeHtml(t('player.tryAnother'))}</span></button>`
+        const share =
+          `<div class="${styles.share}"><button type="button" data-share="" class="${styles.action}">` +
+          `<span class="${styles.actionLabel}">${escapeHtml(t('player.share'))}</span></button></div>`
+        expect(actions.slice(0, tryAnother.length + share.length), where).toBe(tryAnother + share)
+        const link = /^<a\b([^>]*)>([\s\S]*?)<\/a>$/.exec(
+          actions.slice(tryAnother.length + share.length),
+        )
+        expect(link, `${where}: All stories last`).not.toBeNull()
+        expect(attrOf(link?.[1], 'href'), where).toBe(`/${route}`)
+        expect(attrOf(link?.[1], 'data-all-stories'), where).toBe('')
+        expect(attrOf(link?.[1], 'class'), where).toBe(styles.action)
+        expect(link?.[2], where).toBe(
+          `<span class="${styles.actionLabel}">${escapeHtml(t('player.allStories'))}</span>`,
+        )
+        // Only the lesson carries a lang: the heading, label, count and actions are the page's.
+        expect(all(inner, /\slang="/g), where).toHaveLength(1)
+        // No second live region and no status before a share.
+        expect(html, where).not.toContain('role="status"')
+        expect(html, where).not.toContain('data-share-status')
+        expect(html, where).not.toContain('data-share-url')
+        // The run footer (Back) settles with the card.
+        expect(startTags(html, 'footer')[0]?.includes(' inert=""'), where).toBe(!interactive)
+      }
+    },
+  )
+
+  it('the count is the finished string the island passes (the card formats nothing)', () => {
+    const [pkg] = fixtures
+    if (pkg === undefined) throw new Error('no fixture')
+    const data = dataOf(pkg)
+    const view = partViewOf(
+      data,
+      start(graphOf(data), { path: pathTo(data, 'ending_quick'), locale: 'hi' }),
+    )
+    const strings = playerStringsOf('hi', data)
+    const html = renderToString(
+      createElement(EndingCard, {
+        view,
+        storyId: data.storyId,
+        locale: 'hi',
+        strings,
+        count: strings.endingCount[2] ?? '',
+        interactive: true,
+        onTryAnother: refuse,
+      }),
+    )
+    expect(textOf(/<p data-ending-count=""[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1])).toBe(
+      '2 में से 2 अंत मिले',
+    )
+    expect(textOf(/<p data-alternate=""[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1])).toBe('एक अलग अंत')
+  })
+})
+
+describe('Step 10c: share feedback (D11-P14, §4.3)', () => {
+  const url = 'http://127.0.0.1:3005/hi/stories/two-paths/read'
+
+  it.each(ENABLED_LOCALE_CODES)(
+    '%s: nothing while idle or pending; "Link copied."; the labelled read-only field',
+    (locale) => {
+      const [pkg] = fixtures
+      if (pkg === undefined) throw new Error('no fixture')
+      const strings = playerStringsOf(locale, dataOf(pkg))
+      const render = (status: 'idle' | 'pending' | 'copied' | 'manual'): string =>
+        renderToString(createElement(ShareFeedback, { status, url, strings }))
+      expect(render('idle')).toBe('')
+      expect(render('pending')).toBe('')
+      // Shown next to the button, not a second live region (the page has one; D11-P9).
+      expect(render('copied')).toBe(
+        `<span data-share-status="" class="${styles.shareStatus}">${escapeHtml(strings.linkCopied)}</span>`,
+      )
+      const manual = render('manual')
+      const field =
+        /^<label class="([^"]*)"><span class="([^"]*)">([\s\S]*?)<\/span><input\b([^>]*)\/><\/label>$/.exec(
+          manual,
+        )
+      expect(field, manual).not.toBeNull()
+      expect(field?.[1]).toBe(styles.shareField)
+      expect(field?.[2]).toBe(styles.shareFieldLabel)
+      expect(textOf(field?.[3])).toBe(strings.copyLink)
+      const input = field?.[4] ?? ''
+      expect(attrOf(input, 'type')).toBe('text')
+      // React writes the attribute as readOnly (HTML attribute names are case-insensitive).
+      expect(attrOf(input, 'readOnly')).toBe('')
+      expect(attrOf(input, 'data-share-url')).toBe('')
+      expect(attrOf(input, 'value')).toBe(url)
+      expect(attrOf(input, 'dir')).toBe('ltr')
+      expect(attrOf(input, 'class')).toBe(styles.shareUrl)
+      expect(manual).not.toContain('role=')
+    },
+  )
+
+  it('the share control renders its button and no status before a tap', () => {
+    const [pkg] = fixtures
+    if (pkg === undefined) throw new Error('no fixture')
+    const strings = playerStringsOf('en', dataOf(pkg))
+    expect(
+      renderToString(
+        createElement(ShareControl, {
+          title: 'Two Paths',
+          storyId: 'two-paths',
+          contentLocale: 'hi',
+          strings,
+        }),
+      ),
+    ).toBe(
+      `<div class="${styles.share}"><button type="button" data-share="" class="${styles.action}">` +
+        `<span class="${styles.actionLabel}">Share</span></button></div>`,
+    )
+  })
+})
+
+describe('Step 10c: the card CSS (read as text)', () => {
+  /** The declarations of the one rule whose selector is exactly `selector`. */
+  function ruleOf(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const rules = all(playerCss(), new RegExp(`\\n${escaped} \\{\\n([^}]*)\\}`, 'g'))
+    expect(rules, selector).toHaveLength(1)
+    return rules[0]?.[1] ?? ''
+  }
+
+  it('the lesson as stored: no italics, its own size and leading (a lang island, F3)', () => {
+    const lesson = ruleOf('.lesson')
+    expect(lesson).toContain('  font-style: normal;\n')
+    expect(lesson).toContain('  font-size: var(--fs-story);\n')
+    expect(lesson).toContain('  line-height: var(--lh-story);\n')
+    expect(lesson).toContain('  white-space: pre-wrap;\n')
+    expect(lesson).not.toMatch(/quotes|content:|italic|oblique/)
+    expect(playerCss()).not.toMatch(/\.lesson[^{]*::?(before|after)/)
+    const icon = ruleOf('.lessonIcon')
+    expect(icon).toMatch(/ {2}font-size: var\(--fs-[a-z]+\);\n/)
+    expect(icon).toMatch(/ {2}line-height: var\(--lh-[a-z]+\);\n/)
+  })
+
+  it('the card sits on the story surface; the share field is a full-width line', () => {
+    expect(ruleOf('.ending')).toContain('  background-color: var(--color-surface-story);\n')
+    expect(ruleOf('.shareField')).toContain('  flex-basis: 100%;\n')
+    expect(ruleOf('.shareUrl')).toContain('  min-block-size: var(--target-min);\n')
+  })
+
+  // D11-P6 amended at 10c (A11Y-10c-2): at an ending the card fades in with the reveal's second
+  // stage, like the question and choices: opacity only, --duration-quick after a --duration-calm
+  // delay, only on a part a step rendered (data-animate) and never after the skip
+  // (data-reveal="done"); tokens only, so reduced motion makes it 0 ms, delay included.
+  const STAGE = ".part[data-animate]:not([data-reveal='done'])"
+  const FIRST_STAGE = `${STAGE} .passage`
+  const SECOND_STAGE = ['.question', '.choices', '.ending'].map((name) => `${STAGE} ${name}`)
+  const stageBody = (duration: string, delay: string | null): string =>
+    [
+      '  animation-name: reveal;',
+      `  animation-duration: var(${duration});`,
+      ...(delay === null ? [] : [`  animation-delay: var(${delay});`]),
+      '  animation-timing-function: var(--ease-calm);',
+      '  animation-fill-mode: both;',
+      '',
+    ].join('\n')
+  /** The card's class or its data attribute in a selector (never .endingCount, data-ending-count). */
+  const NAMES_CARD = /\.ending(?![\w-])|\[data-ending(?![\w-])/
+  const MOTION = /(^|\n)\s*(animation|transition|opacity)[\w-]*:/
+
+  /** What is wrong with the card's reveal in `css`; empty when nothing is. */
+  function cardRevealProblems(css: string): string[] {
+    const problems: string[] = []
+    const rules = all(css.replace(/\/\*[\s\S]*?\*\//g, ''), /([^\n{}][^{}]*?) \{\n([^{}]*)\}/g).map(
+      (m) => ({ selector: (m[1] ?? '').trim(), body: m[2] ?? '' }),
+    )
+    const exactly = (selector: string, body: string, name: string): void => {
+      const found = rules.filter((rule) => rule.selector === selector)
+      if (found.length !== 1 || found[0]?.body !== body) problems.push(`${name}: not as designed`)
+    }
+    exactly(FIRST_STAGE, stageBody('--duration-calm', null), 'the first stage (the passage)')
+    exactly(
+      SECOND_STAGE.join(',\n'),
+      stageBody('--duration-quick', '--duration-calm'),
+      'the second stage (question, choices, the card)',
+    )
+    // The second stage is the only rule that moves the card: nothing else animates, transitions
+    // or sets the opacity of a selector naming it, nested in @media or not.
+    for (const rule of rules) {
+      if (rule.selector === SECOND_STAGE.join(',\n')) continue
+      if (NAMES_CARD.test(rule.selector) && MOTION.test(rule.body)) {
+        problems.push(`another rule moves the card: ${rule.selector}`)
+      }
+    }
+    if (
+      all(css, /\n@keyframes reveal \{\n {2}from \{\n {4}opacity: 0;\n {2}\}\n\}\n/g).length !== 1
+    ) {
+      problems.push('the reveal keyframes are not opacity only')
+    }
+    return problems
+  }
+
+  it('the card fades in with the second reveal stage, after the passage (D11-P6, A11Y-10c-2)', () => {
+    // The hooks: the card's section carries styles.ending (the card markup test above) inside the
+    // part, which carries data-animate and data-reveal (a part a step rendered, above).
+    expect(cardRevealProblems(playerCss())).toEqual([])
+  })
+
+  it('the card reveal check rejects each way the card could move out of the second stage', () => {
+    const css = playerCss()
+    const second = SECOND_STAGE.join(',\n')
+    const twoOnly = SECOND_STAGE.slice(0, 2).join(',\n')
+    const seeded: Record<string, string> = {
+      // Before 10c's amendment: the card has no reveal and paints with the passage's first frame.
+      'no reveal on the card': css.replace(second, twoOnly),
+      'the card fades in with the passage': css
+        .replace(second, twoOnly)
+        .replace(`\n${FIRST_STAGE} {`, `\n${FIRST_STAGE},\n${STAGE} .ending {`),
+      'the skip does not end it': css.replace(
+        `${STAGE} .ending {`,
+        '.part[data-animate] .ending {',
+      ),
+      'it runs on a part no step rendered': css.replace(
+        `${STAGE} .ending {`,
+        ".part:not([data-reveal='done']) .ending {",
+      ),
+      'a literal delay (not 0 under reduced motion)': css.replace(
+        `${second} {\n  animation-name: reveal;\n  animation-duration: var(--duration-quick);\n  animation-delay: var(--duration-calm);`,
+        `${second} {\n  animation-name: reveal;\n  animation-duration: var(--duration-quick);\n  animation-delay: 300ms;`,
+      ),
+      'a second rule with a transition': `${css}\n.ending {\n  transition: opacity var(--duration-quick);\n}\n`,
+      'the data attribute': `${css}\n.part[data-animate] [data-ending] {\n  animation-name: reveal;\n}\n`,
+      'nested in @media': `${css}\n@media (min-width: 1px) {\n  .part .ending {\n    opacity: 0.5;\n  }\n}\n`,
+      'motion, not opacity only': css.replace(
+        '\n@keyframes reveal {\n  from {\n    opacity: 0;\n  }\n}\n',
+        '\n@keyframes reveal {\n  from {\n    opacity: 0;\n    transform: translateY(8px);\n  }\n}\n',
+      ),
+    }
+    for (const [name, broken] of Object.entries(seeded)) {
+      expect(broken, `${name}: the seed changed the CSS`).not.toBe(css)
+      expect(cardRevealProblems(broken), name).not.toEqual([])
+    }
+    // Near misses the check must not count as naming the card.
+    expect(NAMES_CARD.test('.endingCount')).toBe(false)
+    expect(NAMES_CARD.test('[data-ending-count]')).toBe(false)
+  })
 })

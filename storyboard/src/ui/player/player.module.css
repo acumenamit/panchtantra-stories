@@ -95,9 +95,10 @@
 
 /*
  * Reveal (D11-P6), only on a part that an accepted CHOOSE, BACK or RESTART rendered: the passage
- * fades in over --duration-calm, then the question and choices over --duration-quick. Opacity
- * only. A pointerdown or keydown in the run area sets data-reveal="done", which ends it. Under
- * reduced motion every token here is 0ms, delays included.
+ * fades in over --duration-calm, then the question and choices over --duration-quick. At an ending
+ * the ending card fades in with that second stage, so it never paints before the passage (amended
+ * at 10c, A11Y-10c-2). Opacity only. A pointerdown or keydown in the run area sets
+ * data-reveal="done", which ends it. Under reduced motion every token here is 0ms, delays included.
  */
 @keyframes reveal {
   from {
@@ -113,7 +114,8 @@
 }
 
 .part[data-animate]:not([data-reveal='done']) .question,
-.part[data-animate]:not([data-reveal='done']) .choices {
+.part[data-animate]:not([data-reveal='done']) .choices,
+.part[data-animate]:not([data-reveal='done']) .ending {
   animation-name: reveal;
   animation-duration: var(--duration-quick);
   animation-delay: var(--duration-calm);
@@ -327,4 +329,98 @@
   font-size: var(--fs-body);
   font-weight: var(--fw-bold);
   line-height: var(--lh-body);
+}
+
+/*
+ * Step 10c: the ending card (D11-P13, §4.1). After the ending passage, inside the part: on the
+ * story surface like the story card, the lesson icon, the alternate label (alternate endings only),
+ * h2 "The lesson", the lesson as stored (no quotes, no italics), the count, then the actions. The
+ * lesson carries the content lang (a lang island), so it and the icon set their own font-size and
+ * line-height (F3); the heading, label, count and actions are in the page's language.
+ */
+.ending {
+  max-inline-size: var(--measure-story);
+  margin-block: var(--space-5) 0;
+  margin-inline: auto;
+  padding-block: var(--space-5);
+  padding-inline: var(--space-5);
+  border-radius: var(--radius-card);
+  background-color: var(--color-surface-story);
+  color: var(--color-text);
+}
+
+.lessonIcon {
+  margin-block: 0 var(--space-3);
+  font-size: var(--fs-title);
+  line-height: var(--lh-heading);
+}
+
+.alternate {
+  margin-block: 0 var(--space-3);
+  color: var(--color-text-ending);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+.lessonHeading {
+  margin-block: 0 var(--space-3);
+  font-size: var(--fs-story);
+  line-height: var(--lh-heading);
+}
+
+/* As stored: no quotes, no italics; single newlines and spaces kept (spec §6.1). */
+.lesson {
+  margin-block: 0 var(--space-4);
+  color: var(--color-text-lesson);
+  font-size: var(--fs-story);
+  font-style: normal;
+  line-height: var(--lh-story);
+  white-space: pre-wrap;
+}
+
+.endingCount {
+  margin-block: 0 var(--space-4);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-label);
+}
+
+/*
+ * Share (D11-P14): the button, then what it left: "Link copied." next to it, or the read-only field
+ * holding the URL on its own line.
+ */
+.share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-target);
+}
+
+.shareStatus {
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+.shareField {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+.shareFieldLabel {
+  color: var(--color-text-strong);
+}
+
+.shareUrl {
+  inline-size: 100%;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
 }
