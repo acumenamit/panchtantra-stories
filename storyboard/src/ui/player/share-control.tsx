@@ -6,7 +6,9 @@
 // - The URL is the player URL in the content locale (the language the reader is reading), built
 //   on tap from location.origin; the title is the story title in that locale (package text).
 // - The status is held in a ref as well as in state, so a second tap in the same tick sees
-//   'pending' and is ignored (a second share() would reject).
+//   'pending' and is ignored (a second share() would reject). The guard holds per control
+//   instance: the card keys this control by the content locale (Step 10d), so after a story-language
+//   switch a new instance starts idle (review R10d-STRESS-3).
 // - copied: "Link copied." shown after the button in [data-share-status] (persistent, no timer)
 //   and announced in the page's one live region. manual: a labelled read-only
 //   input[data-share-url] holding the URL, focused and selected. idle and pending show nothing.

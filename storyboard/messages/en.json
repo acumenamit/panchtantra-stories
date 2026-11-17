@@ -29,6 +29,7 @@
   "player.restartQuestion": "Start again from the beginning?",
   "player.share": "Share",
   "player.startThisAgain": "Start this story again",
+  "player.storyLanguage": "Story language:",
   "player.textSize": "Text size",
   "player.textSizeOption": "{percent, number}%",
   "player.tryAnother": "Try another path",

@@ -16,7 +16,10 @@
 // visit the two-paths player pages (kind 'player'). A player header holds 2 links (All stories,
 // Grown-ups); the viewport and overlap checks also cover header buttons (Menu from 10b, the story
 // language switch from 10d). A player page has no lang island until 10d: the story container
-// carries the page's lang and there is no switch, so kind 'player' takes 0 islands or more.
+// carries the page's lang and there is no switch, so kind 'player' took 0 islands or more.
+// Step 10d (C12, F1): the story-language switch is a header button, exactly one in a player
+// header's nav and none on another route; and every route, the player pages included, has at
+// least one lang island (on a player page, the switch's endonym in the other language).
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
@@ -273,6 +276,7 @@ test.describe('the reader shell', { tag: '@review' }, () => {
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
         links: document.querySelectorAll('header a').length,
+        switches: document.querySelectorAll('header nav button[data-story-language]').length,
         controls: [...document.querySelectorAll('header a, header button')].map((a) => ({
           name: a.textContent ?? '',
           ...a.getBoundingClientRect().toJSON(),
@@ -286,6 +290,10 @@ test.describe('the reader shell', { tag: '@review' }, () => {
       expect(layout.scrollWidth, 'horizontal scroll').toBeLessThanOrEqual(layout.clientWidth)
       expect(layout.links, 'header links').toBe(
         route.kind === 'home' || route.kind === 'grown-ups' ? 3 : route.kind === 'player' ? 2 : 0,
+      )
+      // Step 10d: the story-language switch, a header button (checked with the links below).
+      expect(layout.switches, 'story-language switches in the header nav').toBe(
+        route.kind === 'player' ? 1 : 0,
       )
       for (const control of layout.controls) {
         expect(control.right, `${control.name} inside the viewport`).toBeLessThanOrEqual(320)
@@ -342,10 +350,9 @@ test.describe('the reader shell', { tag: '@review' }, () => {
       )
       test.info().annotations.push({ type: 'F3', description })
       console.log(`[shell] F3 ${route.path} (${test.info().project.name}): ${description}`)
-      // Every other route has at least one island (the switch's endonym, the 404's Hindi parts).
-      if (route.kind !== 'player') {
-        expect(measured.length, 'lang islands on the page').toBeGreaterThan(0)
-      }
+      // Every route has at least one island: the language switch's endonym on the site pages, the
+      // story-language switch's endonym on the player pages (from 10d), the 404's Hindi parts.
+      expect(measured.length, 'lang islands on the page').toBeGreaterThan(0)
       for (const island of measured) {
         const allowed = LEADING[island.lang] ?? []
         expect(

@@ -7,10 +7,18 @@
  * it sets font-size and line-height from tokens on itself, so a lang island gets its own leading.
  */
 
-/* The story: title, then the card with the passage, the question and the choices. */
+/*
+ * The story: title, then the card with the passage, the question and the choices. It carries the
+ * content lang, which differs from the page's after a story-language switch or a stored-first
+ * resume (Step 10d, F3): the container sets its own size and leading from the body tokens, so as an
+ * island it takes its language's values, and on the page's own language it computes exactly what it
+ * would inherit (base.css: font-size --fs-body on body, line-height --lh-body on html).
+ */
 .story {
   max-inline-size: var(--measure-story);
   margin-inline: auto;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
 }
 
 .title {

@@ -8,6 +8,7 @@ import 'server-only'
 // and the progress bar's value text for every count from 0 to the story's step count.
 // Step 10c: the ending card (D11-P13, P14) and the ending count "Ending {found} of {total} found"
 // for every found from 0 to the story's ending count (the card and the live region, D11-P9).
+// Step 10d: the story-language switch's prefix (D11-P4).
 import type { LocaleCode } from '../../core/locales'
 import { TEXT_SCALES, type TextScale } from '../../core/progress'
 import type { PlayerData } from '../../reader/player/player-data'
@@ -67,5 +68,6 @@ export function playerStringsOf(
     share: t('player.share'),
     linkCopied: t('player.linkCopied'),
     copyLink: t('player.copyLink'),
+    storyLanguage: t('player.storyLanguage'),
   }
 }

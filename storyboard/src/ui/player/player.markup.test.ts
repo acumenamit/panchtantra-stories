@@ -28,6 +28,12 @@
 // the share feedback ("Link copied." or the read-only field), the new strings and the card CSS.
 // Second review (A11Y-10c-2, D11-P6 amended at 10c): the card fades in with the reveal's second
 // stage, checked as text with a negative test per way it could leave that stage.
+// Step 10d (design §4.1, §4.3, §4.6, D11-P4, F3): the story-language switch in the header nav
+// before Grown-ups (a button: a visually hidden "Story language:", then the other language's
+// endonym in its own lang and dir; inert and run-dependent while opening), none for a story whose
+// page has one language; a switched part keeps its key, node and seq while data-story takes the
+// new lang; and the lang islands' own size and leading (CSS read as text). The T-b10 fix: the
+// menu's Start again is ignored during the hold after a dialog cancel only (startAgainHeld).
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -38,22 +44,25 @@ import { describe, expect, it } from 'vitest'
 import lanternWalk from '../../../fixtures/packages/lantern-walk.json'
 import riverStones from '../../../fixtures/packages/river-stones.json'
 import twoPaths from '../../../fixtures/packages/two-paths.json'
-import { start, type StepResult } from '../../core/engine'
-import { ENABLED_LOCALE_CODES, type LocaleCode } from '../../core/locales'
+import { start, step, type StepResult } from '../../core/engine'
+import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../../core/locales'
 import { StoryPackageV1 } from '../../core/package/v1'
 import { graphOf, playerDataOf, type PlayerData } from '../../reader/player/player-data'
 import { segmentsOf } from '../../reader/player/segments'
-import { partViewOf } from '../../reader/player/view'
+import { partViewOf, tokenOf } from '../../reader/player/view'
 import { readerStores } from '../../reader/progress'
+import a11y from '../a11y/a11y.module.css'
 import { translator } from '../i18n/messages'
+import shell from '../shell/shell.module.css'
 import { EndingCard, LESSON_HEADING_ID } from './ending-card'
-import { Player } from './player'
+import { Player, startAgainHeld } from './player'
 import { PlayerFallback } from './player-boundary'
 import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
 import { dialogClosed, RESTART_QUESTION_ID, RestartDialog } from './restart-dialog'
 import { ShareControl, ShareFeedback } from './share-control'
+import { StoryLanguageSwitch } from './story-language-switch'
 import { QUESTION_ID, StoryPart } from './story-part'
 import { playerFallbackStringsOf, playerStringsOf } from './strings'
 
@@ -636,6 +645,35 @@ describe("the restart dialog's close: a cancel holds the run area, an accepted r
   })
 })
 
+// Step 10d T-b10 fix (the lead's decision): during the hold after a restart-dialog cancel the
+// menu's Start again is ignored too, so the second tap of a double tap on Keep reading cannot
+// reopen the dialog when Start again lies under it; the settle timer that releases the run area
+// releases it (settling back to null), and a step's settle never holds it (D11-P7, T-b4). The
+// island's wiring is proven by e2e T-b10 over Start again.
+describe("the menu's Start again during the hold after a restart-dialog cancel", () => {
+  const big = tokenOf({ runEpoch: 0, seq: 2 })
+  const next = tokenOf({ runEpoch: 0, seq: 3 })
+  const restarted = tokenOf({ runEpoch: 1, seq: 0 })
+
+  it('is ignored while the run area is held for the cancelled part', () => {
+    expect(startAgainHeld(big, big)).toBe(true)
+  })
+
+  it('works again once the settle timer released the hold (settling null)', () => {
+    expect(startAgainHeld(big, null)).toBe(false)
+  })
+
+  it("is never held by a step's settle: no cancel, or a cancel of an earlier part or run", () => {
+    expect(startAgainHeld(null, next)).toBe(false)
+    expect(startAgainHeld(big, next)).toBe(false)
+    expect(startAgainHeld(big, restarted)).toBe(false)
+  })
+
+  it('is not held with no cancel and no settle', () => {
+    expect(startAgainHeld(null, null)).toBe(false)
+  })
+})
+
 describe('the player strings (server-only)', () => {
   it('strings.ts starts with the server-only marker', () => {
     const source = readFileSync(join(here, 'strings.ts'), 'utf8')
@@ -680,6 +718,7 @@ describe('the player strings (server-only)', () => {
         share: t('player.share'),
         linkCopied: t('player.linkCopied'),
         copyLink: t('player.copyLink'),
+        storyLanguage: t('player.storyLanguage'),
       })
       // Step 10c: "Ending {found} of {total} found" for every found from 0 to the ending count.
       const endings = data.endingIds.length
@@ -1201,5 +1240,173 @@ describe('Step 10c: the card CSS (read as text)', () => {
     // Near misses the check must not count as naming the card.
     expect(NAMES_CARD.test('.endingCount')).toBe(false)
     expect(NAMES_CARD.test('[data-ending-count]')).toBe(false)
+  })
+})
+
+describe('Step 10d: the story-language switch and the lang islands (server markup)', () => {
+  const shellCss = (): string => readFileSync(join(here, '../shell/shell.module.css'), 'utf8')
+
+  /** The declarations of the one rule whose selector list is exactly `selector`. */
+  function ruleIn(css: string, selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const rules = all(css, new RegExp(`\\n${escaped} \\{\\n([^}]*)\\}`, 'g'))
+    expect(rules, selector).toHaveLength(1)
+    return rules[0]?.[1] ?? ''
+  }
+
+  /** The header nav's inner HTML. */
+  const navOf = (html: string): string => /<nav\b[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? ''
+
+  /** The switch as React writes it (JSX prop order). */
+  function switchHtml(target: LocaleCode, label: string, opening: boolean): string {
+    const { endonym, dir } = getLocaleDef(target)
+    return (
+      `<button type="button" data-story-language=""${opening ? ' inert=""' : ''} ` +
+      `class="${styles.action} ${shell.switch} ${styles.runDependent}">` +
+      `<span class="${a11y.visuallyHidden}">${escapeHtml(`${label} `)}</span>` +
+      `<span lang="${target}" dir="${dir}" class="${shell.switchName}">${escapeHtml(endonym)}</span>` +
+      '</button>'
+    )
+  }
+
+  const englishOnly = playerDataOf(
+    StoryPackageV1.parse({
+      ...twoPaths,
+      storyId: 'english-only',
+      locales: ['en'],
+      text: { en: twoPaths.text.en },
+    }),
+    { locales: ENABLED_LOCALE_CODES },
+  )
+
+  it.each(cases)(
+    '%s/%s: the nav holds the switch to the other language, then Grown-ups; inert and run-dependent while opening',
+    (_, locale, pkg) => {
+      const html = renderPlayer(dataOf(pkg), locale)
+      const t = translator(locale)
+      const other: LocaleCode = locale === 'en' ? 'hi' : 'en'
+      const label = t('player.storyLanguage')
+      expect(label).toBe(locale === 'hi' ? 'कहानी की भाषा:' : 'Story language:')
+      const nav = navOf(html)
+      const button = switchHtml(other, label, true)
+      // First in the nav: a native button named "Story language: <endonym>"; the endonym alone
+      // carries a lang (the other language's) and its own dir.
+      expect(nav.slice(0, button.length)).toBe(button)
+      // Grown-ups follows it and is the last thing in the nav (3.2.6).
+      expect(nav.slice(button.length)).toMatch(
+        new RegExp(`^<a\\b[^>]*\\shref="/${locale}/grown-ups"[^>]*>[\\s\\S]*?</a>$`),
+      )
+      // One switch on the page, inside the header.
+      expect(all(html, /\sdata-story-language=""/g)).toHaveLength(1)
+      const header = /<header\b[^>]*>([\s\S]*?)<\/header>/.exec(html)?.[1] ?? ''
+      expect(header).toContain(button)
+    },
+  )
+
+  it('a story whose page has one language renders no switch (localeSwitchOf gives null)', () => {
+    expect(englishOnly.locales).toEqual(['en'])
+    const html = renderPlayer(englishOnly, 'en')
+    expect(html).not.toContain('data-story-language')
+    const nav = navOf(html)
+    expect(all(nav, /<button\b/g)).toHaveLength(0)
+    expect(nav).toMatch(/^<a\b[^>]*\shref="\/en\/grown-ups"[^>]*>[\s\S]*?<\/a>$/)
+  })
+
+  it('the switch once open: not inert, the endonym of the language it offers now in its own lang and dir', () => {
+    const offers: [LocaleCode, LocaleCode][] = [
+      ['en', 'hi'],
+      ['en', 'en'],
+      ['hi', 'en'],
+      ['hi', 'hi'],
+      // A right-to-left target takes its own dir from the registry.
+      ['en', 'ar'],
+    ]
+    for (const [route, target] of offers) {
+      const label = translator(route)('player.storyLanguage')
+      const html = renderToString(
+        createElement(StoryLanguageSwitch, {
+          target,
+          label,
+          opening: false,
+          onSwitch: refuse,
+        }),
+      )
+      expect(html, `${route} ${target}`).toBe(switchHtml(target, label, false))
+    }
+    expect(getLocaleDef('ar').dir).toBe('rtl')
+  })
+
+  it.each(cases)(
+    '%s/%s: a switched part keeps its key, node and seq; data-story takes the new lang, Back the page language',
+    (_, route, pkg) => {
+      const data = dataOf(pkg)
+      const graph = graphOf(data)
+      const other: LocaleCode = route === 'en' ? 'hi' : 'en'
+      const strings = playerStringsOf(route, data)
+      const first = data.nodes.find((n) => n.id === data.startNodeId)?.choices[0]
+      if (first === undefined) throw new Error('no first choice')
+      const before = start(graph, { path: [data.startNodeId, first.next], locale: route })
+      const result = step(graph, before, { type: 'SET_LOCALE', locale: other })
+      expect(result.effects).toEqual([{ type: 'persist' }])
+      const [was, now] = [partViewOf(data, before), partViewOf(data, result.state)]
+      // The island keys the part by its token: the same key, so the part stays mounted.
+      expect(now.token).toBe(was.token)
+      const render = (view: typeof now): string =>
+        renderToString(
+          createElement(StoryPart, {
+            view,
+            interactive: true,
+            animate: false,
+            revealDone: false,
+            firstParagraphRef: createRef<HTMLParagraphElement>(),
+            onChoose: refuse,
+            backLabel: strings.back,
+            onBack: refuse,
+          }),
+        )
+      const html = render(now)
+      const part = startTags(html, 'div').filter((tag) => /\sdata-part=""/.test(tag))[0] ?? ''
+      expect(part).toContain(` data-node="${first.next}" data-seq="${was.seq}"`)
+      expect(part).not.toContain('data-animate')
+      const story = startTags(html, 'div').filter((tag) => /\sdata-story=""/.test(tag))
+      expect(story).toEqual([
+        `<div data-story="" lang="${other}" dir="ltr" class="${styles.story}">`,
+      ])
+      // The only lang in the part is the story container's: its text inherits it.
+      expect(all(html, /\slang="/g)).toHaveLength(1)
+      expect(paragraphsIn(html).join('\n\n')).toBe(pkg.text[other]?.nodes[first.next]?.text)
+      // The run footer is chrome: Back stays in the page's language.
+      const back = /<button\b[^>]*\sdata-back=""[^>]*><span\b[^>]*>([\s\S]*?)<\/span><\/button>/
+      expect(unescapeHtml(back.exec(html)?.[1] ?? '')).toBe(translator(route)('player.back'))
+      expect(render(was)).toContain(`<div data-story="" lang="${route}" dir="ltr"`)
+    },
+  )
+
+  it('the lang islands set their own size and leading from tokens (F3): the story container and the switch endonym', () => {
+    // The story container: the body tokens, what it inherits on a page in its own language.
+    expect(ruleIn(playerCss(), '.story')).toBe(
+      [
+        '  max-inline-size: var(--measure-story);',
+        '  margin-inline: auto;',
+        '  font-size: var(--fs-body);',
+        '  line-height: var(--lh-body);',
+        '',
+      ].join('\n'),
+    )
+    // The switch's endonym takes the site switch's class: its own size and leading at regular
+    // weight (no Devanagari 700), and the Hindi 0.12em paint offset (D11-P26).
+    expect(ruleIn(shellCss(), '.switchName')).toBe(
+      [
+        '  font-size: var(--fs-label);',
+        '  font-weight: var(--fw-regular);',
+        '  line-height: var(--lh-label);',
+        '',
+      ].join('\n'),
+    )
+    expect(ruleIn(shellCss(), '.switchName:lang(hi),\n.label:lang(hi)')).toBe(
+      '  position: relative;\n  inset-block-start: 0.12em;\n',
+    )
+    // A fixed width in em, so the endonym changing never moves Grown-ups.
+    expect(ruleIn(shellCss(), '.switch')).toBe('  min-inline-size: 7em;\n')
   })
 })

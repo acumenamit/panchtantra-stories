@@ -13,7 +13,8 @@
 // - The radios show prefs.textScale (the server snapshot, 100, while hydrating; then the stored
 //   one) and write it with prefs.update; TextScaleSync applies it to <html>.
 // - Start again carries the seq it was rendered with (data-seq); the island decides between the
-//   dialog and an immediate RESTART. A header control: never held by the run area's settle (P7).
+//   dialog and an immediate RESTART. A header control: never held by a step's settle (P7); the
+//   island ignores it only during the hold after a restart-dialog cancel (startAgainHeld, T-b10).
 // - The Menu button is inert while the run opens, like every run control (D11-P5).
 // - Fixer (review FB-2, A11Y-1): a click on Menu also focuses it, because WebKit does not focus a
 //   clicked button and Escape is handled only on the button and the panel; the radio labels carry

@@ -316,17 +316,18 @@ export async function failStorageWrites(page: Page): Promise<void> {
  * Before any page script: records every layout shift with its hadRecentInput flag (Chromium
  * only). Under Playwright, Chromium flags shifts in the first 500 ms after page.goto as recent
  * input although no input was sent (probe 2026-11-15: the storage banner's shift on /en), so both
- * sums are kept: CLS by its definition leaves those out, the raw sum keeps them.
+ * sums are kept: CLS by its definition leaves those out, the raw sum keeps them. Each shift also
+ * keeps its startTime (performance.now() time), so a test can sum one window (Step 10d, T-d5).
  */
 export async function recordLayoutShifts(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>
-    const shifts: { value: number; input: boolean }[] = []
+    const shifts: { value: number; input: boolean; t: number }[] = []
     w['__e2eShifts'] = shifts
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
         const shift = entry as PerformanceEntry & { value: number; hadRecentInput: boolean }
-        shifts.push({ value: shift.value, input: shift.hadRecentInput })
+        shifts.push({ value: shift.value, input: shift.hadRecentInput, t: shift.startTime })
       }
     }).observe({ type: 'layout-shift', buffered: true })
   })
@@ -334,16 +335,22 @@ export async function recordLayoutShifts(page: Page): Promise<void> {
 
 /**
  * The layout shifts so far, summed (stricter than CLS's session window): `cls` without the shifts
- * flagged as recent input, `raw` with them, and how many shifts there were of each.
+ * flagged as recent input, `raw` with them, and how many shifts there were of each. With `between`
+ * (performance.now() times in the page), only the shifts whose startTime lies in [from, to] count.
  */
 export async function layoutShift(
   page: Page,
+  between: { readonly from: number; readonly to: number } | null = null,
 ): Promise<{ cls: number; raw: number; shifts: number; inputShifts: number }> {
-  const shifts = await page.evaluate(
+  const recorded = await page.evaluate(
     () =>
       ((window as unknown as Record<string, unknown>)['__e2eShifts'] as
-        { value: number; input: boolean }[] | undefined) ?? [],
+        { value: number; input: boolean; t: number }[] | undefined) ?? [],
   )
+  const shifts =
+    between === null
+      ? recorded
+      : recorded.filter((shift) => shift.t >= between.from && shift.t <= between.to)
   const sum = (list: { value: number }[]) => list.reduce((total, shift) => total + shift.value, 0)
   const counted = shifts.filter((shift) => !shift.input)
   return {

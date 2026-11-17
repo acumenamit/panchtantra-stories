@@ -25,7 +25,9 @@
 //   the dialog is open.
 // - The restart dialog's cancel (Keep reading, Escape) holds the run area for SETTLE_MS like a step
 //   (hold(); D11-P7 amended at 10b, R2-STRESS-1): the dialog closes on the first tap of a double
-//   tap, and the second would land on a choice or Back under it. The header stays unsettled.
+//   tap, and the second would land on a choice or Back under it. The header stays unsettled, except
+//   that the menu's Start again is ignored during that hold (startAgainHeld; 10d, T-b10): when it
+//   lies under Keep reading, the second tap would reopen the dialog. A step's settle never holds it.
 // - Step 10c (§4.2 steps 4 and 6, §4.3, §5, D11-P9, P11, P13, P14): at an ending the part shows
 //   the ending card after its passage. The count x = |(stored ∪ session endings) ∩ endingIds|:
 //   the open effect reads the stored endings once (progress.get; reads never write, SPEC:470) and
@@ -35,6 +37,13 @@
 //   that count instead of "Page n". Try another path is a run-area RESTART with no dialog, refused
 //   while the run area settles; the card's actions (Try another path, Share, All stories) settle
 //   with the run area.
+// - Step 10d (§4.3, D11-P4, F3): the story-language switch in the header nav, before Grown-ups,
+//   shown only when localeSwitchOf offers a language. A tap sends SET_LOCALE (a header control,
+//   never held by the settle): the engine keeps the node and seq, so the part keeps its key and
+//   stays mounted, and SET_LOCALE has no focus effect, so nothing settles, reveals, moves focus or
+//   is announced; data-story and the lesson take the new lang and dir (lang islands that set their
+//   own size and leading), while the chrome stays on the route locale. It works at an ending and
+//   with storage blocked; reload resumes in the stored language (stored-first, mid-story only).
 // Strings arrive finished from the server (src/ui/player/strings.ts); no catalogue here. Imports
 // are relative (C15).
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -43,6 +52,7 @@ import type { LocaleCode } from '../../core/locales'
 import { SAVED_RUN_ATTRIBUTE } from '../../core/progress/saved-run-hint'
 import { createPlayerActions, type PlayerActions } from '../../reader/player/actions'
 import { endingCountOf } from '../../reader/player/endings'
+import { localeSwitchOf } from '../../reader/player/locales'
 import { graphOf, type PlayerData } from '../../reader/player/player-data'
 import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf, SETTLE_MS, tokenOf } from '../../reader/player/view'
@@ -57,6 +67,7 @@ import { PlayerMenu } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
 import { RestartDialog } from './restart-dialog'
+import { StoryLanguageSwitch } from './story-language-switch'
 import { StoryPart } from './story-part'
 import { TextScaleSync } from './text-scale-sync'
 import type { PlayerStrings } from './types'
@@ -70,6 +81,16 @@ export interface PlayerProps {
 
 const isStep = (result: StepResult): boolean =>
   result.effects.some((effect) => effect.type === 'focus')
+
+/**
+ * Is the menu's Start again ignored now (exported for its unit test)? Only during the hold after a
+ * restart-dialog cancel: `cancelled` is the token hold() held, `settling` the token the run area
+ * settles for (null once the settle timer released it), so one timer releases both. A step's
+ * settle (no cancel, or a cancel of another part) never holds Start again (D11-P7, T-b4).
+ */
+export function startAgainHeld(cancelled: string | null, settling: string | null): boolean {
+  return cancelled !== null && cancelled === settling
+}
 
 export function Player({ data, strings, locale }: PlayerProps) {
   // The token of the part that is settling (its run-area controls inert), else null.
@@ -86,6 +107,8 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const [storedEndings, setStoredEndings] = useState<readonly string[]>([])
   const [sessionEndings, setSessionEndings] = useState<readonly string[]>([])
   const settlingToken = useRef<string | null>(null)
+  // The token the last restart-dialog cancel held (hold()); see startAgainHeld.
+  const cancelledToken = useRef<string | null>(null)
   const pendingFocus = useRef<string | null>(null)
   const header = useRef<HTMLElement>(null)
   const firstParagraph = useRef<HTMLParagraphElement>(null)
@@ -114,6 +137,8 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const segments = segmentsOf(data, snapshot.state)
   // "Ending x of y found": stored or found on this page, current ending ids only (D11-P13).
   const endingsFound = endingCountOf(data.endingIds, storedEndings, sessionEndings)
+  // The language the story-language switch offers, or null: no switch (D11-P4).
+  const languageTarget = localeSwitchOf(data, view.locale)
 
   useLayoutEffect(() => {
     actions.current = createPlayerActions({
@@ -196,10 +221,12 @@ export function Player({ data, strings, locale }: PlayerProps) {
   // The restart dialog closed with no accepted restart (Keep reading, Escape): the run area is held
   // for SETTLE_MS like a step, through isInteractive and inert, so the second tap of a double tap
   // never lands on a choice or Back under the dialog (D11-P7 amended at 10b, R2-STRESS-1). The
-  // header (Menu, Exit) is not held.
+  // header (Menu, Exit) is not held; the menu's Start again is ignored until the same timer
+  // releases the run area, so that tap never reopens the dialog either (startAgainHeld, T-b10).
   const hold = (): void => {
     const held = tokenOf(controller.getSnapshot().state)
     settlingToken.current = held
+    cancelledToken.current = held
     setSettling(held)
     setHolds((count) => count + 1)
   }
@@ -214,6 +241,9 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const back = (seq: number): StepResult => actions.current?.back(seq) ?? refused()
   // Try another path: RESTART from the run area, no dialog, held by the settle (D11-P11, P7).
   const tryAnother = (seq: number): StepResult => actions.current?.restart(seq) ?? refused()
+  // The story-language switch: SET_LOCALE from the header, never held by the settle (D11-P4).
+  const setLocale = (target: LocaleCode): StepResult =>
+    actions.current?.setLocale(target) ?? refused()
 
   // Start again from the menu or its dialog: RESTART, not held by the settle; an accepted one
   // closes the menu (D11-P11, P19, C13).
@@ -223,8 +253,10 @@ export function Player({ data, strings, locale }: PlayerProps) {
     return result.accepted
   }
 
-  // The menu's Start again: the dialog only while reading with more than 2 pages (V1 D-71).
+  // The menu's Start again: the dialog only while reading with more than 2 pages (V1 D-71). Ignored
+  // during the hold after a dialog cancel (startAgainHeld); focus stays where the cancel put it.
   const startAgain = (seq: number): void => {
+    if (startAgainHeld(cancelledToken.current, settlingToken.current)) return
     const { status, path } = controller.getSnapshot().state
     if (status === 'reading' && path.length > 2) setConfirmOpen(true)
     else restart(seq)
@@ -243,6 +275,16 @@ export function Player({ data, strings, locale }: PlayerProps) {
         allStories={strings.allStories}
         navLabel={strings.navLabel}
         grownUps={strings.grownUps}
+        languageSwitch={
+          languageTarget === null ? null : (
+            <StoryLanguageSwitch
+              target={languageTarget}
+              label={strings.storyLanguage}
+              opening={opening}
+              onSwitch={setLocale}
+            />
+          )
+        }
       >
         <PlayerMenu
           strings={strings}

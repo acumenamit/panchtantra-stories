@@ -11,6 +11,8 @@
 // Step 10c adds its 7 player keys (owner-approved as §0.2 drafts them) and one table entry:
 // player.endingCount {found} {total}, a plural on found in Hindi (=0, one, other), so found is
 // numeric and total any.
+// Step 10d adds its 1 player key, player.storyLanguage (owner-approved as §0.2 drafts it), which
+// takes no argument.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,8 +49,8 @@ const ALL = LOCALES.flatMap((locale) =>
 )
 
 /**
- * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4, Step 10b's 9 and Step 10c's 7 player
- * keys (p1-step10 §0.2), sorted.
+ * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4, Step 10b's 9, Step 10c's 7 and Step
+ * 10d's 1 player keys (p1-step10 §0.2), sorted.
  */
 const DESIGN_KEYS = [
   'gate.prompt',
@@ -81,6 +83,7 @@ const DESIGN_KEYS = [
   'player.restartQuestion',
   'player.share',
   'player.startThisAgain',
+  'player.storyLanguage',
   'player.textSize',
   'player.textSizeOption',
   'player.tryAnother',
@@ -165,7 +168,7 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the design keys (Step 7 and Steps 10a to 10c), sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7 and Steps 10a to 10d), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)

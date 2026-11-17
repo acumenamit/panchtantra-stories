@@ -22,8 +22,13 @@
 // Step 10c (design D11-P9): at an ending the live region says "Ending x of y found" instead of
 // "Page n", so T-a3 and T-a15 expect the count at their last step (stepAnnouncement). The ending
 // card, Share and Try another path are in player-share.spec.ts.
-import type { Page, Request } from '@playwright/test'
-import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
+// Step 10d (design D11-P4, §4.3, §6 F3, §9.3 T-d1 to T-d5, R20): the story-language switch in the
+// header nav. A switch changes the story's language only: the same part stays mounted (no reveal,
+// no focus move, no announcement), the page, its chrome, <title> and URL stay on the route locale,
+// and the run is saved in the new language (reload resumes in it). T-d5 times its window from the
+// switch's commit, read in the page (a MutationObserver), never from the click.
+import type { ElementHandle, Page, Request } from '@playwright/test'
+import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY } from '../src/core/progress/records'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
 import { SETTLE_MS } from '../src/reader/player/view'
@@ -1622,37 +1627,139 @@ interface HoldTap {
   readonly control: string | null
   /** The pointerdown's target (hit testing skips inert elements). */
   readonly target: string
+  /** The pointerdown's target is the menu's Start again or inside it. */
+  readonly onStartAgain: boolean
+  /**
+   * Every interactive element whose box holds the pointer, inert or not, header and dialog
+   * included (the 10d fix: a run-area-only list missed the menu's Start again on webkit-iphone).
+   */
+  readonly under: readonly string[]
+  /**
+   * The elements of `under` that are none of a run-area control (a choice, Back), an element of
+   * the dialog or the menu's Start again: T-b10 expects none (a layout drift that puts a text-size
+   * radio, the story-language switch, Menu or a nav link under the tap fails).
+   */
+  readonly stray: readonly string[]
   readonly choicesInert: boolean | null
   readonly backInert: boolean | null
+}
+
+/** A keydown during T-b10's watch: Enter on the menu's Start again during the hold. */
+interface HoldKey {
+  readonly t: number
+  readonly key: string
+  /** The keydown's target (the focused element) is the menu's Start again or inside it. */
+  readonly onStartAgain: boolean
+  readonly choicesInert: boolean | null
 }
 
 interface HoldRecord {
   readonly closeAt: number | null
   readonly heldAt: number | null
   readonly releasedAt: number | null
+  /** The first time the dialog was open again after the close, else null. */
+  readonly reopenedAt: number | null
   readonly downs: readonly HoldTap[]
+  readonly keys: readonly HoldKey[]
 }
+
+/** What T-b10's in-page watch reads before any tap. */
+const NO_HOLD: HoldRecord = {
+  closeAt: null,
+  heldAt: null,
+  releasedAt: null,
+  reopenedAt: null,
+  downs: [],
+  keys: [],
+}
+
+/** T-b10: what counts as interactive under a tap, anywhere on the page. */
+const INTERACTIVE =
+  'a[href], button, input, select, textarea, label, summary, [tabindex]:not([tabindex="-1"])'
 
 /**
  * In the page, for T-b10 (R2-STRESS-1): the time the restart dialog's close event is dispatched
  * (a capturing listener on document, so it runs before the dialog's own close handler and the
  * hold it starts); after that close, the times the run area's choices became inert (the hold) and
- * then lost inert again (the release), from a MutationObserver on the run area; and for every
- * pointerdown (capture phase on document) its time, the run-area control whose box holds the
- * pointer (inert or not, as T-b2 measures), its target, and whether the choices and Back are inert.
+ * then lost inert again (the release), from a MutationObserver on the run area, and the first time
+ * the dialog was open again (its open attribute); and for every pointerdown (capture phase on
+ * document) its time, the run-area control whose box holds the pointer (inert or not, as T-b2
+ * measures), every interactive element whose box holds it (header and dialog included) and those of
+ * them that are none of a run-area control, the dialog's or the menu's Start again (stray), its
+ * target and whether that is the menu's Start again, and whether the choices and Back are inert;
+ * and for every keydown (capture phase on document) its time, its key, whether its target is the
+ * menu's Start again and whether the choices are inert.
  */
 async function watchHold(page: Page): Promise<void> {
   await page.evaluate(
-    ([dialog, run, choices, footer, controls]) => {
+    ([dialog, run, choices, footer, controls, interactive, restart]) => {
       const record: {
         closeAt: number | null
         heldAt: number | null
         releasedAt: number | null
+        reopenedAt: number | null
         downs: HoldTap[]
-      } = { closeAt: null, heldAt: null, releasedAt: null, downs: [] }
+        keys: HoldKey[]
+      } = {
+        closeAt: null,
+        heldAt: null,
+        releasedAt: null,
+        reopenedAt: null,
+        downs: [],
+        keys: [],
+      }
       ;(window as unknown as Record<string, unknown>)['__e2eHold'] = record
       const inertOf = (selector: string): boolean | null =>
         document.querySelector(selector)?.hasAttribute('inert') ?? null
+      const holds = (element: Element, x: number, y: number): boolean => {
+        const box = element.getBoundingClientRect()
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          x >= box.left &&
+          x <= box.right &&
+          y >= box.top &&
+          y <= box.bottom
+        )
+      }
+      const dataNames = (element: Element): string =>
+        [...element.attributes]
+          .filter((attribute) => attribute.name.startsWith('data-'))
+          .map((attribute) => `[${attribute.name}]`)
+          .join('')
+      // An input, or the input a label is for, by its type, group and value (a text-size radio).
+      const inputOf = (element: Element): string => {
+        const input = element instanceof HTMLLabelElement ? element.control : element
+        if (!(input instanceof HTMLInputElement)) return ''
+        const named = `[type="${input.type}"][name="${input.name}"][value="${input.value}"]`
+        return input === element ? named : `>input${named}`
+      }
+      // Where it is, its tag, data attributes and input, its text, and (inert) when hit testing
+      // skips it.
+      const nameOf = (element: Element): string => {
+        const where =
+          element.closest(dialog) !== null
+            ? 'dialog'
+            : element.closest('header') !== null
+              ? 'header'
+              : element.closest(run) !== null
+                ? 'run area'
+                : 'page'
+        const text = (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)
+        const inert = element.closest('[inert]') !== null ? ' (inert)' : ''
+        const tag = element.tagName.toLowerCase()
+        return `${where} ${tag}${dataNames(element)}${inputOf(element)} "${text}"${inert}`
+      }
+      // What may lie under a tap during the hold: a run-area control (held: inert), an element of
+      // the dialog, or the menu's Start again (ignored until the release).
+      const allowed = (element: Element): boolean =>
+        element.matches(controls) || element.closest(dialog) !== null || element.matches(restart)
+      const dialogElement = document.querySelector(dialog)
+      if (dialogElement === null) throw new Error(`no ${dialog}`)
+      new MutationObserver(() => {
+        if (record.closeAt === null || record.reopenedAt !== null) return
+        if (dialogElement.hasAttribute('open')) record.reopenedAt = performance.now()
+      }).observe(dialogElement, { attributes: true, attributeFilter: ['open'] })
       document.addEventListener(
         'close',
         (event) => {
@@ -1676,28 +1783,39 @@ async function watchHold(page: Page): Promise<void> {
       document.addEventListener(
         'pointerdown',
         (event) => {
+          const x = event.clientX
+          const y = event.clientY
           const control = [...document.querySelectorAll(controls)].find((candidate) => {
             const box = candidate.getBoundingClientRect()
-            return (
-              event.clientX >= box.left &&
-              event.clientX <= box.right &&
-              event.clientY >= box.top &&
-              event.clientY <= box.bottom
-            )
+            return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom
           })
           const target = event.target instanceof Element ? event.target : null
+          const under = [...document.querySelectorAll(interactive)].filter((element) =>
+            holds(element, x, y),
+          )
           record.downs.push({
             t: performance.now(),
             control: control === undefined ? null : (control.getAttribute('data-choice') ?? 'back'),
             target:
-              target === null
-                ? 'none'
-                : `${target.tagName.toLowerCase()}${[...target.attributes]
-                    .filter((attribute) => attribute.name.startsWith('data-'))
-                    .map((attribute) => `[${attribute.name}]`)
-                    .join('')}`,
+              target === null ? 'none' : `${target.tagName.toLowerCase()}${dataNames(target)}`,
+            onStartAgain: (target?.closest(restart) ?? null) !== null,
+            under: under.map(nameOf),
+            stray: under.filter((element) => !allowed(element)).map(nameOf),
             choicesInert: inertOf(choices),
             backInert: inertOf(footer),
+          })
+        },
+        { capture: true },
+      )
+      document.addEventListener(
+        'keydown',
+        (event) => {
+          const target = event.target instanceof Element ? event.target : null
+          record.keys.push({
+            t: performance.now(),
+            key: event.key,
+            onStartAgain: (target?.closest(restart) ?? null) !== null,
+            choicesInert: inertOf(choices),
           })
         },
         { capture: true },
@@ -1709,7 +1827,51 @@ async function watchHold(page: Page): Promise<void> {
       `[data-part] ${CHOICES}`,
       FOOTER,
       `[data-part] button[data-choice], [data-part] button[data-back]`,
+      INTERACTIVE,
+      MENU_RESTART,
     ] as const,
+  )
+}
+
+interface StartAgainUnder {
+  readonly viewport: { readonly width: number; readonly height: number }
+  readonly scrollY: number
+  /** Keep reading's centre, where T-b10 taps (viewport coordinates). */
+  readonly keep: { readonly x: number; readonly y: number }
+  readonly restart: { left: number; right: number; top: number; bottom: number }
+  /** The menu's Start again box holds Keep reading's centre. */
+  readonly under: boolean
+}
+
+/**
+ * For T-b10 over Start again, with the menu and the restart dialog open: scrolls the page (the
+ * modal dialog stays where the browser centred it) so that the centre of the menu's Start again
+ * lies at the height of Keep reading's centre, then measures whether Start again's box holds that
+ * centre, where both taps land. Measured in the page, so it is the same on every project.
+ */
+async function putStartAgainUnderKeepReading(page: Page): Promise<StartAgainUnder> {
+  return page.evaluate(
+    ([keepSelector, restartSelector]) => {
+      const keepElement = document.querySelector(keepSelector)
+      const restartElement = document.querySelector(restartSelector)
+      if (keepElement === null || restartElement === null) throw new Error('no Keep reading')
+      const centreY = (box: DOMRect): number => box.top + box.height / 2
+      const before = restartElement.getBoundingClientRect()
+      const wanted = centreY(keepElement.getBoundingClientRect())
+      window.scrollTo(0, window.scrollY + centreY(before) - wanted)
+      const keepBox = keepElement.getBoundingClientRect()
+      const box = restartElement.getBoundingClientRect()
+      const keep = { x: keepBox.left + keepBox.width / 2, y: centreY(keepBox) }
+      return {
+        viewport: { width: document.documentElement.clientWidth, height: window.innerHeight },
+        scrollY: window.scrollY,
+        keep,
+        restart: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+        under:
+          keep.x >= box.left && keep.x <= box.right && keep.y >= box.top && keep.y <= box.bottom,
+      }
+    },
+    [KEEP_READING, MENU_RESTART] as const,
   )
 }
 
@@ -1913,6 +2075,8 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
     ])
     expect(await announcements(page), 'announced after Escape').toEqual([])
 
+    // The cancel held the run area, and the menu's Start again with it, for SETTLE_MS (T-b10).
+    await waitSettled(page)
     await page.locator(MENU_RESTART).click()
     await expect(dialog, 'the dialog after Start again').toHaveJSProperty('open', true)
     await page.locator(RESTART_ACCEPT).click()
@@ -2381,6 +2545,8 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       await expect(panel, `the panel after ${close} in the dialog`).toBeVisible()
       await expect(page.locator(MENU_RESTART), `focus after ${close} in the dialog`).toBeFocused()
       await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+      // The cancel holds the run area, and the menu's Start again with it, for SETTLE_MS (T-b10).
+      await waitSettled(page)
     }
 
     // An accepted Start again closes the menu.
@@ -2539,17 +2705,52 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
   // Second review R2-STRESS-1 (D11-P7 amended at 10b): the dialog closes on the first tap of a
   // double tap on Keep reading, and the second tap lands on whatever lies under it (big_rock's
   // choice c1 on webkit-ipad at en 100%). A close without an accepted Start again (Keep reading or
-  // Escape) holds the run area for SETTLE_MS like a step. The page records what lies under the
-  // tap (a choice or Back, by its box) and whether the run area was inert at the tap, so the test
-  // proves the hold on a project where nothing interactive lies there too; the release is timed
-  // from the close event in the page.
-  for (const cancel of ['Keep reading', 'Escape'] as const) {
-    const name =
-      cancel === 'Keep reading'
-        ? 'T-b10 a double tap on Keep reading never moves the story'
-        : 'T-b10 Escape on the restart dialog holds the run area too: a tap under Keep reading never moves the story'
+  // Escape) holds the run area for SETTLE_MS like a step. The page records every interactive
+  // element under each tap (by its box, inert or not, header and dialog included) and whether the
+  // run area was inert at the tap, so the test proves the hold on a project where nothing
+  // interactive lies there too; the release is timed from the close event in the page.
+  // Step 10d fix (the lead's decision): with the story-language switch in the header, the menu's
+  // Start again lay under Keep reading on webkit-iphone with the staging banner (and at hi 150%
+  // in 10b), so the second tap reopened the dialog. Start again is now ignored during that hold:
+  // the dialog stays closed until the release, and Start again opens it again after. The "over
+  // Start again" cases put Start again under Keep reading's centre on every project (320 x 480 px,
+  // 150%, the page scrolled in the page until Start again's box holds that centre), so the bounce
+  // is proven on both engines, whatever each project's own layout does.
+  // Step 10d review: everything interactive under each tap must be a run-area control (held), an
+  // element of the dialog or the menu's Start again (ignored), and the taps leave the text size
+  // (html[data-text-scale]) and the story's language ([data-story] lang) as they were, so a layout
+  // drift that puts a text-size radio, the story-language switch, Menu or a nav link under Keep
+  // reading fails instead of passing. After the hold, Start again is proven by keyboard too: Enter
+  // on it asks again, and Enter on it during the hold after that dialog's Escape is ignored.
+  const HOLD_CASES = [
+    {
+      cancel: 'Keep reading',
+      over: false,
+      name: 'T-b10 a double tap on Keep reading never moves the story',
+    },
+    {
+      cancel: 'Escape',
+      over: false,
+      name: 'T-b10 Escape on the restart dialog holds the run area too: a tap under Keep reading never moves the story',
+    },
+    {
+      cancel: 'Keep reading',
+      over: true,
+      name: 'T-b10 over Start again: a double tap on Keep reading never reopens the dialog',
+    },
+    {
+      cancel: 'Escape',
+      over: true,
+      name: 'T-b10 over Start again: Escape, then a tap under Keep reading never reopens the dialog',
+    },
+  ] as const
+  for (const { cancel, over, name } of HOLD_CASES) {
     test(name, async ({ page }) => {
       const path = ['start', 'flat_stones', 'big_rock']
+      if (over) {
+        await page.setViewportSize({ width: 320, height: 480 })
+        await seedPrefs(page, prefsText(150))
+      }
       // A tap that lands after the hold proves nothing (and may then move the story, as it should),
       // so a late tap is retried from a fresh seed and open, at most 3 attempts in all (as T-b4's
       // settle case). The double tap is one dblclick (two taps 120 ms apart, down to down: the
@@ -2558,17 +2759,23 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       const notes: string[] = []
       let seq = ''
       let epoch = ''
+      let scale: string | null = null
+      let lang: string | null = null
       let keep: Point = { x: 0, y: 0, scrolled: false }
-      let taps: HoldRecord = { closeAt: null, heldAt: null, releasedAt: null, downs: [] }
+      let taps: HoldRecord = NO_HOLD
       let late: number | null = null
+      let placed: StartAgainUnder | null = null
       for (let attempt = 1; ; attempt++) {
         await seedProgressOnce(page, { 'river-stones': { activeRun: { path, locale: 'en' } } })
         await openPlayer(page, playerPath('en', 'river-stones'))
         await settleFonts(page)
+        if (over) await expect(page.locator('html')).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
         await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
         await waitSettled(page)
         seq = (await page.locator(PART).getAttribute('data-seq')) ?? ''
         epoch = (await page.locator(RUN).getAttribute('data-epoch')) ?? ''
+        scale = await page.locator('html').getAttribute(TEXT_SCALE_ATTRIBUTE)
+        lang = await page.locator(STORY).getAttribute('lang')
         await page.locator(MENU).click()
         await expect(page.locator(PANEL)).toBeVisible()
         await page.locator(MENU_RESTART).click()
@@ -2576,6 +2783,7 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
           'open',
           true,
         )
+        if (over) placed = await putStartAgainUnderKeepReading(page)
         keep = await centreInViewport(page, KEEP_READING)
         await watchHold(page)
         if (cancel === 'Keep reading') {
@@ -2599,22 +2807,72 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
         if ((late !== null && late < LATE_TAP_MS) || attempt === 3) break
       }
       const tap = taps.downs[taps.downs.length - 1]
-      notes.push(
-        `Keep reading centre ${Math.round(keep.x)},${Math.round(keep.y)}`,
-        tap === undefined || tap.control === null
-          ? 'nothing interactive under the tap: the hold is asserted through the inert run area'
-          : `under the tap: ${tap.control === 'back' ? 'Back' : `choice ${tap.control}`}`,
-        `target ${tap?.target ?? 'none'}`,
-      )
+      const where = over ? 'over Start again' : 'as laid out'
+      notes.push(`Keep reading centre ${Math.round(keep.x)},${Math.round(keep.y)}`)
+      if (placed !== null) {
+        const r = placed.restart
+        notes.push(
+          `viewport ${placed.viewport.width}x${placed.viewport.height} at 150%, scrolled to ` +
+            `${Math.round(placed.scrollY)}; Start again ${Math.round(r.left)}-${Math.round(r.right)} x ` +
+            `${Math.round(r.top)}-${Math.round(r.bottom)}; holds the centre ${placed.under}`,
+        )
+      }
+      // Every tap: every interactive element under it, anywhere on the page (the 10d fix).
+      for (const [index, down] of taps.downs.entries()) {
+        notes.push(
+          `tap ${index + 1} under: ${down.under.length === 0 ? 'nothing interactive' : down.under.join(' + ')}; ` +
+            `target ${down.target}${down.onStartAgain ? ' (the menu Start again)' : ''}`,
+        )
+      }
+      if (tap !== undefined && tap.under.length === 0) {
+        notes.push(
+          'nothing interactive under the tap: the hold is asserted through the inert run area',
+        )
+      }
       test.info().annotations.push({ type: 'T-b10', description: notes.join('; ') })
-      console.log(`[player] T-b10 ${cancel} (${test.info().project.name}): ${notes.join('; ')}`)
+      console.log(
+        `[player] T-b10 ${cancel} ${where} (${test.info().project.name}): ${notes.join('; ')}`,
+      )
 
       expect(taps.downs.length, 'the taps').toBe(cancel === 'Keep reading' ? 2 : 1)
+      // What lies under each tap: only a run-area control (a choice or Back, inert below), an
+      // element of the dialog, or the menu's Start again (ignored during the hold).
+      for (const [index, down] of taps.downs.entries()) {
+        expect(
+          down.stray,
+          `tap ${index + 1}: under it only a run-area control (a choice, Back), the dialog or the ` +
+            `menu's Start again; under it: ${down.under.join(' + ')}`,
+        ).toEqual([])
+      }
+      if (over) {
+        expect(
+          placed?.under,
+          "precondition: the menu's Start again box holds Keep reading's centre",
+        ).toBe(true)
+        expect(
+          tap?.onStartAgain,
+          "precondition: the tap after the close lands on the menu's Start again",
+        ).toBe(true)
+      }
       expect(late, 'the close and tap times').not.toBeNull()
       expect(
         late !== null && late > 0 && late < LATE_TAP_MS,
         `timing: the tap came ${late} ms after the close (450 ms or more proves nothing)`,
       ).toBe(true)
+      // The taps left the text size and the story's language as they were.
+      const html = page.locator('html')
+      if (scale === null) {
+        await expect(html, 'the text size after the taps').not.toHaveAttribute(TEXT_SCALE_ATTRIBUTE)
+      } else {
+        await expect(html, 'the text size after the taps').toHaveAttribute(
+          TEXT_SCALE_ATTRIBUTE,
+          scale,
+        )
+      }
+      await expect(page.locator(STORY), "the story's language after the taps").toHaveAttribute(
+        'lang',
+        lang ?? '',
+      )
       // The story never moved.
       await expect(page.locator(PART), 'the node after the taps').toHaveAttribute(
         'data-node',
@@ -2622,6 +2880,11 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       )
       await expect(page.locator(PART), 'the seq after the taps').toHaveAttribute('data-seq', seq)
       await expect(page.locator(RUN), 'the run after the taps').toHaveAttribute('data-epoch', epoch)
+      // The dialog stays closed: a tap on the menu's Start again under Keep reading is ignored.
+      await expect(page.locator(DIALOG), 'the dialog after the taps').toHaveJSProperty(
+        'open',
+        false,
+      )
       // The hold, on every project, whatever lies under the tap: the choices and Back were inert.
       expect(
         [tap?.choicesInert, tap?.backInert],
@@ -2639,9 +2902,14 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       const heldFor = (done.releasedAt ?? 0) - (done.closeAt ?? 0)
       const onset = (done.heldAt ?? 0) - (done.closeAt ?? 0)
       console.log(
-        `[player] T-b10 ${cancel} (${test.info().project.name}): held ${onset.toFixed(0)} ms ` +
-          `after the close, released ${heldFor.toFixed(0)} ms after it`,
+        `[player] T-b10 ${cancel} ${where} (${test.info().project.name}): held ${onset.toFixed(0)} ms ` +
+          `after the close, released ${heldFor.toFixed(0)} ms after it; dialog reopened ` +
+          `${done.reopenedAt === null ? 'never' : `${(done.reopenedAt - (done.closeAt ?? 0)).toFixed(0)} ms after the close`}`,
       )
+      expect(
+        done.reopenedAt,
+        'the dialog stayed closed from the close to the release (no tap reopened it)',
+      ).toBeNull()
       expect(heldFor, 'the hold, from the close to the release').toBeGreaterThanOrEqual(
         SETTLE_MS - 20,
       )
@@ -2649,6 +2917,94 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       await expect(page.locator(CHOICES), 'the choices after the hold').not.toHaveAttribute('inert')
       await expect(page.locator(FOOTER), 'Back after the hold').not.toHaveAttribute('inert')
       expect(await storedPath(page, 'river-stones'), 'the stored run after the taps').toEqual(path)
+      // The menu's Start again works again after the hold (the same timer released it), by
+      // keyboard first: Enter on the focused Start again asks first at big_rock.
+      await expect(page.locator(DIALOG), 'the dialog after the hold').toHaveJSProperty(
+        'open',
+        false,
+      )
+      await page.locator(MENU_RESTART).focus()
+      await page.keyboard.press('Enter')
+      await expect(page.locator(DIALOG), 'Enter on Start again after the hold').toHaveJSProperty(
+        'open',
+        true,
+      )
+      // Escape cancels that dialog (a new hold, focus back on Start again); Enter on Start again
+      // as soon as the page has seen the close, during that hold, is ignored. A late Enter (the
+      // run area no longer held, or 450 ms or more after the close) proves nothing, so it is
+      // retried with the dialog open again, at most 3 attempts in all, as the taps are.
+      const keyNotes: string[] = []
+      let enter: HoldKey | undefined
+      let keyLate: number | null = null
+      for (let attempt = 1; ; attempt++) {
+        await watchHold(page)
+        await page.keyboard.press('Escape')
+        await page.waitForFunction(() => {
+          const hold = (window as unknown as { __e2eHold?: HoldRecord }).__e2eHold
+          return hold !== undefined && hold.closeAt !== null
+        })
+        await page.keyboard.press('Enter')
+        const keyed = await pageValue<HoldRecord>(page, '__e2eHold')
+        enter = keyed.keys.find((key) => key.key === 'Enter')
+        keyLate = enter === undefined || keyed.closeAt === null ? null : enter.t - keyed.closeAt
+        keyNotes.push(
+          `attempt ${attempt}: Enter ${keyLate === null ? 'never' : `${keyLate.toFixed(0)} ms`} ` +
+            `after the close, on Start again ${enter?.onStartAgain}, run area inert ` +
+            `${enter?.choicesInert}`,
+        )
+        const inTime = keyLate !== null && keyLate < LATE_TAP_MS && enter?.choicesInert === true
+        if (inTime || attempt === 3) break
+        // Late: once the hold is over, the dialog open again (a late Enter may have opened it).
+        await expect
+          .poll(async () => (await pageValue<HoldRecord>(page, '__e2eHold')).releasedAt, {
+            timeout: 5_000,
+          })
+          .not.toBeNull()
+        if (
+          !(await page.locator(DIALOG).evaluate((dialog) => (dialog as HTMLDialogElement).open))
+        ) {
+          await page.locator(MENU_RESTART).focus()
+          await page.keyboard.press('Enter')
+        }
+        await expect(page.locator(DIALOG), 'the dialog open for the next attempt').toHaveJSProperty(
+          'open',
+          true,
+        )
+      }
+      console.log(
+        `[player] T-b10 ${cancel} ${where} (${test.info().project.name}): Enter on Start again ` +
+          `during the hold of that Escape: ${keyNotes.join('; ')}`,
+      )
+      expect(
+        enter?.onStartAgain,
+        'precondition: the Enter during the hold went to the focused Start again',
+      ).toBe(true)
+      expect(
+        keyLate !== null && keyLate > 0 && keyLate < LATE_TAP_MS && enter?.choicesInert === true,
+        `timing: the Enter came ${keyLate} ms after the close, run area inert ` +
+          `${enter?.choicesInert} (450 ms or more, or not held, proves nothing)`,
+      ).toBe(true)
+      await expect
+        .poll(async () => (await pageValue<HoldRecord>(page, '__e2eHold')).releasedAt, {
+          message: 'the run area interactive again after the hold of that Escape',
+          timeout: 5_000,
+        })
+        .not.toBeNull()
+      expect(
+        (await pageValue<HoldRecord>(page, '__e2eHold')).reopenedAt,
+        'Enter on Start again during the hold never reopened the dialog',
+      ).toBeNull()
+      // And a tap: Start again asks again; Escape closes the dialog with focus back on Start
+      // again, as before.
+      await page.locator(MENU_RESTART).click()
+      await expect(page.locator(DIALOG), 'Start again after the hold').toHaveJSProperty(
+        'open',
+        true,
+      )
+      await page.keyboard.press('Escape')
+      await expect(page.locator(DIALOG), 'the dialog after Escape').toHaveJSProperty('open', false)
+      await expect(page.locator(MENU_RESTART), 'focus after Escape').toBeFocused()
+      await waitSettled(page)
       // And the island takes a tap again (its settle ref was released with the state).
       await page.locator(choice('c1')).click()
       await expect(page.locator(PART), 'a choice after the hold').toHaveAttribute(
@@ -2658,6 +3014,572 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       await expect(page.locator(PART)).toHaveAttribute('data-seq', String(Number(seq) + 1))
     })
   }
+})
+
+// ---------------------------------------------------------------------------------------------
+// Step 10d: the story-language switch (design D11-P4, §4.1, §4.3, §6 F3, §9.3 T-d1 to T-d5, R20)
+
+const SWITCH = 'header nav button[data-story-language]'
+const STORY = '[data-part] [data-story]'
+/** F3: the leading token each text element of the story sets on itself (player.module.css). */
+const STORY_LEADING = [
+  ['[data-story]', '--lh-body'],
+  ['h1', '--lh-heading'],
+  ['[data-passage] p', '--lh-story'],
+  ['[data-question]', '--lh-story'],
+  ['button[data-choice]', '--lh-label'],
+] as const
+const LEADING_TOKENS = ['--lh-body', '--lh-heading', '--lh-story', '--lh-label'] as const
+/** T-d5 (R20): the raw layout shift allowed in the second after a switch. */
+const SWITCH_SHIFT_MAX = 0.05
+/** T-d5 (R20): the Devanagari 700 face, the question's bold, which /en has not loaded before. */
+const DEVANAGARI_700 = /noto[-_]sans[-_]devanagari[-_]devanagari[-_]700/
+/** T-d5: the face arrives in the first half of the window, so its swap is inside it. */
+const SWITCH_FONT_BY_MS = 500
+
+/** The language the switch offers on a page whose story is in `code`: the other enabled one. */
+function otherLocale(code: LocaleCode): LocaleCode {
+  const other = ENABLED_LOCALE_CODES.find((candidate) => candidate !== code)
+  if (other === undefined) throw new Error(`no enabled locale other than ${code}`)
+  return other
+}
+
+/**
+ * The switch's text on the page of `pageCode` while it offers `target`: the visually hidden "Story
+ * language:" in the page's language, then the offered language's endonym.
+ */
+function switchText(pageCode: LocaleCode, target: LocaleCode): string {
+  return `${message(uiLang(pageCode), 'player.storyLanguage')} ${getLocaleDef(target).endonym}`
+}
+
+/**
+ * The switch as assistive technology reads it (D11-P4; as the site switch, shell.spec.ts): one
+ * button named "Story language: <endonym>"; the endonym carries the offered language's lang and
+ * dir, and the prefix is read out but takes no space on screen (review A11Y-10d-1).
+ */
+async function expectSwitchNamed(
+  page: Page,
+  pageCode: LocaleCode,
+  target: LocaleCode,
+): Promise<void> {
+  const { endonym, dir } = getLocaleDef(target)
+  await expect(
+    page.getByRole('button', { name: switchText(pageCode, target), exact: true }),
+    'the switch by its accessible name',
+  ).toHaveCount(1)
+  const name = page.locator(`${SWITCH} > span[lang="${target}"]`)
+  await expect(name, 'the endonym').toHaveText(endonym)
+  await expect(name, "the endonym's dir").toHaveAttribute('dir', dir)
+  const prefix = page.locator(`${SWITCH} > span:not([lang])`)
+  await expect(prefix, 'the prefix').toHaveText(message(uiLang(pageCode), 'player.storyLanguage'))
+  const box = await prefix.boundingBox()
+  expect(box?.width ?? 0, 'prefix width').toBeLessThanOrEqual(1)
+  expect(box?.height ?? 0, 'prefix height').toBeLessThanOrEqual(1)
+}
+
+/** Whether an element is still in the page (false too when its document has gone). */
+async function stillConnected(handle: ElementHandle): Promise<boolean> {
+  return handle.evaluate((element) => element.isConnected).catch(() => false)
+}
+
+/**
+ * After a step: waits in the page until every animation of the player's elements (the reveal) has
+ * ended, keeps those Animation objects in the page (__e2eReveal) and returns their names.
+ */
+async function recordEndedReveal(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const player = document.querySelector('[data-player]')
+    const animations = document.getAnimations().filter((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target
+      return player !== null && target instanceof Element && player.contains(target)
+    })
+    await Promise.all(animations.map((animation) => animation.finished))
+    ;(window as unknown as Record<string, unknown>)['__e2eReveal'] = animations
+    return animations.map((animation) =>
+      'animationName' in animation ? String(animation.animationName) : animation.id,
+    )
+  })
+}
+
+/** Since recordEndedReveal: the player's animations that are new, and those running. */
+async function revealSince(page: Page): Promise<{ fresh: string[]; running: string[] }> {
+  return page.evaluate(() => {
+    const before =
+      ((window as unknown as Record<string, unknown>)['__e2eReveal'] as Animation[] | undefined) ??
+      []
+    const player = document.querySelector('[data-player]')
+    const now = document.getAnimations().filter((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target
+      return player !== null && target instanceof Element && player.contains(target)
+    })
+    const name = (animation: Animation): string =>
+      'animationName' in animation ? String(animation.animationName) : animation.id
+    return {
+      fresh: now.filter((animation) => !before.includes(animation)).map(name),
+      running: now.filter((animation) => animation.playState === 'running').map(name),
+    }
+  })
+}
+
+/**
+ * F3: one lang island's size and leading, and `token` as each of `codes` resolves it (read from a
+ * hidden probe element with that lang, as storyLeading does).
+ */
+async function islandLeading(
+  page: Page,
+  selector: string,
+  token: string,
+  codes: readonly LocaleCode[],
+) {
+  return page.evaluate(
+    ([css, name, langs]) => {
+      const tokens: Record<string, number> = {}
+      for (const lang of langs) {
+        const probe = document.createElement('div')
+        probe.lang = lang
+        probe.hidden = true
+        document.body.append(probe)
+        tokens[lang] = Number(getComputedStyle(probe).getPropertyValue(name).trim())
+        probe.remove()
+      }
+      const element = document.querySelector(css)
+      if (element === null) throw new Error(`no ${css}`)
+      const style = getComputedStyle(element)
+      const fontSize = parseFloat(style.fontSize)
+      const lineHeight = parseFloat(style.lineHeight)
+      return {
+        lang: element.closest('[lang]')?.getAttribute('lang') ?? null,
+        tokens,
+        fontSize,
+        lineHeight,
+        ratio: lineHeight / fontSize,
+      }
+    },
+    [selector, token, codes] as const,
+  )
+}
+
+/** The reveal on screen: parts with data-animate, and the animations of the player's elements. */
+async function revealState(page: Page): Promise<{ animate: number; animations: string[] }> {
+  return page.evaluate(() => {
+    const player = document.querySelector('[data-player]')
+    return {
+      animate: document.querySelectorAll('[data-animate]').length,
+      animations: document
+        .getAnimations()
+        .filter((animation) => {
+          const target = (animation.effect as KeyframeEffect | null)?.target
+          return player !== null && target instanceof Element && player.contains(target)
+        })
+        .map((animation) =>
+          'animationName' in animation ? String(animation.animationName) : animation.id,
+        ),
+    }
+  })
+}
+
+/**
+ * Before a switch: records in the page (__e2eSwitchAt, performance.now()) when the story first
+ * carries `lang`, from a MutationObserver on [data-story]: the switch's commit.
+ */
+async function markStoryLanguage(page: Page, lang: LocaleCode): Promise<void> {
+  await page.evaluate(
+    ([selector, wanted]) => {
+      const w = window as unknown as Record<string, unknown>
+      const story = document.querySelector(selector)
+      if (story === null) throw new Error(`no ${selector}`)
+      w['__e2eSwitchAt'] = null
+      const observer = new MutationObserver(() => {
+        if (story.getAttribute('lang') !== wanted) return
+        w['__e2eSwitchAt'] = performance.now()
+        observer.disconnect()
+      })
+      observer.observe(story, { attributes: true, attributeFilter: ['lang'] })
+    },
+    [STORY, lang] as const,
+  )
+}
+
+/**
+ * F3 (T-d4): each text element of the story on screen with its language, size, leading and the
+ * token it must take, and the leading tokens as each enabled language resolves them (read from a
+ * hidden probe element with that lang).
+ */
+async function storyLeading(page: Page, codes: readonly LocaleCode[]) {
+  return page.evaluate(
+    ([rules, names, langs]) => {
+      const tokens: Record<string, Record<string, number>> = {}
+      for (const lang of langs) {
+        const probe = document.createElement('div')
+        probe.lang = lang
+        probe.hidden = true
+        document.body.append(probe)
+        const style = getComputedStyle(probe)
+        tokens[lang] = Object.fromEntries(
+          names.map((name) => [name, Number(style.getPropertyValue(name).trim())]),
+        )
+        probe.remove()
+      }
+      const story = document.querySelector('[data-part] [data-story]')
+      const rows = rules.flatMap(([selector, token]) => {
+        const elements =
+          story === null
+            ? []
+            : selector === '[data-story]'
+              ? [story]
+              : [...story.querySelectorAll(selector)]
+        return elements.map((element) => {
+          const style = getComputedStyle(element)
+          const fontSize = parseFloat(style.fontSize)
+          const lineHeight = parseFloat(style.lineHeight)
+          return {
+            element: `${element.localName} (${selector})`,
+            lang: element.closest('[lang]')?.getAttribute('lang') ?? null,
+            token,
+            fontSize,
+            lineHeight,
+            ratio: lineHeight / fontSize,
+          }
+        })
+      })
+      return { pageLang: document.documentElement.lang, tokens, rows }
+    },
+    [STORY_LEADING, LEADING_TOKENS, codes] as const,
+  )
+}
+
+test.describe('the story player, Step 10d', { tag: '@review' }, () => {
+  test('T-d1 a switch at river-stones flat_stones on /en: the same part in Hindi, the page English, focus kept, no reveal, silent, prefs untouched', async ({
+    page,
+  }) => {
+    // Resumed at flat_stones, so no step's reveal is on screen before the switch (T-a19).
+    const graph = fixtureGraph('river-stones')
+    const prefs = prefsText(100)
+    await seedPrefs(page, prefs)
+    const progressWrites = await progressSpy(page)
+    await seedProgressOnce(page, {
+      'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: 'en' } },
+    })
+    await recordAnnouncements(page)
+    const url = playerPath('en', 'river-stones')
+    await openPlayer(page, url)
+    await expectPart(page, graph, 'en', 'flat_stones')
+    await expectSilentOpen(page)
+    await expect(page.locator(SWITCH)).toHaveText(switchText('en', 'hi'))
+    await expectSwitchNamed(page, 'en', 'hi')
+    const before = {
+      url: page.url(),
+      title: await page.title(),
+      seq: (await page.locator(PART).getAttribute('data-seq')) ?? '',
+      epoch: (await page.locator(RUN).getAttribute('data-epoch')) ?? '',
+    }
+    const part = await page.locator(PART).elementHandle()
+    const run = await page.locator(RUN).elementHandle()
+    const button = await page.locator(SWITCH).elementHandle()
+    if (part === null || run === null || button === null) throw new Error('no part, run or switch')
+
+    await page.locator(SWITCH).click()
+
+    // The story, in Hindi: SET_LOCALE changes the story's language (D11-P4).
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    await expect(page.locator(STORY)).toHaveAttribute('dir', 'ltr')
+    await expectPart(page, graph, 'hi', 'flat_stones')
+
+    // The same part: same node, seq and run, never remounted (§4.3 "no remount").
+    expect(await stillConnected(part), 'the part element stays mounted').toBe(true)
+    expect(await stillConnected(run), 'the run area stays mounted').toBe(true)
+    await expect(page.locator(PART)).toHaveAttribute('data-seq', before.seq)
+    await expect(page.locator(RUN)).toHaveAttribute('data-epoch', before.epoch)
+
+    // The page stays on the route locale: URL, <html lang dir>, <title> and the chrome, Back too.
+    expect(page.url(), 'the URL').toBe(before.url)
+    expect(
+      await page.evaluate(() => [document.documentElement.lang, document.documentElement.dir]),
+      '<html lang dir>',
+    ).toEqual(['en', 'ltr'])
+    expect(await page.title(), '<title>').toBe(before.title)
+    await expect(page.locator('a[data-exit]')).toHaveText(message('en', 'player.allStories'))
+    await expect(page.locator('header nav a')).toHaveText(message('en', 'header.grownUps'))
+    await expect(page.locator(back())).toHaveText(message('en', 'player.back'))
+    await expect(page.locator(SWITCH), 'the switch now offers English').toHaveText(
+      switchText('en', 'en'),
+    )
+    await expect(page.locator(`${SWITCH} span[lang]`)).toHaveAttribute('lang', 'en')
+    await expectSwitchNamed(page, 'en', 'en')
+
+    // The focus stays on the switch: the same element (D11-P4 "keyed by index").
+    expect(
+      await button.evaluate((element) => element === document.activeElement),
+      'the focus is still on the switch it was clicked on',
+    ).toBe(true)
+
+    // No reveal: no data-animate and no animation in the player (§4.3).
+    await frames(page)
+    expect(await revealState(page), 'the reveal after the switch').toEqual({
+      animate: 0,
+      animations: [],
+    })
+
+    // Silent: the live region holds nothing and has held nothing (announce() waits a frame).
+    await frames(page)
+    await page.waitForTimeout(100)
+    expect(await liveRegions(page), 'the live region after the switch').toEqual([
+      { role: 'status', live: 'polite', atomic: 'true', text: '' },
+    ])
+    expect(await announcements(page), 'announced after the switch').toEqual([])
+
+    // Storage: the run is saved in Hindi (effects [persist]); prefs are never written.
+    await expect
+      .poll(() => storedStory(page, 'river-stones'), { message: 'the run saved in Hindi' })
+      .toMatchObject({ activeRun: { path: ['start', 'flat_stones'], locale: 'hi' } })
+    expect(await progressWrites(), 'progress writes: the one save').toEqual([
+      `setItem ${PROGRESS_KEY}`,
+    ])
+    expect(await storageAfter(page), 'every storage write, and the prefs record').toEqual({
+      writes: ['setItem'],
+      stored: prefs,
+    })
+  })
+
+  test('T-d1 after a step to river-stones flat_stones on /en: the switch keeps every element of the story and replays no reveal', async ({
+    page,
+  }) => {
+    // A step, not a resume: the part keeps data-animate (only a pointerdown or key press in the run
+    // area ends the reveal, and the switch is in the header), so a remount of anything in it would
+    // run the reveal again (§4.3 "no remount, no data-animate"; review R10d-STRESS-1, FID-10d-1).
+    const graph = fixtureGraph('river-stones')
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await walk(page, 'river-stones', ['c1'])
+    const part = page.locator(PART)
+    await expect(part).toHaveAttribute('data-animate', '')
+    const reveal = await recordEndedReveal(page)
+    // The reveal ran (the passage, then the question and the choices), so a replay would show.
+    expect(reveal.length, `the reveal after the step: ${JSON.stringify(reveal)}`).toBeGreaterThan(2)
+    const elements: [string, ElementHandle | null][] = [
+      ['story', await part.locator('[data-story]').elementHandle()],
+      ['title', await part.locator('h1').elementHandle()],
+      ['passage', await part.locator('[data-passage]').elementHandle()],
+      ['first paragraph', await part.locator('[data-passage] p').first().elementHandle()],
+      ['question', await part.locator('[data-question]').elementHandle()],
+      ['choice list', await part.locator('ul[data-choices]').elementHandle()],
+    ]
+    const buttons = await part.locator('button[data-choice]').elementHandles()
+    expect(buttons.length, 'the choices').toBeGreaterThan(0)
+
+    await page.locator(SWITCH).click()
+
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    await expectPart(page, graph, 'hi', 'flat_stones')
+    // Every element of the story stays mounted; only its text and lang change.
+    for (const [name, handle] of elements) {
+      if (handle === null) throw new Error(`no ${name}`)
+      expect(await stillConnected(handle), `the ${name} stays mounted`).toBe(true)
+    }
+    for (const [index, handle] of buttons.entries()) {
+      expect(await stillConnected(handle), `choice ${index + 1} stays mounted`).toBe(true)
+    }
+    // No reveal: the part's reveal state is as the step left it, and no animation in the player
+    // is new or running after the switch's commit (two frames: a restyle has run).
+    await expect(part).toHaveAttribute('data-animate', '')
+    await expect(part).not.toHaveAttribute('data-reveal')
+    await frames(page)
+    expect(await revealSince(page), 'the reveal after the switch').toEqual({
+      fresh: [],
+      running: [],
+    })
+  })
+
+  test('T-d2 at an ending the switch keeps the card: the same card, the lesson in Hindi, the rest English', async ({
+    page,
+  }) => {
+    const graph = fixtureGraph('lantern-walk')
+    const url = playerPath('en', 'lantern-walk')
+    await openPlayer(page, url)
+    await walk(page, 'lantern-walk', graph.firstPath.choices)
+    const ending = graph.firstPath.nodes[graph.firstPath.nodes.length - 1] ?? ''
+    const card = '[data-part] section[data-ending]'
+    await expect(page.locator(card)).toBeVisible()
+    const count = formatted('en', 'player.endingCount', {
+      found: 1,
+      total: endingsOf(graph).length,
+    })
+    await expect(page.locator(`${card} [data-ending-count]`)).toHaveText(count)
+    const part = await page.locator(PART).elementHandle()
+    const section = await page.locator(card).elementHandle()
+    if (part === null || section === null) throw new Error('no part or card')
+
+    await page.locator(SWITCH).click()
+
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    // The card stays: the switch is no navigation (with one, an ending's run is not kept).
+    expect(await stillConnected(section), 'the card stays mounted').toBe(true)
+    expect(await stillConnected(part), 'the part stays mounted').toBe(true)
+    expect(page.url(), 'the URL').toBe(new URL(url, page.url()).href)
+    await expectPart(page, graph, 'hi', ending)
+    const lesson = page.locator(`${card} [data-lesson]`)
+    await expect(lesson).toHaveAttribute('lang', 'hi')
+    await expect(lesson).toHaveText(graph.text['hi']?.nodes[ending]?.lesson ?? 'no hi lesson')
+    // F3 (§6): the lesson, a Hindi island on the English page, takes the :lang(hi) leading
+    // (review A11Y-10d-2).
+    const leading = await islandLeading(page, `${card} [data-lesson]`, '--lh-story', ['en', 'hi'])
+    const hiStory = leading.tokens['hi'] ?? Number.NaN
+    expect(leading.lang, 'the lesson: lang').toBe('hi')
+    expect(hiStory, 'the hi --lh-story differs from the en one').not.toBe(leading.tokens['en'])
+    expect(
+      Math.abs(leading.ratio - hiStory) < 0.01,
+      `the lesson: ${leading.fontSize}px / ${leading.lineHeight}px = ${leading.ratio.toFixed(3)}, not the :lang(hi) --lh-story ${hiStory}`,
+    ).toBe(true)
+    // The card's heading, count and actions are in the page's language (§4.1 lang islands).
+    await expect(page.locator(`${card} h2`)).toHaveText(message('en', 'player.lessonHeading'))
+    await expect(page.locator(`${card} [data-ending-count]`)).toHaveText(count)
+    await expect(page.locator(`${card} button[data-try-another]`)).toHaveText(
+      message('en', 'player.tryAnother'),
+    )
+    await expect(page.locator(`${card} a[data-all-stories]`)).toHaveAttribute('href', '/en')
+    expect(await page.evaluate(() => document.documentElement.lang), '<html lang>').toBe('en')
+  })
+
+  test('T-d2 with storage blocked the switch keeps the node: flat_stones, the same part, in Hindi', async ({
+    page,
+  }) => {
+    const graph = fixtureGraph('river-stones')
+    await blockStorage(page)
+    const url = playerPath('en', 'river-stones')
+    await openPlayer(page, url)
+    await expect(page.locator('section[aria-labelledby="storage-banner-title"]')).toBeVisible()
+    await walk(page, 'river-stones', ['c1'])
+    const part = await page.locator(PART).elementHandle()
+    if (part === null) throw new Error('no part')
+
+    await page.locator(SWITCH).click()
+
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    // The node is kept although nothing can be stored: the switch is no navigation.
+    expect(await stillConnected(part), 'the part stays mounted').toBe(true)
+    expect(page.url(), 'the URL').toBe(new URL(url, page.url()).href)
+    await expectPart(page, graph, 'hi', 'flat_stones')
+    await expect(page.locator(PART)).toHaveAttribute('data-seq', '1')
+  })
+
+  test('T-d3 a switch mid-story, then a reload: the same node, in Hindi, on the English page', async ({
+    page,
+  }) => {
+    const graph = fixtureGraph('river-stones')
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    const quiet = trackRequests(page)
+    await walk(page, 'river-stones', ['c1'])
+    await expect
+      .poll(() => storedStory(page, 'river-stones'), { message: 'the run saved in English' })
+      .toMatchObject({ activeRun: { path: ['start', 'flat_stones'], locale: 'en' } })
+
+    await page.locator(SWITCH).click()
+
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    await expect
+      .poll(() => storedStory(page, 'river-stones'), { message: 'the run saved in Hindi' })
+      .toMatchObject({ activeRun: { path: ['start', 'flat_stones'], locale: 'hi' } })
+    await quiet()
+    await page.reload()
+    await waitOpen(page)
+    // Stored-first (D11-P3): the run reopens in the language it was saved in.
+    await expectPart(page, graph, 'hi', 'flat_stones')
+    expect(await page.evaluate(() => document.documentElement.lang), '<html lang>').toBe('en')
+    await expect(page.locator(SWITCH), 'the switch offers English').toHaveText(
+      switchText('en', 'en'),
+    )
+  })
+
+  for (const code of ENABLED_LOCALE_CODES) {
+    const other = otherLocale(code)
+    test(`T-d4 /${code}: after a switch, the ${other} story's leading is the :lang(${other}) token (F3)`, async ({
+      page,
+    }) => {
+      await openPlayer(page, playerPath(code, 'river-stones'))
+      await page.locator(SWITCH).click()
+      await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', other)
+      const measured = await storyLeading(page, [code, other])
+      const description = JSON.stringify(
+        measured.rows.map((row) => [row.element, row.lang, row.fontSize, row.lineHeight]),
+      )
+      test.info().annotations.push({ type: 'T-d4', description })
+      console.log(`[player] T-d4 /${code} (${test.info().project.name}): ${description}`)
+      expect(measured.pageLang, '<html lang>').toBe(code)
+      // The two languages' tokens differ, so a story on the page's leading cannot pass.
+      for (const name of LEADING_TOKENS) {
+        expect(measured.tokens[other]?.[name], `${other} ${name}`).not.toBe(
+          measured.tokens[code]?.[name],
+        )
+      }
+      expect(
+        measured.rows.map((row) => row.element.split(' ')[0]),
+        'the measured elements',
+      ).toEqual(expect.arrayContaining(['div', 'h1', 'p', 'button']))
+      for (const row of measured.rows) {
+        const token = measured.tokens[other]?.[row.token] ?? Number.NaN
+        expect(row.lang, `${row.element}: lang`).toBe(other)
+        expect(
+          Math.abs(row.ratio - token) < 0.01,
+          `${row.element}: ${row.fontSize}px / ${row.lineHeight}px = ${row.ratio.toFixed(3)}, not the :lang(${other}) ${row.token} ${token}`,
+        ).toBe(true)
+      }
+    })
+  }
+
+  test('T-d5 a switch on /en shifts the layout by 0.05 or less (raw) in the second after it (Chromium)', async ({
+    page,
+    browserName,
+  }) => {
+    test.skip(browserName !== 'chromium', 'the Layout Instability API is Chromium only')
+    await recordLayoutShifts(page)
+    await openPlayer(page, playerPath('en', 'river-stones'))
+    await settleFonts(page)
+    await frames(page)
+    await markStoryLanguage(page, 'hi')
+
+    await page.locator(SWITCH).click()
+
+    await expect(page.locator(STORY), 'the story after the switch').toHaveAttribute('lang', 'hi')
+    const switchAt = await pageValue<number | null>(page, '__e2eSwitchAt')
+    if (switchAt === null) throw new Error('the switch commit was not seen')
+    // The window ends 1 s after the commit, by the page's clock; two frames deliver its entries.
+    await page.waitForFunction((at) => performance.now() >= at + 1000, switchAt)
+    await frames(page)
+    // The font files fetched after the switch, each with when it arrived (ms after the commit).
+    const fonts = await page.evaluate(
+      ([from, patterns]) =>
+        performance
+          .getEntriesByType('resource')
+          .filter(
+            (entry) =>
+              entry.startTime >= from &&
+              patterns.some((pattern) => new RegExp(pattern).test(entry.name)),
+          )
+          .map((entry) => ({
+            file: new URL(entry.name).pathname.split('/').pop() ?? '',
+            in: Math.round((entry as PerformanceResourceTiming).responseEnd - from),
+          })),
+      [switchAt, [LORA_FILE.source, NOTO_FILE.source]] as const,
+    )
+    const { cls, raw, shifts, inputShifts } = await layoutShift(page, {
+      from: switchAt,
+      to: switchAt + 1000,
+    })
+    const description =
+      `raw ${raw.toFixed(6)}, CLS ${cls.toFixed(6)} (${shifts} shifts, ${inputShifts} flagged as ` +
+      `recent input) in the 1 s after the switch; font files fetched after it: ${JSON.stringify(fonts)}`
+    console.log(`[player] T-d5 (${test.info().project.name}): ${description}`)
+    test.info().annotations.push({ type: 'T-d5', description })
+    // R20 is exercised: the Devanagari 700 face is fetched after the switch and arrives in the
+    // first half of the window, so its swap is measured (review FID-10d-2).
+    const late = fonts.filter((font) => DEVANAGARI_700.test(font.file))
+    expect(
+      late.length > 0 && late.every((font) => font.in <= SWITCH_FONT_BY_MS),
+      `R20 not exercised: the Devanagari 700 face after the switch ${JSON.stringify(late)}`,
+    ).toBe(true)
+    expect(raw, 'raw layout shift in the 1 s after the switch').toBeLessThanOrEqual(
+      SWITCH_SHIFT_MAX,
+    )
+  })
 })
 
 // The collector's own negative tests (design §9.3 C4, F5): each must fail in the auto fixture's

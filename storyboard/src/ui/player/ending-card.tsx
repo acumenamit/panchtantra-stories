@@ -13,6 +13,14 @@
 //   so a tap that lands here within SETTLE_MS of the ending does nothing. An accepted Try another
 //   path makes them inert at once on their DOM node (C28).
 // - The heading, alternate label, count and actions carry the page's language (the route locale).
+// - Step 10d (the 10c hand-off; D11-P4): a story-language switch keeps the part, and so this card,
+//   mounted, and only the lesson changes language. Share is keyed by the content locale, so a
+//   switch resets it: "Link copied." or the manual field of the old language's URL goes, and a
+//   copy or share sheet still pending from before the switch ends unseen, as when the part
+//   changes (its control left the page; review R10c-STRESS-3). The pending guard is per control,
+//   so a Share tap after a switch starts a fresh chain even while the old sheet is still open: the
+//   second share() then rejects (InvalidStateError) and the chain falls to the clipboard, which
+//   copies the new language's URL and says so (review R10d-STRESS-3; accepted).
 import Link from 'next/link'
 import { useRef } from 'react'
 import type { StepResult } from '../../core/engine'
@@ -93,6 +101,7 @@ export function EndingCard({
           <span className={styles.actionLabel}>{strings.tryAnother}</span>
         </button>
         <ShareControl
+          key={view.locale}
           title={view.title}
           storyId={storyId}
           contentLocale={view.locale}

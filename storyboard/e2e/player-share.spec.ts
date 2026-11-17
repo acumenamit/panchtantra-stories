@@ -26,6 +26,9 @@
 //   page-helpers.ts. T-c7 brings the page to the front after the other tab closes and reads the
 //   live region only after two frames, so an announcement the storage event caused cannot hide
 //   behind announce()'s one-frame delay (R2-SE-1, R2-CI-TC7-1).
+// - Step 10d (the 10c hand-off; design D11-P4): a story-language switch at an ending keeps the
+//   card and resets Share: "Link copied." or the field holding the old language's URL goes, the next
+//   tap shares the new language's URL, and a copy pending across the switch ends unseen.
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
 import { expect, test as base } from './fixtures'
@@ -1052,3 +1055,104 @@ test.describe('the story player, Step 10c: Share', { tag: '@review' }, () => {
     })
   }
 })
+
+test.describe(
+  'the story player, Step 10d: a switch at an ending resets Share',
+  { tag: '@review' },
+  () => {
+    // The 10c hand-off: SET_LOCALE keeps the part, and so the card, mounted, while Share's URL
+    // follows the content locale. Share is keyed by the content locale, so a switch takes away what
+    // it left ("Link copied." or the field with the old language's URL), the next tap shares the new
+    // language's URL, and a copy still pending from before the switch ends unseen.
+    const SWITCH = 'button[data-story-language]'
+
+    for (const left of ['copied', 'manual'] as const) {
+      test(`10d hand-off: ${left === 'copied' ? '"Link copied."' : 'the manual field'} goes on a switch; the card stays and Share then gives the new language's URL`, async ({
+        page,
+      }) => {
+        const setup: ShareSetup = {
+          share: 'undefined',
+          clipboard: left === 'copied' ? 'resolve' : 'reject',
+        }
+        await stubShare(page, setup)
+        await recordAnnouncements(page)
+        await reachEnding(page, 'en')
+        await expectShareSetup(page, setup)
+        const [enUrl, hiUrl] = [shareUrl(page, 'en'), shareUrl(page, 'hi')]
+        await page.locator(SHARE).click()
+        if (left === 'copied') {
+          await expect(page.locator(SHARE_STATUS)).toHaveText(message('en', 'player.linkCopied'))
+        } else {
+          await expect(page.locator(SHARE_URL)).toHaveValue(enUrl)
+        }
+        const card = await page.locator(CARD).elementHandle()
+        if (card === null) throw new Error('no card')
+
+        await page.locator(SWITCH).click()
+        await expect(page.locator('[data-part] [data-story]')).toHaveAttribute('lang', 'hi')
+        await expect(page.locator(`${CARD} [data-lesson]`)).toHaveAttribute('lang', 'hi')
+        await expect(
+          page.locator('[data-share-status], input[data-share-url]'),
+          'no share feedback left from the English URL',
+        ).toHaveCount(0)
+        expect(await card.evaluate((element) => element.isConnected), 'the card stays').toBe(true)
+        await expect(page.locator(PART)).toHaveAttribute('data-node', 'ending_light')
+
+        await page.locator(SHARE).click()
+        if (left === 'copied') {
+          await expect(page.locator(SHARE_STATUS)).toHaveText(message('en', 'player.linkCopied'))
+        } else {
+          await expect(page.locator(SHARE_URL)).toHaveValue(hiUrl)
+          await expect(page.locator(SHARE_URL)).toBeFocused()
+        }
+        expect((await shareCalls(page)).writeText, 'the copies: English, then Hindi').toEqual([
+          enUrl,
+          hiUrl,
+        ])
+      })
+    }
+
+    // A copy, or a share sheet (review TL-1), still pending across the switch: its old control left
+    // the page, so it ends unseen, and a share sheet that fails then never reaches the clipboard.
+    for (const late of ['copy', 'share'] as const) {
+      test(`10d hand-off: ${late === 'copy' ? 'a copy' : 'a share sheet'} still pending when the story language switches shows and announces nothing when it ends${late === 'share' ? ', and the clipboard is never tried' : ''}`, async ({
+        page,
+      }) => {
+        const setup: ShareSetup =
+          late === 'copy'
+            ? { share: 'undefined', clipboard: 'deferred' }
+            : { share: 'deferred', clipboard: 'resolve' }
+        await stubShare(page, setup)
+        await recordAnnouncements(page)
+        await reachEnding(page, 'en')
+        await expectShareSetup(page, setup)
+        const url = shareUrl(page, 'en')
+        await page.locator(SHARE).click()
+        await expect
+          .poll(async () => {
+            const calls = await shareCalls(page)
+            return late === 'copy' ? calls.writeText : calls.share.map((call) => call.url)
+          }, 'the copy or share sheet, pending')
+          .toEqual([url])
+        await page.locator(SWITCH).click()
+        await expect(page.locator('[data-part] [data-story]')).toHaveAttribute('lang', 'hi')
+
+        // The copy resolves, or the share sheet fails, after the switch.
+        await settleLater(page)
+        await frames(page)
+        await page.waitForTimeout(200)
+        await expect(
+          page.locator('[data-share-status], input[data-share-url]'),
+          `no share feedback after the late ${late}`,
+        ).toHaveCount(0)
+        expect(await announcements(page), 'nothing announced after the ending count').toEqual([
+          formatted('en', 'player.page', { n: 2 }),
+          formatted('en', 'player.endingCount', { found: 1, total: 2 }),
+        ])
+        expect((await shareCalls(page)).writeText, 'the clipboard').toEqual(
+          late === 'copy' ? [url] : [],
+        )
+      })
+    }
+  },
+)

@@ -5,6 +5,7 @@
 // Step 10b adds Back, the menu (text size, Start again), the restart dialog and the progress bar.
 // Step 10c adds the ending card: the lesson heading, the alternate label, the ending count (one
 // finished string per count), Try another path, Share and its two statuses.
+// Step 10d adds the story-language switch's visually hidden prefix.
 import type { TextScale } from '../../core/progress'
 
 /** What the error fallback shows (D11-P17); the page passes them as PlayerBoundary props. */
@@ -55,4 +56,9 @@ export interface PlayerStrings extends PlayerFallbackStrings {
   readonly share: string
   readonly linkCopied: string
   readonly copyLink: string
+  /**
+   * Step 10d (D11-P4): the story-language switch's visually hidden prefix, "Story language:"
+   * (the endonym follows it in its own lang).
+   */
+  readonly storyLanguage: string
 }
