@@ -6,7 +6,9 @@
 //   unless GITHUB_ACTIONS=true or the platform is win32, the only places outside a Preview where a
 //   staging pointer loads (design §3.3). Messages name variables only, never a value.
 // - Starts the loopback Storage stub (stub-storage.ts) and publishes the 3 committed fixtures as a
-//   staging catalogue (publishFixturesAsStaging: no media, so no HEAD request). Then preview:staging's
+//   staging catalogue, plus the test-only picture story derived from river-stones and its 12 media
+//   variants (publishFixturesAsStaging with pictureStory; design p1-step10-design.md §2.5, §4.5), so
+//   the loader's media HEAD gate makes 12 HEAD requests to the stub. Then preview:staging's
 //   shared steps (runStagingSteps): the loader against the stub's 127.0.0.1 base (allowed for a
 //   loopback server), after which the stub is closed at once; next build; check-build; the mode
 //   check. Build env: review is preview:staging's (stagingEnvs(...).build: a simulated Preview with
@@ -19,7 +21,8 @@ import { fileURLToPath } from 'node:url'
 import { runCheckBuild, type CheckBuildOptions } from '../check-build'
 import { isEntryPoint, loadContent, type Env, type LoaderOptions } from '../load-content'
 import { nextSpawner, runStagingSteps, stagingEnvs, type SpawnNext } from '../preview-staging'
-import { publishFixturesAsStaging } from './staging-catalogue'
+import { PICTURE_STORY_ID } from './picture-story-id'
+import { FIXTURES_DIR, publishFixturesAsStaging } from './staging-catalogue'
 import { startStubStorage, type StubStorage } from './stub-storage'
 
 export const HARNESS_LAUNCHES = ['review', 'gated'] as const
@@ -102,9 +105,9 @@ export async function stagingBuild(options: StagingBuildOptions): Promise<number
     log('staging-build: stub closed')
   }
   try {
-    const catalogue = await publishFixturesAsStaging(stub)
+    const catalogue = await publishFixturesAsStaging(stub, FIXTURES_DIR, { pictureStory: true })
     log(
-      `staging-build: launch=${launch}; stub on 127.0.0.1 serves ${catalogue.packages.length} fixture packages under ${catalogue.pointerPath}`,
+      `staging-build: launch=${launch}; stub on 127.0.0.1 serves ${catalogue.packages.length} packages under ${catalogue.pointerPath}: ${catalogue.packages.length - 1} fixtures and the derived picture story ${PICTURE_STORY_ID} with ${catalogue.media.length} media objects`,
     )
     const envs = stagingEnvs(options.env, stub.baseUrl)
     const code = await runStagingSteps({

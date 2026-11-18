@@ -3,6 +3,9 @@
 // root (platform win32): exit 0, mode staging, 3 stories and no HEAD; one tampered package byte:
 // exit 1 and nothing written. Then the whole harness run with the real loopback stub and loader
 // but fakes for next and check-build, so no real next build runs and no server starts.
+// P1-4b Step 10e (design p1-step10-design.md §2.5, §4.5): the harness publishes with pictureStory,
+// so its run loads 4 stories and makes the picture story's 12 media HEADs on the stub (planned
+// expectation update); the direct publishFixturesAsStaging calls here stay as they were (C3).
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +32,7 @@ import {
   STAGING_NOTE,
   STAGING_POINTER_PATH,
 } from './staging-catalogue'
+import { PICTURE_STORY_ID } from './picture-story-id'
 import { startStubStorage, type StubStorage } from './stub-storage'
 
 const NOW = new Date('2026-11-15T10:00:00.000Z')
@@ -48,6 +52,8 @@ const STAGING_ENV_LINE =
 const MODE_LINE =
   'content: mode=staging seq=1 snapshot=catalogue/snapshots/1.json stories=3 excluded=0 featured=none'
 const BASE = 'http://127.0.0.1:1/storage/v1/object/public/content'
+/** The harness run's mode line: the 3 fixtures and the derived picture story. */
+const HARNESS_MODE_LINE = MODE_LINE.replace('stories=3', 'stories=4')
 
 let root: string
 let stubs: StubStorage[]
@@ -344,14 +350,23 @@ describe('stagingBuild, the whole harness run (design §6.8)', () => {
       expect(h.checks.map((c) => [c.root, c.env])).toEqual([[root, buildEnv]])
       expect(JSON.stringify(h.spawns)).not.toContain('127.0.0.1') // next build never sees the base
       expect(h.out).toContain(STAGING_ENV_LINE)
-      expect(h.out).toContain(MODE_LINE)
+      expect(h.out).toContain(HARNESS_MODE_LINE)
       expect(h.out[0]).toBe(
-        `staging-build: launch=${launch}; stub on 127.0.0.1 serves 3 fixture packages under catalogue/staging.json`,
+        `staging-build: launch=${launch}; stub on 127.0.0.1 serves 4 packages under catalogue/staging.json: 3 fixtures and the derived picture story ${PICTURE_STORY_ID} with 12 media objects`,
       )
-      expect(h.out.indexOf('staging-build: stub closed')).toBe(h.out.indexOf(MODE_LINE) + 1)
+      // The picture story's 12 variants pass the loader's media HEAD gate on the stub.
+      expect(h.out).toContain(`content: media story=${PICTURE_STORY_ID} variants=12 bytes=408 ok`)
+      expect(h.stub()?.requests.filter((r) => r.method === 'HEAD')).toHaveLength(12)
+      expect(h.out.indexOf('staging-build: stub closed')).toBe(h.out.indexOf(HARNESS_MODE_LINE) + 1)
       expect(h.out.at(-1)).toBe(`staging-build: ok (launch=${launch})`)
       const info = BuildInfo.parse(JSON.parse(readFileSync(outputs().contentInfo, 'utf8')))
       expect(info.mode).toBe('staging')
+      expect(info.stories.map((story) => story.storyId)).toEqual([
+        'lantern-walk',
+        'river-stones',
+        PICTURE_STORY_ID,
+        'two-paths',
+      ])
     },
   )
 

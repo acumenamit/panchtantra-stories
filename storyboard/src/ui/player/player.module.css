@@ -36,6 +36,101 @@
   color: var(--color-text);
 }
 
+/*
+ * Step 10e: scenes (D11-P23; spec §6.5 SPEC:489). The run area carries data-scene, the node's
+ * scene id (sceneIdOf: one of the 10 legacy scenes, any other name forest-day), and paints that
+ * scene's gradient at the legacy angle (pt/src/scenes.js) from the --scene-<id>-from/-to tokens;
+ * the story card and the ending card stay on --color-surface-story. Every text and non-text token
+ * is a declared pair on both ends of every scene (contrast-pairs.ts), so nothing here adds a pair.
+ * Background only: the run area keeps its size and place.
+ */
+.runDependent[data-scene] {
+  background-image: linear-gradient(160deg, var(--scene-from), var(--scene-to));
+}
+
+.runDependent[data-scene='forest-day'] {
+  --scene-from: var(--scene-forest-day-from);
+  --scene-to: var(--scene-forest-day-to);
+}
+
+.runDependent[data-scene='forest-evening'] {
+  --scene-from: var(--scene-forest-evening-from);
+  --scene-to: var(--scene-forest-evening-to);
+}
+
+.runDependent[data-scene='forest-dark'] {
+  --scene-from: var(--scene-forest-dark-from);
+  --scene-to: var(--scene-forest-dark-to);
+}
+
+.runDependent[data-scene='forest-path'] {
+  --scene-from: var(--scene-forest-path-from);
+  --scene-to: var(--scene-forest-path-to);
+}
+
+.runDependent[data-scene='lions-den'] {
+  --scene-from: var(--scene-lions-den-from);
+  --scene-to: var(--scene-lions-den-to);
+}
+
+.runDependent[data-scene='well'] {
+  --scene-from: var(--scene-well-from);
+  --scene-to: var(--scene-well-to);
+}
+
+.runDependent[data-scene='forest-dawn'] {
+  --scene-from: var(--scene-forest-dawn-from);
+  --scene-to: var(--scene-forest-dawn-to);
+}
+
+.runDependent[data-scene='river-bank'] {
+  --scene-from: var(--scene-river-bank-from);
+  --scene-to: var(--scene-river-bank-to);
+}
+
+.runDependent[data-scene='village'] {
+  --scene-from: var(--scene-village-from);
+  --scene-to: var(--scene-village-to);
+}
+
+.runDependent[data-scene='palace'] {
+  --scene-from: var(--scene-palace-from);
+  --scene-to: var(--scene-palace-to);
+}
+
+/*
+ * Step 10e: the scene image band (D11-P21; spec §6.5 SPEC:486-489), after the title. The box takes
+ * the picture's own ratio from --img-w and --img-h (set per picture by the component; the values
+ * here are the defaults the CSS lint needs) before the file arrives, so the load moves nothing; it
+ * is as wide as the story and at most --scene-band-max tall (40svb: the small viewport, so a URL
+ * bar that shows or hides never resizes it; V1 caps the band), and the picture covers it. The box
+ * is transparent, so a failed picture (data-failed: hidden, box kept) shows the run area's scene
+ * gradient. --scene-band-max is declared here, not in tokens.css: tokens.test.ts reads every
+ * --scene-* name in tokens.css as a scene colour (#rrggbb), so the token there fails 3 of its tests.
+ */
+.sceneBand {
+  --img-w: 1408;
+  --img-h: 768;
+  --scene-band-max: 40svb;
+  overflow: hidden;
+  inline-size: 100%;
+  max-block-size: var(--scene-band-max);
+  margin-block: 0 var(--space-5);
+  border-radius: var(--radius-card);
+  aspect-ratio: var(--img-w) / var(--img-h);
+}
+
+.sceneImage {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.sceneImage[data-failed] {
+  visibility: hidden;
+}
+
 /* Paragraphs split on a blank line; single newlines and spaces render as stored (D11-P30). */
 .paragraph {
   margin-block: 0 var(--space-4);

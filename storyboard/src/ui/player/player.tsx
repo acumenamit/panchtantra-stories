@@ -44,16 +44,24 @@
 //   is announced; data-story and the lesson take the new lang and dir (lang islands that set their
 //   own size and leading), while the chrome stays on the route locale. It works at an ending and
 //   with storage blocked; reload resumes in the stored language (stored-first, mid-story only).
+// - Step 10e (§4.1, §5, D11-P21 to P23): the run area carries data-scene (sceneIdOf: a legacy
+//   scene, any other name forest-day) and paints that scene's gradient; a node with a picture shows
+//   the scene image band after its title (SceneImage), and a picture that fails is kept in
+//   failedImages (by image id), so its box stays, the img is hidden and the gradient shows, also on
+//   a later visit to that node. After each committed part while open, the next pictures are
+//   preloaded at low priority (useImagePrefetch: the 1-2 real candidates, never the current one).
 // Strings arrive finished from the server (src/ui/player/strings.ts); no catalogue here. Imports
 // are relative (C15).
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { LocaleCode } from '../../core/locales'
 import { SAVED_RUN_ATTRIBUTE } from '../../core/progress/saved-run-hint'
 import { createPlayerActions, type PlayerActions } from '../../reader/player/actions'
 import { endingCountOf } from '../../reader/player/endings'
+import { nodeImageOf } from '../../reader/player/images'
 import { localeSwitchOf } from '../../reader/player/locales'
 import { graphOf, type PlayerData } from '../../reader/player/player-data'
+import { sceneIdOf } from '../../reader/player/scene'
 import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf, SETTLE_MS, tokenOf } from '../../reader/player/view'
 import { createRunController, readerStores } from '../../reader/progress'
@@ -67,10 +75,12 @@ import { PlayerMenu } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
 import { RestartDialog } from './restart-dialog'
+import { SceneImage } from './scene-image'
 import { StoryLanguageSwitch } from './story-language-switch'
 import { StoryPart } from './story-part'
 import { TextScaleSync } from './text-scale-sync'
 import type { PlayerStrings } from './types'
+import { useImagePrefetch } from './use-image-prefetch'
 
 export interface PlayerProps {
   readonly data: PlayerData
@@ -106,6 +116,8 @@ export function Player({ data, strings, locale }: PlayerProps) {
   // Step 10c (§5): the stored endings (read, never written) and the endings this page reached.
   const [storedEndings, setStoredEndings] = useState<readonly string[]>([])
   const [sessionEndings, setSessionEndings] = useState<readonly string[]>([])
+  // Step 10e (§5): the ids of the pictures that failed to load or decode on this page.
+  const [failedImages, setFailedImages] = useState<readonly string[]>([])
   const settlingToken = useRef<string | null>(null)
   // The token the last restart-dialog cancel held (hold()); see startAgainHeld.
   const cancelledToken = useRef<string | null>(null)
@@ -139,6 +151,14 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const endingsFound = endingCountOf(data.endingIds, storedEndings, sessionEndings)
   // The language the story-language switch offers, or null: no switch (D11-P4).
   const languageTarget = localeSwitchOf(data, view.locale)
+  // The node's picture, or null: no band (D11-P21).
+  const image = nodeImageOf(data, view.nodeId)
+  // Stable, so the image's decode check runs once per picture (D11-P21).
+  const markFailed = useCallback((id: string): void => {
+    setFailedImages((ids) => (ids.includes(id) ? ids : [...ids, id]))
+  }, [])
+  // The next pictures, after each committed part while open (D11-P22).
+  useImagePrefetch(data, snapshot.state, !opening)
 
   useLayoutEffect(() => {
     actions.current = createPlayerActions({
@@ -313,6 +333,7 @@ export function Player({ data, strings, locale }: PlayerProps) {
           key={view.runEpoch}
           data-run=""
           data-epoch={view.runEpoch}
+          data-scene={sceneIdOf(view.scene)}
           className={styles.runDependent}
           onPointerDown={endReveal}
           onKeyDown={endReveal}
@@ -327,6 +348,15 @@ export function Player({ data, strings, locale }: PlayerProps) {
             onChoose={choose}
             backLabel={strings.back}
             onBack={back}
+            image={
+              image === null ? null : (
+                <SceneImage
+                  image={image}
+                  failed={failedImages.includes(image.id)}
+                  onFailed={markFailed}
+                />
+              )
+            }
             ending={
               view.ending ? (
                 <EndingCard

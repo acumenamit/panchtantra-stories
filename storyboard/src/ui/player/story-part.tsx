@@ -16,6 +16,8 @@
 //   makes the footer inert at once on its DOM node (C28).
 // - Step 10c (D11-P13, §4.1): at an ending the island passes the ending card, which renders after
 //   the story container and before the run footer, so the passage stays first and the focus target.
+// - Step 10e (D11-P21, §4.1): a node with a picture gets the scene image band from the island,
+//   between the title and the story card; a node without one gets nothing (no box).
 import { useRef, type ReactNode, type Ref } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { PartView } from '../../reader/player/view'
@@ -40,6 +42,8 @@ export interface StoryPartProps {
   readonly onBack: (seq: number) => StepResult
   /** Step 10c: the ending card at an ending (after the story, before the run footer). */
   readonly ending?: ReactNode
+  /** Step 10e: the scene image band of a node with a picture (after the title). */
+  readonly image?: ReactNode
 }
 
 export function StoryPart({
@@ -52,6 +56,7 @@ export function StoryPart({
   backLabel,
   onBack,
   ending,
+  image,
 }: StoryPartProps) {
   const controls = useRef<HTMLElement>(null)
   const hasQuestion = view.question !== null
@@ -66,6 +71,7 @@ export function StoryPart({
     >
       <div data-story="" lang={view.locale} dir={view.dir} className={styles.story}>
         <h1 className={styles.title}>{view.title}</h1>
+        {image}
         <div data-story-card="" className={styles.card}>
           <div data-passage="" className={styles.passage}>
             {view.paragraphs.map((paragraph, index) => (

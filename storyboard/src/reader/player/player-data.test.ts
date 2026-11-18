@@ -3,6 +3,9 @@
 // view carries only the player's fields, in the package locales that are also enabled; a missing
 // text, choice label or lesson stops the build with ids only; graphOf(data) is toGraph(pkg) with the
 // page's locales; and each view stays within the 96 KB raw budget (SC16).
+// Step 10e (D11-P2 C14, P21): each node carries its picture as an ImageView with finished media URLs
+// (built by the mediaUrl the page passes), or null; never a path, mime, byte count or provenance. An
+// image that names no image asset, or a picture without a mediaUrl, stops the build with ids only.
 import { describe, expect, it } from 'vitest'
 import lanternWalk from '../../../fixtures/packages/lantern-walk.json'
 import riverStones from '../../../fixtures/packages/river-stones.json'
@@ -11,6 +14,7 @@ import { toGraph } from '../../core/engine'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../../core/locales'
 import { StoryPackageV1 } from '../../core/package/v1'
 import { endingIdsOf } from '../../core/progress'
+import { imageViewOf, type ImageAsset } from './images'
 import { graphOf, playerDataOf } from './player-data'
 
 /** SC16: a page's PlayerData, as JSON, stays at or under 96 KB raw. */
@@ -81,13 +85,16 @@ const PLAYER_DATA_KEYS = [
   'nodes',
   'text',
 ]
-const NODE_KEYS = ['id', 'type', 'isAlternate', 'scene', 'lessonIcon', 'choices']
+const NODE_KEYS = ['id', 'type', 'isAlternate', 'scene', 'lessonIcon', 'choices', 'image']
 const NOT_SENT = [
   'provenance',
   'assets',
   'variants',
   'audio',
-  'image',
+  'path',
+  'mime',
+  'bytes',
+  'kind',
   'description',
   'theme',
   'book',
@@ -137,6 +144,7 @@ describe('playerDataOf: the fixtures', () => {
           scene: node.scene,
           lessonIcon: node.type === 'ending' ? node.lessonIcon : null,
           choices: node.type === 'ending' ? [] : node.choices,
+          image: null,
         })
       }
       expect(Object.keys(data.text)).toEqual(['en', 'hi'])
@@ -309,5 +317,140 @@ describe('budget (SC16): JSON of PlayerData stays at or under 96 KB raw', () => 
       )
       expect(bytes, pkg.storyId).toBeLessThanOrEqual(BUDGET_BYTES)
     }
+  })
+})
+
+// Step 10e: river-stones with pictures, as the staging picture story (§4.5): a 1408×768 picture on
+// start, flat_stones, round_stones, ending_dry and ending_wet, a square 1024×1024 one on far_bank
+// (C17); big_rock and ending_back have none. Each asset also has a JPEG variant, which the view
+// never offers.
+const BASE = 'https://media.example/storage/v1/object/public/content'
+const mediaUrl = (path: string): string => `${BASE}/${path}`
+const PICTURE_NODES: Readonly<Record<string, string>> = {
+  start: 'a',
+  flat_stones: 'b',
+  round_stones: 'c',
+  far_bank: 'f',
+  ending_dry: 'd',
+  ending_wet: 'e',
+}
+const pictureAssets: ImageAsset[] = Object.values(PICTURE_NODES).map((c) => {
+  const id = c.repeat(64)
+  const square = c === 'f'
+  const widths = square ? [768, 1024] : [768, 1408]
+  return {
+    kind: 'image',
+    id,
+    width: square ? 1024 : 1408,
+    height: square ? 1024 : 768,
+    variants: [
+      ...widths.map((w) => ({
+        path: `media/pictures/${id}-w${w}.webp`,
+        mime: 'image/webp' as const,
+        bytes: 34,
+        width: w,
+      })),
+      { path: `media/pictures/${id}-w1200.jpg`, mime: 'image/jpeg', bytes: 34, width: 1200 },
+    ],
+    provenance: { origin: 'unknown' },
+  }
+})
+const pictures = StoryPackageV1.parse({
+  ...riverStones,
+  storyId: 'pictures',
+  nodes: riverStones.nodes.map((node) => ({
+    ...node,
+    image: Object.hasOwn(PICTURE_NODES, node.id) ? PICTURE_NODES[node.id]!.repeat(64) : null,
+  })),
+  assets: pictureAssets,
+})
+
+describe('playerDataOf: pictures (Step 10e; D11-P2 C14, P21)', () => {
+  it('gives each node its image view with finished URLs, or null; no package media fields', () => {
+    const data = playerDataOf(pictures, { locales: ENABLED_LOCALE_CODES, mediaUrl })
+    for (const [i, node] of pictures.nodes.entries()) {
+      const asset = pictureAssets.find((a) => a.id === node.image)
+      expect(data.nodes[i]?.image, node.id).toEqual(
+        asset === undefined
+          ? null
+          : imageViewOf(asset, mediaUrl, { storyId: 'pictures', nodeId: node.id }),
+      )
+      expect(Object.keys(data.nodes[i]!)).toEqual(NODE_KEYS)
+    }
+    expect(data.nodes.filter((n) => n.image !== null).map((n) => n.id)).toEqual([
+      'start',
+      'flat_stones',
+      'far_bank',
+      'round_stones',
+      'ending_dry',
+      'ending_wet',
+    ])
+    expect(data.nodes.find((n) => n.id === 'far_bank')?.image).toMatchObject({
+      width: 1024,
+      height: 1024,
+    })
+    const keys = keysDeep(data)
+    for (const name of NOT_SENT) expect(keys.has(name), name).toBe(false)
+    // Every media reference is a finished URL; no bare path and no JPEG reaches the page.
+    const json = JSON.stringify(data)
+    expect(json.split('media/pictures/').length - 1).toBe(18)
+    expect(json.split(`${BASE}/media/pictures/`).length - 1).toBe(18)
+    expect(json).not.toContain('.jpg')
+    // The graph is unchanged by the pictures.
+    expect(graphOf(data)).toEqual({ ...toGraph(pictures), locales: ['en', 'hi'] })
+  })
+
+  it('the fixtures (phase 1): every node has no picture, with or without a mediaUrl', () => {
+    for (const pkg of fixtures) {
+      for (const options of [
+        { locales: ENABLED_LOCALE_CODES },
+        { locales: ENABLED_LOCALE_CODES, mediaUrl },
+      ]) {
+        expect(playerDataOf(pkg, options).nodes.every((n) => n.image === null)).toBe(true)
+      }
+    }
+  })
+
+  it('throws, ids only, on an image that names no image asset', () => {
+    const none = structuredClone(pictures)
+    none.assets = none.assets.filter((a) => a.id !== 'b'.repeat(64))
+    expect(() => playerDataOf(none, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: pictures - flat_stones image missing'),
+    )
+    // An audio asset with that id is not a picture.
+    const audio = structuredClone(none)
+    audio.assets.push({
+      kind: 'audio',
+      id: 'b'.repeat(64),
+      nodeId: 'flat_stones',
+      locale: 'en',
+      durationMs: 1000,
+      variants: [{ path: `media/pictures/${'b'.repeat(64)}-a.mp3`, mime: 'audio/mpeg', bytes: 34 }],
+      provenance: { origin: 'unknown' },
+      narratedTextSha256: '0'.repeat(64),
+    })
+    expect(() => playerDataOf(audio, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: pictures - flat_stones image missing'),
+    )
+  })
+
+  it('throws, ids only, on a picture when no mediaUrl was passed', () => {
+    expect(() => playerDataOf(pictures, { locales: ENABLED_LOCALE_CODES })).toThrow(
+      new Error('player: pictures - start mediaUrl missing'),
+    )
+  })
+
+  it('throws, ids only, on a WebP variant without a width (images.ts), naming the node', () => {
+    const broken = structuredClone(pictures)
+    const far = broken.assets.find((a) => a.id === 'f'.repeat(64))!
+    delete far.variants[1]!.width
+    expect(() => playerDataOf(broken, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: pictures - far_bank image.width missing'),
+    )
+  })
+
+  it('stays within the budget (SC16)', () => {
+    const data = playerDataOf(pictures, { locales: ENABLED_LOCALE_CODES, mediaUrl })
+    expect(Buffer.byteLength(JSON.stringify(data), 'utf8')).toBeLessThanOrEqual(BUDGET_BYTES)
   })
 })

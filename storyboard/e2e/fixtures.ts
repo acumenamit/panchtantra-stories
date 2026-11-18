@@ -1,8 +1,9 @@
 // Shared Playwright fixture: every spec imports test and expect from here (spec §10.2 E2E row).
 // For each test it records every securitypolicyviolation event (through an init script) and every
 // request URL. After the test it fails if any CSP violation happened, or if any request went to an
-// origin other than the test server and the media origin. It also fails if the page started a
-// worker: the init script cannot listen inside workers, so their CSP violations would go unseen
+// origin other than the test server (from Step 10e the media origin only through the media stub,
+// below). It also fails if the page started a worker: the init script cannot listen inside
+// workers, so their CSP violations would go unseen
 // (spec §6.8: P1 ships no service worker).
 // P1-1c (design p1-step7-design.md §8.3 "Guard", "Leg selection"):
 // - The site sets no cookies (spec §9): every same-origin response is recorded and any Set-Cookie
@@ -17,9 +18,19 @@
 // P1-2c (design p1-step9-design.md §2, §6.3, R13): the same GET of "/" must hold the staging
 // banner's marker exactly when E2E_LAUNCH is staging, so a review build is never tested as the
 // staging leg, nor a staging build as the review leg. The marker comes from src/ui/root/staging.ts.
+// P1-4b (design p1-step10-design.md §9.1 G4, C11, R7, R30; Step 10e): the media origin is no longer
+// on the allowlist. A test that shows pictures opts in with the mediaStub option: before the test
+// body runs, so before its first navigation, the page fixture routes every request to MEDIA_ORIGIN
+// on that page (page.route, never a context-wide route: routing turns off the HTTP cache, and other
+// specs count font requests) and answers it itself: a URL in mediaStub.urls, compared as the exact
+// string the page requests, gets mediaStub.body with mediaStub.contentType; any other media URL is
+// aborted. Nothing reaches the real media origin. The guard then allows a media request only when
+// that stub answered it, so a media request in a test without the option fails the test, and so
+// does one from another page of the same test (the stub covers its own page only) or one to a
+// look-alike origin. e2e/security-guard.spec.ts proves each bypass form.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { test as base, expect, type Page } from '@playwright/test'
+import { test as base, expect, type Page, type Request } from '@playwright/test'
 import { MEDIA_ORIGIN } from '../src/config/security-headers'
 import { STAGING_BANNER_MARKER } from '../src/ui/root/staging'
 import { EN_STATUS, launchLeg, legHasBanner } from './launch-leg'
@@ -50,7 +61,58 @@ function cookieAppliesTo(domain: string, host: string): boolean {
   return host === bare || host.endsWith(`.${bare}`)
 }
 
-export const test = base.extend<{ securityGuard: void }, { buildIdentity: void }>({
+/**
+ * A test's stand-in for the media origin (design §9.1 G4): every media request of the test's page is
+ * answered here, never by the network.
+ */
+export interface MediaStub {
+  /** The media URLs it serves, each exactly as the page requests it; any other media URL aborts. */
+  readonly urls: readonly string[]
+  /** What it serves for each of them. */
+  readonly body: Uint8Array
+  readonly contentType: string
+}
+
+interface GuardFixtures {
+  securityGuard: void
+  /** The test's media stub; null (the default) allows no media request at all. */
+  mediaStub: MediaStub | null
+  /** The media requests the stub answered (fulfilled or aborted), shared by the page and the guard. */
+  stubbedMedia: WeakSet<Request>
+}
+
+export const test = base.extend<GuardFixtures, { buildIdentity: void }>({
+  mediaStub: [null, { option: true }],
+  // Its own fixture so the page and the guard of one test share it. The second parameter is not
+  // named use (react-hooks lint).
+  stubbedMedia: async ({}, provide) => {
+    await provide(new WeakSet<Request>())
+  },
+  // With a media stub, the route is on the page before the test body runs (its first navigation
+  // included). The test's own page.route calls run before this one, so a test may hold a media
+  // request and then pass it on with route.fallback(); the stub still answers it.
+  page: async ({ page, mediaStub, stubbedMedia }, provide) => {
+    if (mediaStub !== null) {
+      const known = new Set(mediaStub.urls)
+      const body = Buffer.from(mediaStub.body)
+      await page.route(
+        (url) => url.origin === MEDIA_ORIGIN,
+        async (route) => {
+          const request = route.request()
+          stubbedMedia.add(request)
+          // A page that is closing or navigating away may drop the request first.
+          if (known.has(request.url())) {
+            await route
+              .fulfill({ status: 200, contentType: mediaStub.contentType, body })
+              .catch(() => undefined)
+          } else {
+            await route.abort().catch(() => undefined)
+          }
+        },
+      )
+    }
+    await provide(page)
+  },
   buildIdentity: [
     // A worker fixture cannot use the test-scoped baseURL, so it reads the project option.
     // Playwright requires the (empty) destructuring pattern as the first parameter.
@@ -90,13 +152,12 @@ export const test = base.extend<{ securityGuard: void }, { buildIdentity: void }
     { scope: 'worker', auto: true },
   ],
   securityGuard: [
-    async ({ context, baseURL, javaScriptEnabled }, use) => {
+    async ({ context, baseURL, javaScriptEnabled, mediaStub, stubbedMedia }, use) => {
       if (!baseURL) throw new Error('playwright.config.ts must set use.baseURL')
       const siteOrigin = new URL(baseURL).origin
       const siteHost = new URL(baseURL).hostname
-      const allowedOrigins = new Set([siteOrigin, MEDIA_ORIGIN])
       const violations: CspViolation[] = []
-      const requestUrls: string[] = []
+      const requests: Request[] = []
       const workerUrls: string[] = []
       // One entry per same-origin response: its URL when it carried a Set-Cookie header, else
       // null. A response whose headers can no longer be read (its page closed) counts as null;
@@ -125,7 +186,7 @@ export const test = base.extend<{ securityGuard: void }, { buildIdentity: void }
         )
       }, REPORT_BINDING)
       context.on('request', (request) => {
-        requestUrls.push(request.url())
+        requests.push(request)
       })
       context.on('response', (response) => {
         if (originOf(response.url()) !== siteOrigin) return
@@ -163,8 +224,17 @@ export const test = base.extend<{ securityGuard: void }, { buildIdentity: void }
       }
 
       expect(violations, 'CSP violations reported by the page').toEqual([])
-      const outside = requestUrls.filter((url) => !allowedOrigins.has(originOf(url)))
-      expect(outside, `requests outside ${[...allowedOrigins].join(' and ')}`).toEqual([])
+      // The site's own origin, and the media origin only for a request the test's media stub
+      // answered (design §9.1 G4): never the real media origin.
+      const outside = requests
+        .filter((request) => {
+          const origin = originOf(request.url())
+          if (origin === siteOrigin) return false
+          return !(origin === MEDIA_ORIGIN && stubbedMedia.has(request))
+        })
+        .map((request) => request.url())
+      const allowed = mediaStub === null ? siteOrigin : `${siteOrigin} and the media stub`
+      expect(outside, `requests outside ${allowed}`).toEqual([])
       expect(
         workerUrls,
         'workers started; this guard cannot see CSP violations inside workers yet',

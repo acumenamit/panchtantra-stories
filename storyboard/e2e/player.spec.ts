@@ -29,12 +29,15 @@
 // switch's commit, read in the page (a MutationObserver), never from the click.
 // Step 10d CI fix (CI run 44037149156): T-a20 logs each layout shift's sources; T-d6 holds the font
 // files under a test-only wide Devanagari fallback and checks the header keeps its rows.
+// Step 10e (design §2.5, T-a21, F2): T-a21 loops playerNotFoundPaths(leg), which adds the staging-only
+// picture story's read URL on the review leg (on the staging leg it is a real page).
 import type { ElementHandle, Page, Request } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY, type TextScale } from '../src/core/progress/records'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
 import { SETTLE_MS } from '../src/reader/player/view'
 import { expect, test as base } from './fixtures'
+import { launchLeg } from './launch-leg'
 import {
   announcements,
   boxOf,
@@ -81,7 +84,7 @@ import {
   liveRegions,
   message,
   NOT_FOUND_TITLE,
-  PLAYER_NOT_FOUND_PATHS,
+  playerNotFoundPaths,
   playerPath,
   playerPaths,
   recordLayoutShifts,
@@ -1429,7 +1432,7 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     })
   }
 
-  for (const notFoundPath of PLAYER_NOT_FOUND_PATHS) {
+  for (const notFoundPath of playerNotFoundPaths(launchLeg(process.env.E2E_LAUNCH))) {
     test(`T-a21 ${notFoundPath} is the bilingual 404`, async ({ page, errors }) => {
       errors.allow({ chromium: [NOT_FOUND_LINE], webkit: [NOT_FOUND_LINE] })
       const response = await page.goto(notFoundPath)

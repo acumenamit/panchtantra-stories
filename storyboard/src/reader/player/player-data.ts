@@ -1,8 +1,13 @@
 // Player view model (Step 10a; design D11-P2, §5). The page builds PlayerData on the server from the
 // strict package and the enabled locales and passes it to the player island as props, so it holds
 // only what the player shows and what the engine needs. Not sent: provenance, assets (audio
-// included), description, theme, book, duration, alt and packageSha256 (Step 20 adds report data;
-// 10e adds each node's image view).
+// included), description, theme, book, duration, alt and packageSha256 (Step 20 adds report data).
+// - Step 10e (D11-P2 C14, P21): each node carries its picture as an ImageView (images.ts), or null
+//   when it has none (every phase-1 package, SPEC:189: no box). imageViewOf runs here, on the
+//   server, with options.mediaUrl, the reader's checked builder (mediaUrl from @/content, passed in
+//   by the page), so the view holds finished URLs, srcset and sizes and never a path, mime, byte
+//   count or provenance. An image that names no image asset, or a node with an image while no
+//   mediaUrl was passed, throws `player: <storyId> - <nodeId> image|mediaUrl missing` (ids only).
 // - locales = the package's locales that are also in options.locales, in registry order;
 //   defaultLocale = the package default when it is one of them, else the first.
 // - The second lock behind strict parse and the validator: a missing node text, choice label or
@@ -14,7 +19,8 @@
 // (C15): Vitest has no `@/` alias.
 import type { Graph, GraphNode } from '../../core/engine'
 import { LOCALE_CODES, type LocaleCode } from '../../core/locales'
-import type { NodeTypeName, StoryPackageV1 } from '../../core/package/v1'
+import type { NodeTypeName, StoryNode, StoryPackageV1 } from '../../core/package/v1'
+import { imageViewOf, type ImageView, type MediaUrlOf } from './images'
 import { paragraphsOf } from './view'
 
 export interface PlayerChoice {
@@ -31,6 +37,8 @@ export interface PlayerNode {
   readonly lessonIcon: string | null
   /** In package order; empty at an ending. */
   readonly choices: readonly PlayerChoice[]
+  /** The node's picture (Step 10e), or null: no picture, so no box. */
+  readonly image: ImageView | null
 }
 
 export interface PlayerNodeText {
@@ -67,6 +75,11 @@ export interface PlayerData {
 export interface PlayerDataOptions {
   /** The locales the site builds pages for (the enabled locales). */
   readonly locales: readonly LocaleCode[]
+  /**
+   * The reader's media URL builder (mediaUrl from @/content; server only, C14). Needed only by a
+   * package with a picture; a node with an image and no builder throws.
+   */
+  readonly mediaUrl?: MediaUrlOf
 }
 
 function own<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -83,6 +96,14 @@ export function playerDataOf(pkg: StoryPackageV1, options: PlayerDataOptions): P
   if (first === undefined) throw missing('-', '-', 'locales')
   const defaultLocale = locales.includes(pkg.defaultLocale) ? pkg.defaultLocale : first
 
+  const imageOf = (node: StoryNode): ImageView | null => {
+    if (node.image === null) return null
+    const asset = pkg.assets.find((a) => a.kind === 'image' && a.id === node.image)
+    if (asset === undefined || asset.kind !== 'image') throw missing('-', node.id, 'image')
+    if (options.mediaUrl === undefined) throw missing('-', node.id, 'mediaUrl')
+    return imageViewOf(asset, options.mediaUrl, { storyId: pkg.storyId, nodeId: node.id })
+  }
+
   const nodes: PlayerNode[] = pkg.nodes.map((node) => ({
     id: node.id,
     type: node.type,
@@ -90,6 +111,7 @@ export function playerDataOf(pkg: StoryPackageV1, options: PlayerDataOptions): P
     scene: node.scene,
     lessonIcon: node.type === 'ending' ? node.lessonIcon : null,
     choices: node.type === 'ending' ? [] : node.choices.map((c) => ({ id: c.id, next: c.next })),
+    image: imageOf(node),
   }))
 
   const text: Partial<Record<LocaleCode, PlayerLocaleText>> = {}

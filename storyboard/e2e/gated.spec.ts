@@ -9,6 +9,8 @@
 //   RSC: 1. Next answers a bare RSC: 1 GET on a route-pattern path with a 307 to <path>?_rsc=…
 //   (all four headers on it); the request follows it, as for /en, and the final response is the
 //   404 with the four headers.
+// - Step 10e (design §2.5, F2): the unmatched paths are playerNotFoundPaths('gated'), which adds the
+//   staging-only picture story's read URL.
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { expect, test } from './fixtures'
@@ -16,7 +18,7 @@ import { fontFamilies, seedPrefs, servedFontFaces, settleFonts, storageAfter } f
 import {
   message,
   NOT_FOUND_TITLE,
-  PLAYER_NOT_FOUND_PATHS,
+  playerNotFoundPaths,
   playerPaths,
   readerPaths,
   waitForHydration,
@@ -115,8 +117,8 @@ test.describe('the gated build', { tag: '@gated' }, () => {
     page,
     request,
   }) => {
-    const paths = [...playerPaths().map((player) => player.path), ...PLAYER_NOT_FOUND_PATHS]
-    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(12)
+    const paths = [...playerPaths().map((player) => player.path), ...playerNotFoundPaths('gated')]
+    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(13)
     for (const routePath of paths) {
       const response = await page.goto(routePath)
       if (!response) throw new Error(`no response for ${routePath}`)

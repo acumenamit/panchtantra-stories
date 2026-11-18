@@ -34,6 +34,12 @@
 // page has one language; a switched part keeps its key, node and seq while data-story takes the
 // new lang; and the lang islands' own size and leading (CSS read as text). The T-b10 fix: the
 // menu's Start again is ignored during the hold after a dialog cancel only (startAgainHeld).
+// Step 10e (design §4.1, §4.6, D11-P21 to P23, T-e7): the run area's data-scene (sceneIdOf), no band
+// and no img for a node without a picture (every fixture), the band between the title and the story
+// card for one with a picture (a plain img: srcset of the WebP variants, the one sizes value, the
+// smallest WebP as src, width and height, fetchpriority high, alt "", no cross-origin mode, no lazy
+// loading), data-failed on a failed picture, the square shape, no preload of the next pictures in
+// the server HTML, and the scene and band CSS (read as text).
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -48,15 +54,18 @@ import { start, step, type StepResult } from '../../core/engine'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../../core/locales'
 import { StoryPackageV1 } from '../../core/package/v1'
 import { graphOf, playerDataOf, type PlayerData } from '../../reader/player/player-data'
+import { sceneIdOf } from '../../reader/player/scene'
 import { segmentsOf } from '../../reader/player/segments'
 import { partViewOf, tokenOf } from '../../reader/player/view'
 import { readerStores } from '../../reader/progress'
 import a11y from '../a11y/a11y.module.css'
 import { translator } from '../i18n/messages'
 import shell from '../shell/shell.module.css'
+import { SCENE_IDS } from '../styles/contrast-pairs'
 import { EndingCard, LESSON_HEADING_ID } from './ending-card'
 import { Player, startAgainHeld } from './player'
 import { PlayerFallback } from './player-boundary'
+import { SceneImage } from './scene-image'
 import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
@@ -1459,3 +1468,249 @@ describe('Step 10d: the story-language switch and the lang islands (server marku
     expect(navOf(single)).not.toContain('data-story-language')
   })
 })
+
+describe('Step 10e: scenes and the scene image (server markup)', () => {
+  const BASE = 'https://media.example/storage/v1/object/public/content'
+  const mediaUrl = (path: string): string => `${BASE}/${path}`
+  const url = (id: string, w: number): string => `${BASE}/media/pictures/${id}-w${w}.webp`
+
+  /**
+   * river-stones with a picture on each node named in `images` (node id → one hex letter; 'f' is
+   * the square 1024×1024 shape, every other letter 1408×768), as the staging picture story (§4.5).
+   */
+  function pictureData(images: Readonly<Record<string, string>>): PlayerData {
+    const [, river] = fixtures
+    if (river === undefined) throw new Error('no fixture')
+    const letters = [...new Set(Object.values(images))]
+    return playerDataOf(
+      StoryPackageV1.parse({
+        ...structuredClone(river),
+        storyId: 'pictures',
+        nodes: river.nodes.map((node) => ({
+          ...node,
+          image: Object.hasOwn(images, node.id) ? (images[node.id] ?? '').repeat(64) : null,
+        })),
+        assets: letters.map((c) => {
+          const id = c.repeat(64)
+          const size = c === 'f' ? 1024 : 1408
+          return {
+            kind: 'image',
+            id,
+            width: size,
+            height: c === 'f' ? 1024 : 768,
+            variants: [768, size].map((w) => ({
+              path: `media/pictures/${id}-w${w}.webp`,
+              mime: 'image/webp',
+              bytes: 34,
+              width: w,
+            })),
+            provenance: { origin: 'unknown' },
+          }
+        }),
+      }),
+      { locales: ENABLED_LOCALE_CODES, mediaUrl },
+    )
+  }
+
+  const PICTURES = {
+    start: 'a',
+    flat_stones: 'b',
+    round_stones: 'c',
+    far_bank: 'f',
+    ending_dry: 'd',
+    ending_wet: 'e',
+  }
+
+  /** The img React writes for a scene picture (JSX prop order), and its band. */
+  function bandHtml(id: string, w: number, h: number, failed: boolean): string {
+    const small = url(id, 768)
+    return (
+      `<div data-scene-band="" class="${styles.sceneBand}" style="--img-w:${w};--img-h:${h}">` +
+      `<img data-scene-image=""${failed ? ' data-failed=""' : ''} ` +
+      `srcSet="${small} 768w, ${url(id, w)} ${w}w" ` +
+      `sizes="(min-width: 60rem) 60rem, 100vw" src="${small}" width="${w}" height="${h}" ` +
+      `fetchPriority="high" alt="" class="${styles.sceneImage}"/></div>`
+    )
+  }
+
+  /**
+   * The preload React's server renderer writes for a high-priority img (keyed by srcset plus
+   * sizes, no href): the same srcset and sizes as the img, so the browser fetches one file.
+   */
+  function serverPreloadHtml(id: string, w: number): string {
+    return (
+      `<link rel="preload" as="image" imageSrcSet="${url(id, 768)} 768w, ${url(id, w)} ${w}w" ` +
+      `imageSizes="(min-width: 60rem) 60rem, 100vw" fetchPriority="high"/>`
+    )
+  }
+
+  const runTag = (html: string): string =>
+    startTags(html, 'div').filter((tag) => /\sdata-run=""/.test(tag))[0] ?? ''
+
+  it.each(cases)(
+    '%s/%s: no picture, no band and no img (T-e7); the run area carries the scene id',
+    (_, locale, pkg) => {
+      const html = renderPlayer(dataOf(pkg), locale)
+      expect(html).not.toContain('data-scene-band')
+      expect(html).not.toContain('<img')
+      expect(html).not.toContain('<link')
+      const start = pkg.nodes.find((n) => n.id === pkg.startNodeId)
+      expect(start).toBeDefined()
+      expect(runTag(html)).toContain(` data-scene="${sceneIdOf(start?.scene ?? '')}"`)
+    },
+  )
+
+  it("the run area's data-scene: a legacy name gives its own scene, any other name forest-day", () => {
+    const [pkg] = fixtures
+    if (pkg === undefined) throw new Error('no fixture')
+    const named = (scene: string): string => {
+      const changed = structuredClone(pkg)
+      const start = changed.nodes.find((n) => n.id === changed.startNodeId)
+      if (start === undefined) throw new Error('no start node')
+      start.scene = scene
+      return runTag(renderPlayer(dataOf(changed), 'en'))
+    }
+    expect(named('river_bank')).toContain(' data-scene="river-bank"')
+    expect(named('lions_den')).toContain(' data-scene="lions-den"')
+    expect(named('meadow')).toContain(' data-scene="forest-day"')
+    expect(named('river-bank')).toContain(' data-scene="forest-day"')
+    // The scene attribute sits on the run area only, with its epoch and its class.
+    expect(named('palace')).toMatch(
+      new RegExp(
+        `^<div data-run="" data-epoch="0" data-scene="palace" class="${styles.runDependent}"`,
+      ),
+    )
+  })
+
+  it.each(['en', 'hi'] as const)(
+    '%s: a start node with a picture: the band after the title and before the story card',
+    (locale) => {
+      const html = renderPlayer(pictureData(PICTURES), locale)
+      const title = riverStones.text[locale].title
+      expect(html).toContain(
+        `<h1 class="${styles.title}">${escapeHtml(title)}</h1>` +
+          bandHtml('a'.repeat(64), 1408, 768, false) +
+          '<div data-story-card=""',
+      )
+      expect(all(html, /<img\b/g)).toHaveLength(1)
+      // React's own server preload of the current picture: its srcset and sizes, no href.
+      expect(all(html, /<link\b[^>]*>/g).map((m) => m[0])).toEqual([
+        serverPreloadHtml('a'.repeat(64), 1408),
+      ])
+      // A plain image load: no cross-origin mode, no lazy loading.
+      expect(html).not.toMatch(/crossorigin/i)
+      expect(html).not.toContain('loading=')
+      // The next pictures are never preloaded on the server or while opening (D11-P22): only
+      // after the open commit, in an effect. Their ids appear nowhere in the server HTML.
+      for (const letter of ['b', 'c', 'd', 'e', 'f']) {
+        expect(html).not.toContain(letter.repeat(64))
+      }
+    },
+  )
+
+  it('a start node without a picture in a picture story renders no band (T-e7)', () => {
+    const rest = Object.fromEntries(Object.entries(PICTURES).filter(([id]) => id !== 'start'))
+    const html = renderPlayer(pictureData(rest), 'en')
+    expect(html).not.toContain('data-scene-band')
+    expect(html).not.toContain('<img')
+  })
+
+  it('SceneImage: the square shape (C17), and data-failed once the picture failed', () => {
+    const data = pictureData(PICTURES)
+    const square = data.nodes.find((n) => n.id === 'far_bank')?.image ?? null
+    const wide = data.nodes.find((n) => n.id === 'start')?.image ?? null
+    if (square === null || wide === null) throw new Error('no picture')
+    const render = (image: typeof wide, failed: boolean): string =>
+      renderToString(createElement(SceneImage, { image, failed, onFailed: () => {} }))
+    const [f, a] = ['f'.repeat(64), 'a'.repeat(64)]
+    expect(render(square, false)).toBe(serverPreloadHtml(f, 1024) + bandHtml(f, 1024, 1024, false))
+    expect(render(wide, false)).toBe(serverPreloadHtml(a, 1408) + bandHtml(a, 1408, 768, false))
+    expect(render(wide, true)).toBe(serverPreloadHtml(a, 1408) + bandHtml(a, 1408, 768, true))
+  })
+
+  it('StoryPart places the band it is given after the title, and nothing when given none', () => {
+    const data = pictureData(PICTURES)
+    const state = start(graphOf(data), { path: ['start', 'flat_stones'], locale: 'en' })
+    const view = partViewOf(data, state)
+    const image = data.nodes.find((n) => n.id === 'flat_stones')?.image ?? null
+    if (image === null) throw new Error('no picture')
+    const part = (band: ReturnType<typeof createElement> | null): string =>
+      renderToString(
+        createElement(StoryPart, {
+          view,
+          interactive: true,
+          animate: false,
+          revealDone: false,
+          firstParagraphRef: createRef<HTMLParagraphElement>(),
+          onChoose: refuse,
+          backLabel: 'Back',
+          onBack: refuse,
+          image: band,
+        }),
+      )
+    const band = createElement(SceneImage, { image, failed: false, onFailed: () => {} })
+    expect(part(band)).toContain(
+      `</h1>${bandHtml('b'.repeat(64), 1408, 768, false)}<div data-story-card=""`,
+    )
+    expect(part(null)).not.toContain('data-scene-band')
+    expect(part(null)).toContain(`</h1><div data-story-card=""`)
+  })
+
+  it('the scene CSS: one gradient rule at the legacy angle, and one rule per scene id (read as text)', () => {
+    const css = playerCss()
+    expect(ruleBodyOf(css, '.runDependent[data-scene]')).toBe(
+      '  background-image: linear-gradient(160deg, var(--scene-from), var(--scene-to));\n',
+    )
+    for (const id of SCENE_IDS) {
+      expect(ruleBodyOf(css, `.runDependent[data-scene='${id}']`), id).toBe(
+        `  --scene-from: var(--scene-${id}-from);\n  --scene-to: var(--scene-${id}-to);\n`,
+      )
+    }
+    // No scene rule for anything but the 10 scene ids.
+    expect(all(css, /\[data-scene='([^']*)'\]/g).map((m) => m[1])).toEqual([...SCENE_IDS])
+    // Each names tokens that tokens.css declares.
+    const tokens = readFileSync(join(here, '..', 'styles', 'tokens.css'), 'utf8')
+    for (const id of SCENE_IDS) {
+      expect(tokens).toContain(`\n    --scene-${id}-from: #`)
+      expect(tokens).toContain(`\n    --scene-${id}-to: #`)
+    }
+  })
+
+  it('the band CSS: the picture ratio before the file arrives, 40svb at most, a failed img hidden', () => {
+    const css = playerCss()
+    expect(ruleBodyOf(css, '.sceneBand')).toBe(
+      [
+        '  --img-w: 1408;',
+        '  --img-h: 768;',
+        '  --scene-band-max: 40svb;',
+        '  overflow: hidden;',
+        '  inline-size: 100%;',
+        '  max-block-size: var(--scene-band-max);',
+        '  margin-block: 0 var(--space-5);',
+        '  border-radius: var(--radius-card);',
+        '  aspect-ratio: var(--img-w) / var(--img-h);',
+        '',
+      ].join('\n'),
+    )
+    expect(ruleBodyOf(css, '.sceneImage')).toBe(
+      [
+        '  display: block;',
+        '  inline-size: 100%;',
+        '  block-size: 100%;',
+        '  object-fit: cover;',
+        '',
+      ].join('\n'),
+    )
+    expect(ruleBodyOf(css, '.sceneImage[data-failed]')).toBe('  visibility: hidden;\n')
+    // The band is transparent, so a failed picture shows the run area's gradient.
+    expect(ruleBodyOf(css, '.sceneBand')).not.toMatch(/background/)
+  })
+})
+
+/** The declarations of the one rule whose selector list is exactly `selector`. */
+function ruleBodyOf(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const rules = all(css, new RegExp(`\\n${escaped} \\{\\n([^}]*)\\}`, 'g'))
+  expect(rules, selector).toHaveLength(1)
+  return rules[0]?.[1] ?? ''
+}

@@ -13,7 +13,13 @@
 //   load) in every enabled locale its package has. The gated build serves none of them.
 // - PLAYER_DOC_PATHS: two-paths in each enabled locale, kind 'player'. legRoutes adds them on the
 //   open legs only, so the shared document, shell and staging-banner loops visit a player page.
-// - PLAYER_NOT_FOUND_PATHS: player-shaped URLs no build serves (T-a21; 10e adds the picture id).
+// - PLAYER_NOT_FOUND_PATHS: player-shaped URLs no build serves (T-a21).
+// - playerNotFoundPaths(leg) (Step 10e, design §2.5, S4, F2): those, plus the staging-only picture
+//   story's read URL on every leg but staging, where it is a real page with media. Its id comes from
+//   the leaf module scripts/testing/picture-story-id.ts; this file names it only here and in the
+//   function, and the Vitest scan in scripts/testing/staging-catalogue.test.ts holds that (§9.1 G4).
+//   It answers only for the run's own leg (E2E_LAUNCH, when set): asked for another leg's paths on
+//   the staging leg, it would hand a spec the picture page, so it throws (review R-FS-1).
 // - formatted(): a UI string that takes arguments, formatted by the app's own ICU subset.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -21,7 +27,8 @@ import type { Page } from '@playwright/test'
 import { APP_NAME } from '../src/core/app-info'
 import { formatMessage, parseMessage, type MessageValues } from '../src/core/i18n/message-format'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
-import { legOpen, type LaunchLeg } from './launch-leg'
+import { PICTURE_STORY_ID } from '../scripts/testing/picture-story-id'
+import { launchLeg, legOpen, type LaunchLeg } from './launch-leg'
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -263,6 +270,23 @@ export const PLAYER_NOT_FOUND_PATHS = [
   '/ar/stories/two-paths/read',
   '/en/stories/TWO-PATHS/read',
 ] as const
+
+/**
+ * The player-shaped URLs that are the bilingual 404 on `leg` (T-a21, the gated player test):
+ * PLAYER_NOT_FOUND_PATHS, plus the read URL of the staging-only picture story on every leg but
+ * staging (design §2.5, S4, F2). On the staging leg that URL is a real page whose pictures load from
+ * the media origin, so only player-images.spec.ts, with its media stub, opens it there.
+ */
+export function playerNotFoundPaths(leg: LaunchLeg): string[] {
+  const run = process.env.E2E_LAUNCH
+  if (run !== undefined && launchLeg(run) !== leg) {
+    throw new Error(
+      `playerNotFoundPaths('${leg}') on the ${launchLeg(run)} leg: pass the run's leg`,
+    )
+  }
+  if (leg === 'staging') return [...PLAYER_NOT_FOUND_PATHS]
+  return [...PLAYER_NOT_FOUND_PATHS, `/en/stories/${PICTURE_STORY_ID}/read`]
+}
 
 // ---------------------------------------------------------------------------------------------
 // Page helpers

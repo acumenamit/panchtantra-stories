@@ -13,9 +13,11 @@
 // - Body: the skip link, the saved-run hint script (D11-P5, before the island so it runs before
 //   the first paint), then PlayerBoundary (catchError, D11-P17) around the Player island. Strings
 //   are resolved here; the island gets PlayerData and finished strings as props.
+// - Step 10e (D11-P2 C14): PlayerData's picture URLs are built here, on the server, by the
+//   reader's checked mediaUrl; the island never builds a media URL.
 import type { Metadata } from 'next'
 import { buildLaunch } from '@/config/launch'
-import { getStory, listStoriesForLocale, type BuiltStory } from '@/content'
+import { getStory, listStoriesForLocale, mediaUrl, type BuiltStory } from '@/content'
 import { ENABLED_LOCALE_CODES, parseEnabledLocale, type LocaleCode } from '@/core/locales'
 import { savedRunHintScript } from '@/core/progress/saved-run-hint'
 import { playerDataOf } from '@/reader/player/player-data'
@@ -65,7 +67,7 @@ export async function generateMetadata({ params }: PlayerPageProps): Promise<Met
 
 export default async function PlayerPage({ params }: PlayerPageProps) {
   const { code, story } = await playerPage(params)
-  const data = playerDataOf(story.pkg, { locales: ENABLED_LOCALE_CODES })
+  const data = playerDataOf(story.pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })
   const t = translator(code)
   return (
     <>
