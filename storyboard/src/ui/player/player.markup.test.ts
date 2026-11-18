@@ -1409,4 +1409,53 @@ describe('Step 10d: the story-language switch and the lang islands (server marku
     // A fixed width in em, so the endonym changing never moves Grown-ups.
     expect(ruleIn(shellCss(), '.switch')).toBe('  min-inline-size: 7em;\n')
   })
+
+  it("header row 1: the header's width in em, never the label widths, puts a nav that holds the switch on a row of its own (CI fix)", () => {
+    // Design D11-P16, amended at the 10d CI fix: only a nav whose child is the switch.
+    const navWithSwitch = '.player > header > nav:has(> [data-story-language])'
+    // The header is the query container, so the condition reads its width in its own em.
+    expect(ruleIn(playerCss(), '.player > header')).toBe('  container-type: inline-size;\n')
+    // Both @container blocks, and nothing else in any of them, take the :has() scope: a nav with
+    // no switch (a one-language story) keeps the 10c rows.
+    const blocks = all(playerCss(), /\n@container ([^{\n]*) \{\n([\s\S]*?)\n\}\n/g)
+    expect(blocks.map((block) => block[1])).toEqual([
+      '(inline-size < 25em)',
+      '(inline-size < 14.5em)',
+    ])
+    for (const block of blocks) {
+      const selectors = all(block[2] ?? '', /^ {2}(\S[^\n]*) \{$/gm).map((rule) => rule[1])
+      expect(selectors, `the selectors in @container ${block[1]}`).toEqual([navWithSwitch])
+    }
+    // Under 25em that nav is a full-width item: always a row of its own, whatever the fonts; under
+    // 14.5em the switch and Grown-ups always stack.
+    expect(playerCss()).toContain(
+      [
+        '\n@container (inline-size < 25em) {',
+        `  ${navWithSwitch} {`,
+        '    flex-basis: 100%;',
+        '  }',
+        '}\n',
+        '@container (inline-size < 14.5em) {',
+        `  ${navWithSwitch} {`,
+        '    flex-direction: column;',
+        '    align-items: flex-start;',
+        '  }',
+        '}\n',
+      ].join('\n'),
+    )
+    // The player header renders those elements: the nav right under the header, which is the
+    // first element of the player's root (the TextScaleSync before it renders nothing), with the
+    // switch as its first child, so the :has(> ...) matches it.
+    const [pkg] = fixtures
+    if (pkg === undefined) throw new Error('no fixture')
+    const html = renderPlayer(dataOf(pkg), 'hi')
+    expect(html).toMatch(
+      new RegExp(`^<div data-player=""[^>]*class="${styles.player}"[^>]*><header\\b[^>]*><a\\b`),
+    )
+    expect(html).toMatch(/<\/a><nav\b[^>]*><button\b[^>]*\sdata-story-language=""/)
+    // A one-language story's nav holds Grown-ups only: no child the :has() would match.
+    const single = renderPlayer(englishOnly, 'en')
+    expect(single).toMatch(/<\/a><nav\b[^>]*><a\b/)
+    expect(navOf(single)).not.toContain('data-story-language')
+  })
 })

@@ -27,9 +27,11 @@
 // no focus move, no announcement), the page, its chrome, <title> and URL stay on the route locale,
 // and the run is saved in the new language (reload resumes in it). T-d5 times its window from the
 // switch's commit, read in the page (a MutationObserver), never from the click.
+// Step 10d CI fix (CI run 44037149156): T-a20 logs each layout shift's sources; T-d6 holds the font
+// files under a test-only wide Devanagari fallback and checks the header keeps its rows.
 import type { ElementHandle, Page, Request } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
-import { PROGRESS_KEY } from '../src/core/progress/records'
+import { PROGRESS_KEY, type TextScale } from '../src/core/progress/records'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
 import { SETTLE_MS } from '../src/reader/player/view'
 import { expect, test as base } from './fixtures'
@@ -66,6 +68,8 @@ import {
   walk,
   watchDialogOpen,
   watchScaleAttribute,
+  WIDE_FALLBACK_SCALE,
+  wideDevanagariFallback,
   type ConsoleErrors,
   type FixtureGraph,
   type Point,
@@ -1350,12 +1354,19 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     })
   }
 
-  for (const code of ENABLED_LOCALE_CODES) {
-    test(`T-a20 /${code}: fonts held 1.5 s shift a fresh player by less than 0.1 (Chromium)`, async ({
+  // Step 10d CI fix: each locale also under the test-only wide Devanagari fallback (T-d6 has why),
+  // which reproduces on any OS the CI image's CLS 0.146 on chromium-phone /hi before the fix.
+  const fallbacks = ENABLED_LOCALE_CODES.flatMap((code) => [
+    { code, wide: false, name: `/${code}` },
+    { code, wide: true, name: `/${code} with a wide Devanagari fallback` },
+  ])
+  for (const { code, wide, name } of fallbacks) {
+    test(`T-a20 ${name}: fonts held 1.5 s shift a fresh player by less than 0.1 (Chromium)`, async ({
       page,
       browserName,
     }) => {
       test.skip(browserName !== 'chromium', 'the Layout Instability API is Chromium only')
+      if (wide) await wideDevanagariFallback(page)
       await recordLayoutShifts(page)
       let delayed = 0
       let released = 0
@@ -1397,13 +1408,21 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
         }),
         [LORA_FILE.source, NOTO_FILE.source],
       )
-      const { cls, raw, shifts, inputShifts } = await layoutShift(page)
+      const { cls, raw, shifts, inputShifts, lines } = await layoutShift(page)
       const description =
         `CLS ${cls.toFixed(6)}, raw ${raw.toFixed(6)} (${shifts} shifts, ${inputShifts} flagged ` +
         `as recent input; ${delayed} font files held; first paint ${timing.firstPaint.toFixed(0)} ` +
         `ms, fonts arrived ${timing.fontEnd.toFixed(0)} ms)`
-      console.log(`[player] T-a20 /${code} (${test.info().project.name}): ${description}`)
+      console.log(`[player] T-a20 ${name} (${test.info().project.name}): ${description}`)
+      // Each shift with what moved (selector, previous rect -> current rect, CSS px), so a CI log
+      // names the shifted nodes (Step 10d CI fix: the header's nav changing rows).
+      for (const line of lines) {
+        console.log(`[player] T-a20 ${name} (${test.info().project.name}): ${line}`)
+      }
       test.info().annotations.push({ type: 'CLS', description })
+      if (lines.length > 0) {
+        test.info().annotations.push({ type: 'CLS shifts', description: lines.join('\n') })
+      }
       // The page painted before the fonts arrived, so the swap was measured.
       expect(timing.firstPaint).toBeLessThan(timing.fontEnd)
       expect(cls).toBeLessThan(0.1)
@@ -3037,6 +3056,81 @@ const DEVANAGARI_700 = /noto[-_]sans[-_]devanagari[-_]devanagari[-_]700/
 /** T-d5: the face arrives in the first half of the window, so its swap is inside it. */
 const SWITCH_FONT_BY_MS = 500
 
+/**
+ * T-d6: the header's rows (its height, the nav's top and height, and main's top, in px from the
+ * header's top), and the width of a Devanagari sample: on /hi the All stories label, elsewhere the
+ * switch's Hindi endonym. Also the header's content width in its own em (what the @container
+ * conditions read) and <html data-text-scale>. Waits for the wide fallback's faces first
+ * (wideDevanagariFallback).
+ */
+async function headerRows(
+  page: Page,
+  code: LocaleCode,
+): Promise<{
+  rows: { header: number; nav: number; navHeight: number; main: number }
+  sample: number
+  em: number
+  scale: string | null
+}> {
+  return page.evaluate(
+    async ({ sample, attribute }) => {
+      await (window as unknown as Record<string, unknown>)['__e2eWideFallback']
+      const header = document.querySelector('[data-player] > header')
+      const nav = header?.querySelector(':scope > nav')
+      const main = document.querySelector('[data-player] > main')
+      const text = document.querySelector(sample)
+      if (!header || !nav || !main || !text) throw new Error('no header, nav, main or sample')
+      const top = header.getBoundingClientRect().top
+      const style = getComputedStyle(header)
+      const content =
+        header.clientWidth -
+        parseFloat(style.paddingInlineStart) -
+        parseFloat(style.paddingInlineEnd)
+      return {
+        rows: {
+          header: Math.round(header.getBoundingClientRect().height),
+          nav: Math.round(nav.getBoundingClientRect().top - top),
+          navHeight: Math.round(nav.getBoundingClientRect().height),
+          main: Math.round(main.getBoundingClientRect().top - top),
+        },
+        sample: Math.round(text.getBoundingClientRect().width * 10) / 10,
+        em: Math.round((content / parseFloat(style.fontSize)) * 100) / 100,
+        scale: document.documentElement.getAttribute(attribute),
+      }
+    },
+    {
+      sample: code === 'hi' ? 'header [data-exit] span' : `${SWITCH} span[lang="hi"]`,
+      attribute: TEXT_SCALE_ATTRIBUTE,
+    },
+  )
+}
+
+/**
+ * T-d6 at a larger text size: the projects whose header is under 14.5em at 150% (Pixel 7 380 px
+ * of 27 px, 14.1em; iPhone 15 361 px, 13.4em), where the 14.5em rule stacks the switch and
+ * Grown-ups.
+ */
+const T_D6_PHONES: readonly string[] = ['chromium-phone', 'webkit-iphone']
+
+/**
+ * T-d6's layouts: the project's own at 100% (every project), then, on the phones, 150% and 320 px
+ * at 125% (288 px of 22.5 px, 12.8em): both under 14.5em, so the 14.5em rule is in force (lead
+ * review R3/F1). `fallback` is the wide fallback's size-adjust: one wide enough that, without the
+ * 14.5em rule, it parts the switch and Grown-ups on /hi while the files are held (measured on a
+ * build without that rule: at 320 px and 125% from about 121%; at 150% from about 146% on the
+ * iPhone 15 and 165% on the Pixel 7, so 140% parts neither there and 150% uses 180%).
+ */
+const T_D6_LAYOUTS: readonly {
+  readonly scale: TextScale
+  readonly width?: number
+  readonly fallback: number
+  readonly name: string
+}[] = [
+  { scale: 100, fallback: WIDE_FALLBACK_SCALE, name: '' },
+  { scale: 150, fallback: 180, name: ' at 150%' },
+  { scale: 125, width: 320, fallback: WIDE_FALLBACK_SCALE, name: ' at 320 px and 125%' },
+]
+
 /** The language the switch offers on a page whose story is in `code`: the other enabled one. */
 function otherLocale(code: LocaleCode): LocaleCode {
   const other = ENABLED_LOCALE_CODES.find((candidate) => candidate !== code)
@@ -3580,6 +3674,155 @@ test.describe('the story player, Step 10d', { tag: '@review' }, () => {
       SWITCH_SHIFT_MAX,
     )
   })
+
+  // T-d6 (Step 10d CI fix, CI run 44037149156): T-a20 failed on chromium-phone /hi with CLS 0.146
+  // on the CI image only. Its Devanagari fallback is much wider than Noto Sans Devanagari, so with
+  // the font files held, All stories plus the nav (the switch, Grown-ups) no longer fit on header
+  // row 1: the nav wrapped to a row of its own, and when the files arrived it moved back up, and
+  // main with it. Here a test-only fallback 40% wider (wideDevanagariFallback) stands in for the CI
+  // one on every engine, and the header's rows, the nav's row and height and main must be where
+  // they were while the files were held. All 5 projects: the phones are where the rows could
+  // change. On the phones also at 150% and at 320 px and 125%, where the header is under 14.5em,
+  // so the switch and Grown-ups, which a wide fallback would part, stay stacked (T_D6_LAYOUTS).
+  for (const code of ENABLED_LOCALE_CODES) {
+    for (const { scale, width, fallback, name } of T_D6_LAYOUTS) {
+      test(`T-d6 /${code}${name}: with a wide Devanagari fallback, the fonts arriving keep the header rows and main in place`, async ({
+        page,
+      }) => {
+        if (scale !== 100) {
+          test.skip(
+            !T_D6_PHONES.includes(test.info().project.name),
+            'the phones: where this text size puts the header under 14.5em',
+          )
+          await seedPrefs(page, prefsText(scale))
+        }
+        if (width !== undefined) {
+          const viewport = page.viewportSize()
+          if (!viewport) throw new Error('the project sets no viewport')
+          await page.setViewportSize({ width, height: viewport.height })
+        }
+        await td6(page, code, scale, fallback)
+      })
+    }
+  }
+
+  // T-d6, the scope (design D11-P16, amended at the 10d CI fix): the forced rows are for a nav
+  // that holds the story-language switch only. At 320 px and 150% the header is 10.7em, under both
+  // conditions: with the switch the nav is a full-width item and its items stack; with the
+  // switch's data attribute taken off (a one-language story's nav has no switch; the fixtures have
+  // no such story), the same nav computes the 10c flow; with it back, the rules apply again.
+  for (const code of ENABLED_LOCALE_CODES) {
+    test(`T-d6 /${code}: a header nav without the story-language switch keeps the 10c flow`, async ({
+      page,
+    }) => {
+      const viewport = page.viewportSize()
+      if (!viewport) throw new Error('the project sets no viewport')
+      await page.setViewportSize({ width: 320, height: viewport.height })
+      await seedPrefs(page, prefsText(150))
+      await openPlayer(page, playerPath(code, 'two-paths'))
+      await expect(page.locator('html')).toHaveAttribute(TEXT_SCALE_ATTRIBUTE, '150')
+      const flow = () =>
+        page.evaluate(() => {
+          const header = document.querySelector('[data-player] > header')
+          const nav = header?.querySelector(':scope > nav')
+          if (!header || !nav) throw new Error('no header or nav')
+          const style = getComputedStyle(nav)
+          const box = getComputedStyle(header)
+          const content =
+            header.clientWidth -
+            parseFloat(box.paddingInlineStart) -
+            parseFloat(box.paddingInlineEnd)
+          return {
+            em: Math.round((content / parseFloat(box.fontSize)) * 100) / 100,
+            flow: {
+              basis: style.flexBasis,
+              direction: style.flexDirection,
+              align: style.alignItems,
+            },
+          }
+        })
+      const forced = { basis: '100%', direction: 'column', align: 'flex-start' }
+      const withSwitch = await flow()
+      expect(withSwitch.em, 'the header in its own em: under 14.5em').toBeLessThan(14.5)
+      expect(withSwitch.flow, 'the nav with the switch').toEqual(forced)
+      await page.locator(SWITCH).evaluate((button) => button.removeAttribute('data-story-language'))
+      await expect(page.locator(SWITCH)).toHaveCount(0)
+      const without = await flow()
+      console.log(
+        `[player] T-d6 /${code} scope (${test.info().project.name}): with ` +
+          `${JSON.stringify(withSwitch)}; without ${JSON.stringify(without)}`,
+      )
+      expect(without.flow, 'the nav without the switch (10c)').toEqual({
+        basis: 'auto',
+        direction: 'row',
+        align: 'center',
+      })
+      await page
+        .locator('[data-player] > header > nav > button')
+        .evaluate((button) => button.setAttribute('data-story-language', ''))
+      expect((await flow()).flow, 'the nav with the switch again').toEqual(forced)
+    })
+  }
+
+  /**
+   * One T-d6 run: the font files held under the wide fallback (size-adjust `fallback`%), the header
+   * measured while held, then again once the files arrived and the player opened.
+   */
+  async function td6(
+    page: Page,
+    code: LocaleCode,
+    scale: TextScale,
+    fallback: number,
+  ): Promise<void> {
+    await wideDevanagariFallback(page, fallback)
+    let delayed = 0
+    let released = 0
+    // As T-a20: every Lora and Noto file is held 1.5 s.
+    await page.route(
+      (url) => LORA_FILE.test(url.pathname) || NOTO_FILE.test(url.pathname),
+      async (route) => {
+        delayed++
+        await sleep(1500)
+        await route.continue().catch(() => undefined)
+        released++
+      },
+    )
+    const response = await page.goto(playerPath(code, 'two-paths'), {
+      waitUntil: 'domcontentloaded',
+    })
+    expect(response?.status(), 'status').toBe(200)
+    await expect.poll(() => delayed, { timeout: 15_000 }).toBeGreaterThan(0)
+    const held = await headerRows(page, code)
+    expect(released, 'the held layout was measured before any font file arrived').toBe(0)
+    await expect.poll(() => released === delayed, { timeout: 15_000 }).toBe(true)
+    await waitOpen(page)
+    await settleFonts(page)
+    await frames(page)
+    const after = await headerRows(page, code)
+    const description = `held ${JSON.stringify(held)}; after ${JSON.stringify(after)}`
+    const at =
+      scale === 100
+        ? ''
+        : ` ${scale}% at ${page.viewportSize()?.width ?? '?'} px, fallback ${fallback}%`
+    console.log(`[player] T-d6 /${code}${at} (${test.info().project.name}): ${description}`)
+    test.info().annotations.push({ type: 'T-d6', description })
+    // The text size was in force while the files were held, and stayed.
+    const attribute = scale === 100 ? null : String(scale)
+    expect(held.scale, 'data-text-scale while held').toBe(attribute)
+    expect(after.scale, 'data-text-scale after').toBe(attribute)
+    // At a larger text size the header is under 14.5em, so the 14.5em rule is what holds the nav
+    // (not vacuous).
+    if (scale !== 100) expect(held.em, 'the header in its own em').toBeLessThan(14.5)
+    // The wide fallback was in force while the files were held (not vacuous).
+    expect(
+      held.sample / after.sample,
+      `Devanagari sample width held ${held.sample} px over after ${after.sample} px`,
+    ).toBeGreaterThan(1.2)
+    expect(
+      held.rows,
+      'header height, nav top, nav height and main top (px from the header top)',
+    ).toEqual(after.rows)
+  }
 })
 
 // The collector's own negative tests (design §9.3 C4, F5): each must fail in the auto fixture's

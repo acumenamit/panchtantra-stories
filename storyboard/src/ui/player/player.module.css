@@ -189,6 +189,38 @@
 }
 
 /*
+ * Header row 1 (Step 10d CI fix; T-a20, T-d6): All stories, then the nav (the story-language
+ * switch, Grown-ups). Whether both fit on one row must not depend on the label widths: on the CI
+ * image a Devanagari fallback wider than Noto Sans Devanagari wrapped the nav to a row of its own
+ * until the font files arrived, then the nav moved back up and main with it (CLS 0.146 on the
+ * Pixel 7). So the header's own width in em decides: under 25em the nav always takes a row of its
+ * own (as at 320 and 360 px already); from 25em one row holds both (they need about 20em, so a
+ * fallback about half again as wide still fits). The same inside the nav, where the switch and
+ * Grown-ups could part the same way at 125% and 150% on a phone: under 14.5em they always stack
+ * (as when they wrap), from 14.5em one row holds both (they need about 13.6em at most). The header
+ * is the query container: its width comes from the page, never from its content, and its em
+ * follows the text size. Only a nav that holds the switch (design D11-P16, amended at the 10d CI
+ * fix): a one-language story's header (All stories, Grown-ups) keeps the 10c rows, and a browser
+ * without :has() drops both rules and keeps the 10d rows.
+ */
+.player > header {
+  container-type: inline-size;
+}
+
+@container (inline-size < 25em) {
+  .player > header > nav:has(> [data-story-language]) {
+    flex-basis: 100%;
+  }
+}
+
+@container (inline-size < 14.5em) {
+  .player > header > nav:has(> [data-story-language]) {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/*
  * Step 10b (§4.1, D11-P10 to P12, P19). Header row 2: the progress segments, then Menu at the
  * inline end. A full-width flex item of the header, so it always starts under row 1; the menu
  * panel follows it as another full-width item.

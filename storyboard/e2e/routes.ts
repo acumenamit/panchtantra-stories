@@ -318,16 +318,62 @@ export async function failStorageWrites(page: Page): Promise<void> {
  * input although no input was sent (probe 2026-11-15: the storage banner's shift on /en), so both
  * sums are kept: CLS by its definition leaves those out, the raw sum keeps them. Each shift also
  * keeps its startTime (performance.now() time), so a test can sum one window (Step 10d, T-d5).
+ * Step 10d CI fix: each shift also keeps its sources, each as "selector (x,y,w,h) -> (x,y,w,h)"
+ * (previousRect, then currentRect, in CSS px), so a test's log names what moved (layoutShift lines).
+ * The selector is the node's element name with its data-* attribute names and lang, else its
+ * :nth-child, after its parents up to the nearest one with a data-* attribute (4 levels at most).
  */
 export async function recordLayoutShifts(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>
-    const shifts: { value: number; input: boolean; t: number }[] = []
+    const shifts: { value: number; input: boolean; t: number; sources: string[] }[] = []
     w['__e2eShifts'] = shifts
+    const step = (element: Element): string => {
+      const marks = [...element.attributes]
+        .filter((attribute) => attribute.name.startsWith('data-') || attribute.name === 'lang')
+        .map((attribute) =>
+          attribute.name === 'lang' ? `[lang=${attribute.value}]` : `[${attribute.name}]`,
+        )
+        .join('')
+      if (marks !== '') return element.localName + marks
+      const parent = element.parentElement
+      const index = parent === null ? 1 : [...parent.children].indexOf(element) + 1
+      return `${element.localName}:nth-child(${index})`
+    }
+    const selector = (node: Node | null): string => {
+      if (node === null) return '(a removed node)'
+      let element = node instanceof Element ? node : node.parentElement
+      const parts: string[] = []
+      for (let depth = 0; element !== null && depth < 4; depth++) {
+        const part = step(element)
+        parts.unshift(part)
+        if (part.includes('[data-')) break
+        element = element.parentElement
+      }
+      return `${node.nodeType === Node.TEXT_NODE ? 'text in ' : ''}${parts.join(' > ')}`
+    }
+    const box = (rect: DOMRectReadOnly): string =>
+      [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value)).join(',')
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
-        const shift = entry as PerformanceEntry & { value: number; hadRecentInput: boolean }
-        shifts.push({ value: shift.value, input: shift.hadRecentInput, t: shift.startTime })
+        const shift = entry as PerformanceEntry & {
+          value: number
+          hadRecentInput: boolean
+          sources?: readonly {
+            node: Node | null
+            previousRect: DOMRectReadOnly
+            currentRect: DOMRectReadOnly
+          }[]
+        }
+        shifts.push({
+          value: shift.value,
+          input: shift.hadRecentInput,
+          t: shift.startTime,
+          sources: (shift.sources ?? []).map(
+            (source) =>
+              `${selector(source.node)} (${box(source.previousRect)}) -> (${box(source.currentRect)})`,
+          ),
+        })
       }
     }).observe({ type: 'layout-shift', buffered: true })
   })
@@ -337,15 +383,16 @@ export async function recordLayoutShifts(page: Page): Promise<void> {
  * The layout shifts so far, summed (stricter than CLS's session window): `cls` without the shifts
  * flagged as recent input, `raw` with them, and how many shifts there were of each. With `between`
  * (performance.now() times in the page), only the shifts whose startTime lies in [from, to] count.
+ * `lines`: one log line per counted or flagged shift, with its value, time and sources.
  */
 export async function layoutShift(
   page: Page,
   between: { readonly from: number; readonly to: number } | null = null,
-): Promise<{ cls: number; raw: number; shifts: number; inputShifts: number }> {
+): Promise<{ cls: number; raw: number; shifts: number; inputShifts: number; lines: string[] }> {
   const recorded = await page.evaluate(
     () =>
       ((window as unknown as Record<string, unknown>)['__e2eShifts'] as
-        { value: number; input: boolean; t: number }[] | undefined) ?? [],
+        { value: number; input: boolean; t: number; sources: string[] }[] | undefined) ?? [],
   )
   const shifts =
     between === null
@@ -358,6 +405,11 @@ export async function layoutShift(
     raw: sum(shifts),
     shifts: counted.length,
     inputShifts: shifts.length - counted.length,
+    lines: shifts.map(
+      (shift) =>
+        `shift ${shift.value.toFixed(6)} at ${shift.t.toFixed(0)} ms` +
+        `${shift.input ? ' (recent input)' : ''}: ${shift.sources.join('; ') || 'no sources'}`,
+    ),
   }
 }
 

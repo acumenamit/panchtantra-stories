@@ -174,6 +174,50 @@ export function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+/** wideDevanagariFallback's default: Devanagari laid out 40% wider than Noto Sans Devanagari. */
+export const WIDE_FALLBACK_SCALE = 140
+
+/**
+ * Step 10d CI fix (T-d6): before any page script, a Devanagari fallback much wider than the
+ * self-hosted face, as on the CI image (run 44037149156: Linux, whose fallback is not the Windows
+ * one, Nirmala UI, which is close to Noto). The committed Noto Sans Devanagari 400 and 700 files,
+ * added from bytes under the family name 'Noto Sans Devanagari' (the first system fallback in
+ * --font-hindi and --font-latin, tokens.css, so it shadows an installed copy) with size-adjust
+ * `scale`% and only the Devanagari range. While a test holds the self-hosted files, Devanagari text
+ * is laid out `scale`% wider than once they arrive, on every engine and OS. Test-only: the app
+ * itself never adjusts font metrics (design L5). window.__e2eWideFallback is a promise that
+ * resolves when both faces are loaded.
+ */
+export async function wideDevanagariFallback(
+  page: Page,
+  scale = WIDE_FALLBACK_SCALE,
+): Promise<void> {
+  const file = (weight: number): string =>
+    readFileSync(
+      path.join(ROOT, `src/ui/fonts/files/noto-sans-devanagari-devanagari-${weight}.woff2`),
+    ).toString('base64')
+  await page.addInitScript(
+    ({ faces, range, sizeAdjust }) => {
+      const loaded = faces.map(({ weight, data }) => {
+        const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+        const face = new FontFace('Noto Sans Devanagari', bytes, {
+          weight,
+          unicodeRange: range,
+          sizeAdjust,
+        } as FontFaceDescriptors)
+        document.fonts.add(face)
+        return face.loaded
+      })
+      ;(window as unknown as Record<string, unknown>)['__e2eWideFallback'] = Promise.all(loaded)
+    },
+    {
+      faces: [400, 700].map((weight) => ({ weight: String(weight), data: file(weight) })),
+      range: DEVANAGARI_RANGE,
+      sizeAdjust: `${scale}%`,
+    },
+  )
+}
+
 /** The served CSS's @font-face families, by the custom property next/font sets for each. */
 export async function fontFamilies(
   page: Page,
