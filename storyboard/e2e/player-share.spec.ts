@@ -29,6 +29,11 @@
 // - Step 10d (the 10c hand-off; design D11-P4): a story-language switch at an ending keeps the
 //   card and resets Share: "Link copied." or the field holding the old language's URL goes, the next
 //   tap shares the new language's URL, and a copy pending across the switch ends unseen.
+// - P1-4 owner screens (design p1-4-polish-design.md §5): T8 (the manual field on its own
+//   full-width line under the action row), T9 (the T-c2 copied case parametrised: "Link copied."
+//   next to Share) and T8c (the 10d hand-off manual case: after a switch the row keeps its order and
+//   Try another path restarts). T8 and T9 also run under the wide Devanagari fallback with the
+//   self-hosted font files aborted (Chromium logs each abort; WebKit logs none).
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
 import { expect, test as base } from './fixtures'
@@ -47,14 +52,17 @@ import {
   pageValue,
   PART,
   PLAYER,
+  prefsText,
   recordAnnouncements,
   RUN,
+  seedPrefs,
   seedProgressOnce,
   settleFonts,
   sharedPoint,
   storedStory,
   walk,
   watchDialogOpen,
+  wideDevanagariFallback,
   type ConsoleErrors,
 } from './page-helpers'
 import { formatted, message, playerFixture, playerPath, uiLang } from './routes'
@@ -491,6 +499,109 @@ async function reachEnding(
   await waitCardSettled(page)
 }
 
+// P1-4 owner screens (design p1-4-polish-design.md T8, T9): the share states under each text size
+// and font the layout rule asks for (rules LAYOUT STABILITY): /en and /hi with the fonts loaded,
+// 150% on the phones; and /hi under a Devanagari fallback much wider than Noto (the CI image's),
+// kept for the whole test by aborting the self-hosted font files (holding them makes WebKit never
+// let a choice be tapped; design §1.4, RP4).
+
+interface RowVariant {
+  readonly code: LocaleCode
+  readonly scale: 100 | 150
+  /** The wide Devanagari fallback, the self-hosted font files aborted. */
+  readonly wide: boolean
+}
+
+const ROW_VARIANTS: readonly RowVariant[] = [
+  { code: 'en', scale: 100, wide: false },
+  { code: 'hi', scale: 100, wide: false },
+  { code: 'en', scale: 150, wide: false },
+  { code: 'hi', scale: 150, wide: false },
+  { code: 'hi', scale: 100, wide: true },
+  { code: 'hi', scale: 150, wide: true },
+]
+const ROW_PHONES: readonly string[] = ['chromium-phone', 'webkit-iphone']
+const ROW_TABLETS: readonly string[] = [
+  'chromium-tablet',
+  'chromium-tablet-landscape',
+  'webkit-ipad',
+]
+const LORA_FILE = /\/_next\/static\/media\/lora[^/]*\.woff2$/
+const NOTO_FILE = /\/_next\/static\/media\/noto[-_]sans[-_]devanagari[^/]*\.woff2$/
+/** An aborted font file: Chromium logs each one; WebKit logs none. */
+const FONT_FAILED_LINE = /^Failed to load resource: net::ERR_FAILED$/
+
+/** The test title's suffix; none for /en at 100% with the fonts loaded (the original case). */
+function variantName(variant: RowVariant): string {
+  if (variant.code === 'en' && variant.scale === 100 && !variant.wide) return ''
+  return ` (/${variant.code}, ${variant.scale}%${variant.wide ? ', wide Devanagari fallback, font files aborted' : ''})`
+}
+
+/** 150% text runs on the phones only. */
+function skipVariant(variant: RowVariant): void {
+  test.skip(
+    variant.scale !== 100 && !ROW_PHONES.includes(test.info().project.name),
+    '150% text: the phones',
+  )
+}
+
+/**
+ * Before the page opens: the variant's text size and, for a wide variant, the wide Devanagari
+ * fallback with every self-hosted font file aborted (Chromium logs each abort). Returns the count
+ * of aborted requests so far.
+ */
+async function prepareVariant(
+  page: Page,
+  variant: RowVariant,
+  errors: ConsoleErrors,
+): Promise<() => number> {
+  if (variant.scale !== 100) await seedPrefs(page, prefsText(variant.scale))
+  let aborted = 0
+  if (variant.wide) {
+    errors.allow({ chromium: [FONT_FAILED_LINE] })
+    await wideDevanagariFallback(page)
+    await page.route(
+      (url) => LORA_FILE.test(url.pathname) || NOTO_FILE.test(url.pathname),
+      async (route) => {
+        aborted++
+        await route.abort().catch(() => undefined)
+      },
+    )
+  }
+  return () => aborted
+}
+
+/**
+ * The wide variant's precondition (design §5): font files were aborted, every self-hosted
+ * Devanagari face failed and both wide 'Noto Sans Devanagari' faces loaded, so the wide fallback
+ * lays out the Devanagari text for the whole test.
+ */
+async function expectWideFallback(page: Page, aborted: number): Promise<void> {
+  expect(aborted, 'precondition: font files aborted').toBeGreaterThan(0)
+  await page.evaluate(async () => {
+    await (window as unknown as Record<string, unknown>)['__e2eWideFallback']
+  })
+  await settleFonts(page)
+  const faces = await page.evaluate(() =>
+    [...document.fonts].map((face) => ({
+      family: face.family.replace(/["']/g, ''),
+      status: face.status,
+    })),
+  )
+  const own = faces.filter(
+    (face) => face.family !== 'Noto Sans Devanagari' && /devanagari/i.test(face.family),
+  )
+  expect(own.length, 'precondition: the self-hosted Devanagari faces').toBeGreaterThan(0)
+  expect(
+    own.map((face) => `${face.family}: ${face.status}`),
+    'precondition: every self-hosted Devanagari face failed',
+  ).toEqual(own.map((face) => `${face.family}: error`))
+  expect(
+    faces.filter((face) => face.family === 'Noto Sans Devanagari').map((face) => face.status),
+    'precondition: both wide fallback faces loaded',
+  ).toEqual(['loaded', 'loaded'])
+}
+
 test.describe('the story player, Step 10c: the ending card', { tag: '@review' }, () => {
   for (const code of ENABLED_LOCALE_CODES) {
     test(`T-c1 /${code}: the card at ending_light, the count announced; Try another path to the alternate ending_shadow`, async ({
@@ -860,47 +971,100 @@ test.describe('the story player, Step 10c: the ending card', { tag: '@review' },
 })
 
 test.describe('the story player, Step 10c: Share', { tag: '@review' }, () => {
-  test('T-c2 no share sheet: the clipboard copies the URL; "Link copied." is shown and announced', async ({
-    page,
-    context,
-    browserName,
-  }) => {
-    // Chromium: the real clipboard with permissions granted; WebKit: a resolving writeText stub
-    // (the real WebKit clipboard and share sheets are device checks at P1-11, H-24).
-    const setup: ShareSetup = {
-      share: 'undefined',
-      clipboard: browserName === 'chromium' ? 'real' : 'resolve',
-    }
-    if (setup.clipboard === 'real') {
-      await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-    }
-    await stubShare(page, setup)
-    await recordAnnouncements(page)
-    await reachEnding(page, 'en')
-    await expectShareSetup(page, setup)
-    const url = shareUrl(page, 'en')
-    await page.locator(SHARE).click()
-    await expect(page.locator(SHARE_STATUS)).toHaveText(message('en', 'player.linkCopied'))
-    await expect(page.locator(SHARE_STATUS)).toBeVisible()
-    await expect(page.locator(SHARE_URL), 'no field after a copy').toHaveCount(0)
-    await expect(page.locator('#live-region')).toHaveText(message('en', 'player.linkCopied'))
-    expect(await announcements(page), 'announced').toEqual([
-      formatted('en', 'player.page', { n: 2 }),
-      formatted('en', 'player.endingCount', { found: 1, total: 2 }),
-      message('en', 'player.linkCopied'),
-    ])
-    const calls = await shareCalls(page)
-    expect(calls.share, 'share').toEqual([])
-    if (setup.clipboard === 'real') {
-      expect(calls.writeText, 'no stub').toEqual([])
-      expect(
-        await page.evaluate(() => navigator.clipboard.readText()),
-        'the clipboard holds the URL',
-      ).toBe(url)
-    } else {
-      expect(calls.writeText, 'writeText').toEqual([url])
-    }
-  })
+  // P1-4 owner screens (T9): "Link copied." stays next to Share, in Share's own element and before
+  // All stories; with the fonts loaded it sits on Share's line, after it, one line high. Under the
+  // wide Devanagari fallback (the font files aborted) the line may wrap, as it did before the
+  // change (design §3.8.6, RP6), so only the structure is checked there.
+  for (const variant of ROW_VARIANTS) {
+    test(`T-c2 no share sheet: the clipboard copies the URL; "Link copied." is shown and announced${variantName(variant)}`, async ({
+      page,
+      context,
+      browserName,
+      errors,
+    }) => {
+      skipVariant(variant)
+      const { code } = variant
+      const lang = uiLang(code)
+      // Chromium: the real clipboard with permissions granted; WebKit: a resolving writeText stub
+      // (the real WebKit clipboard and share sheets are device checks at P1-11, H-24).
+      const setup: ShareSetup = {
+        share: 'undefined',
+        clipboard: browserName === 'chromium' ? 'real' : 'resolve',
+      }
+      if (setup.clipboard === 'real') {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+      }
+      const aborted = await prepareVariant(page, variant, errors)
+      await stubShare(page, setup)
+      await recordAnnouncements(page)
+      await reachEnding(page, code)
+      await expectShareSetup(page, setup)
+      const url = shareUrl(page, code)
+      await page.locator(SHARE).click()
+      await expect(page.locator(SHARE_STATUS)).toHaveText(message(lang, 'player.linkCopied'))
+      await expect(page.locator(SHARE_STATUS)).toBeVisible()
+      await expect(page.locator(SHARE_URL), 'no field after a copy').toHaveCount(0)
+      await expect(page.locator('#live-region')).toHaveText(message(lang, 'player.linkCopied'))
+      expect(await announcements(page), 'announced').toEqual([
+        formatted(lang, 'player.page', { n: 2 }),
+        formatted(lang, 'player.endingCount', { found: 1, total: 2 }),
+        message(lang, 'player.linkCopied'),
+      ])
+      const calls = await shareCalls(page)
+      expect(calls.share, 'share').toEqual([])
+      if (setup.clipboard === 'real') {
+        expect(calls.writeText, 'no stub').toEqual([])
+        expect(
+          await page.evaluate(() => navigator.clipboard.readText()),
+          'the clipboard holds the URL',
+        ).toBe(url)
+      } else {
+        expect(calls.writeText, 'writeText').toEqual([url])
+      }
+
+      if (variant.wide) await expectWideFallback(page, aborted())
+      else await settleFonts(page)
+      const status = await page.locator(CARD).evaluate((section) => {
+        const get = (selector: string): Element => {
+          const found = section.querySelector(selector)
+          if (found === null) throw new Error(`no ${selector}`)
+          return found
+        }
+        const share = get('button[data-share]')
+        const shown = get('[data-share-status]')
+        const all = get('a[data-all-stories]')
+        const box = shown.getBoundingClientRect()
+        const button = share.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(shown)
+        const lines = [...range.getClientRects()].filter((rect) => rect.width > 0)
+        const [first] = lines
+        return {
+          sameParent: shown.parentElement !== null && shown.parentElement === share.parentElement,
+          beforeAllStories:
+            (shown.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+          afterShare: box.left >= button.right,
+          besideShare: box.top < button.bottom && box.bottom > button.top,
+          oneLine:
+            first !== undefined &&
+            lines.every((rect) => rect.top < first.bottom && rect.bottom > first.top),
+          status: [box.left, box.top, box.right, box.bottom],
+          share: [button.left, button.top, button.right, button.bottom],
+        }
+      })
+      console.log(
+        `[player-share] T9 /${code} ${variant.scale}%${variant.wide ? ' wide' : ''} ` +
+          `(${test.info().project.name}): ${JSON.stringify(status)}`,
+      )
+      expect(status.sameParent, '"Link copied." in the element that holds Share').toBe(true)
+      expect(status.beforeAllStories, '"Link copied." before All stories').toBe(true)
+      if (!variant.wide) {
+        expect(status.afterShare, '"Link copied." after Share on the line').toBe(true)
+        expect(status.besideShare, '"Link copied." on Share\'s line').toBe(true)
+        expect(status.oneLine, '"Link copied." one line high').toBe(true)
+      }
+    })
+  }
 
   test('T-c2 the clipboard refuses: a read-only field labelled "Copy this link:" holds the URL, focused and selected', async ({
     page,
@@ -938,6 +1102,139 @@ test.describe('the story player, Step 10c: Share', { tag: '@review' }, () => {
       formatted('en', 'player.endingCount', { found: 1, total: 2 }),
     ])
   })
+
+  // P1-4 owner screens (T8; design p1-4-polish-design.md R2): the label and the field go on their
+  // own full-width line under the action row, still inside the settling wrapper; the row keeps Try
+  // another path, Share and All stories (one row on the tablets). The field moved in the DOM, so
+  // the visual, DOM and Tab orders agree (WCAG 1.3.2, 2.4.3): Tab from the field goes to Back, and
+  // Shift+Tab to All stories (Playwright's WebKit leaves links out of the Tab order, so Share
+  // there). Under the wide Devanagari fallback (the font files aborted) the layout must hold too;
+  // the keyboard order does not depend on the font, so it runs with the fonts loaded only.
+  for (const variant of ROW_VARIANTS) {
+    test(`T-c2 the clipboard refuses: the field is on its own full-width line under the actions${variantName(variant)}`, async ({
+      page,
+      browserName,
+      errors,
+    }) => {
+      skipVariant(variant)
+      const { code } = variant
+      const project = test.info().project.name
+      const setup: ShareSetup = { share: 'undefined', clipboard: 'reject' }
+      const aborted = await prepareVariant(page, variant, errors)
+      await stubShare(page, setup)
+      await reachEnding(page, code)
+      await expectShareSetup(page, setup)
+      const url = shareUrl(page, code)
+      await page.locator(SHARE).click()
+      // Anywhere in the card: (a) checks that it is inside the wrapper.
+      const field = page.locator(`${CARD} input[data-share-url]`)
+      await expect(field, 'precondition: the field').toBeVisible()
+      await expect(field, 'precondition: the field has focus').toBeFocused()
+      expect(
+        await field.evaluate((input: HTMLInputElement) => [
+          input.value,
+          input.selectionStart,
+          input.selectionEnd,
+        ]),
+        'precondition: the field holds the URL, selected',
+      ).toEqual([url, 0, url.length])
+      await expect(page.locator(TRY_ANOTHER), 'precondition: Try another path').toBeVisible()
+      await expect(page.locator(SHARE), 'precondition: Share').toBeVisible()
+      await expect(page.locator(ALL_STORIES), 'precondition: All stories').toBeVisible()
+      if (variant.wide) await expectWideFallback(page, aborted())
+      else await settleFonts(page)
+
+      const row = await page.locator(CARD).evaluate((section) => {
+        const get = (selector: string): Element => {
+          const found = section.querySelector(selector)
+          if (found === null) throw new Error(`no ${selector}`)
+          return found
+        }
+        const wrapper = get('[data-ending-actions]')
+        const actions = [
+          'button[data-try-another]',
+          'button[data-share]',
+          'a[data-all-stories]',
+        ].map(get)
+        const [tryAnother, share, all] = actions
+        const input = get('input[data-share-url]')
+        const label = input.closest('label')
+        if (!tryAnother || !share || !all || label === null) throw new Error('no row or no label')
+        const actionRow = tryAnother.parentElement
+        const follows = (a: Node, b: Node): boolean =>
+          (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        const style = getComputedStyle(section)
+        return {
+          inWrapper: wrapper.contains(input) && wrapper.contains(label),
+          inActionRow:
+            actionRow !== null && (actionRow.contains(input) || actionRow.contains(label)),
+          order: follows(tryAnother, share) && follows(share, all) && follows(all, input),
+          tops: actions.map((action) => action.getBoundingClientRect().top),
+          rowBottom: Math.max(...actions.map((action) => action.getBoundingClientRect().bottom)),
+          labelTop: label.getBoundingClientRect().top,
+          inputWidth: input.getBoundingClientRect().width,
+          content:
+            section.getBoundingClientRect().width -
+            parseFloat(style.getPropertyValue('padding-inline-start')) -
+            parseFloat(style.getPropertyValue('padding-inline-end')),
+        }
+      })
+      console.log(
+        `[player-share] T8 /${code} ${variant.scale}%${variant.wide ? ' wide' : ''} ` +
+          `(${project}): ${JSON.stringify(row)}`,
+      )
+      // Soft (review A4): a fault that breaks one group still runs and reports every other group,
+      // so each group's own catch shows (the test still fails on any of them).
+      // (a) In the settling wrapper, outside the action row; (b) after the three actions.
+      expect.soft(row.inWrapper, '(a) the label and field inside [data-ending-actions]').toBe(true)
+      expect.soft(row.inActionRow, '(a) the label and field outside the action row').toBe(false)
+      expect.soft(row.order, '(b) Try another path, Share, All stories, then the field').toBe(true)
+      // (c) Under the row, as wide as the card's content box.
+      expect
+        .soft(row.labelTop, '(c) the label under the action row')
+        .toBeGreaterThanOrEqual(row.rowBottom)
+      expect
+        .soft(
+          Math.abs(row.inputWidth - row.content),
+          `(c) the field as wide as the card's content (${row.inputWidth} of ${row.content})`,
+        )
+        .toBeLessThanOrEqual(1)
+      // (d) The tablets keep the three actions on one row.
+      if (ROW_TABLETS.includes(project)) {
+        expect
+          .soft(
+            Math.max(...row.tops) - Math.min(...row.tops),
+            `(d) the three actions on one row (tops ${row.tops.join(', ')})`,
+          )
+          .toBeLessThanOrEqual(1)
+      }
+      if (variant.wide) return
+
+      // (e) Tab from the field goes on to Back; (f) Shift+Tab goes back to the row.
+      await page.keyboard.press('Tab')
+      expect
+        .soft(
+          await page.evaluate(() => document.activeElement?.matches('button[data-back]') ?? false),
+          '(e) Tab from the field: Back',
+        )
+        .toBe(true)
+      await field.focus()
+      await expect(field).toBeFocused()
+      await page.keyboard.press('Shift+Tab')
+      const previous = browserName === 'webkit' ? 'button[data-share]' : 'a[data-all-stories]'
+      expect
+        .soft(
+          await page.evaluate(
+            (selector) =>
+              document.activeElement?.closest('section[data-ending]') !== null &&
+              (document.activeElement?.matches(selector) ?? false),
+            previous,
+          ),
+          `(f) Shift+Tab from the field: ${previous}`,
+        )
+        .toBe(true)
+    })
+  }
 
   for (const hiRun of [false, true]) {
     test(`T-c2 /en${hiRun ? ' with a Hindi run' : ''}: the share sheet is called once with the title and the player URL in the content locale`, async ({
@@ -1087,6 +1384,7 @@ test.describe(
         }
         const card = await page.locator(CARD).elementHandle()
         if (card === null) throw new Error('no card')
+        const epoch = Number(await page.locator(RUN).getAttribute('data-epoch'))
 
         await page.locator(SWITCH).click()
         await expect(page.locator('[data-part] [data-story]')).toHaveAttribute('lang', 'hi')
@@ -1097,6 +1395,32 @@ test.describe(
         ).toHaveCount(0)
         expect(await card.evaluate((element) => element.isConnected), 'the card stays').toBe(true)
         await expect(page.locator(PART)).toHaveAttribute('data-node', 'ending_light')
+        if (left === 'manual') {
+          // P1-4 owner screens (T8c): the action row is rendered inside the keyed share control,
+          // so the switch remounts Try another path and All stories with it. They come back in
+          // their order, the field gone, and nothing in the wrapper is inert.
+          expect(
+            await page.locator(ACTIONS).evaluate((wrapper) => {
+              const controls = [...wrapper.querySelectorAll('button, a, input')]
+              return {
+                order: controls.map((control) =>
+                  control.matches('button[data-try-another]')
+                    ? 'try-another'
+                    : control.matches('button[data-share]')
+                      ? 'share'
+                      : control.matches('a[data-all-stories]')
+                        ? 'all-stories'
+                        : control.localName,
+                ),
+                inert: [wrapper, ...controls].map((element) => element.closest('[inert]') !== null),
+              }
+            }),
+            'the actions after the switch',
+          ).toEqual({
+            order: ['try-another', 'share', 'all-stories'],
+            inert: [false, false, false, false],
+          })
+        }
 
         await page.locator(SHARE).click()
         if (left === 'copied') {
@@ -1109,6 +1433,15 @@ test.describe(
           enUrl,
           hiUrl,
         ])
+        if (left === 'manual') {
+          // T8c: the remounted Try another path still restarts.
+          await page.locator(TRY_ANOTHER).click()
+          await expect(page.locator(PART), 'Try another path after the switch').toHaveAttribute(
+            'data-node',
+            'start',
+          )
+          await expect(page.locator(RUN)).toHaveAttribute('data-epoch', String(epoch + 1))
+        }
       })
     }
 

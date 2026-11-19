@@ -21,6 +21,11 @@
 //   so a Share tap after a switch starts a fresh chain even while the old sheet is still open: the
 //   second share() then rejects (InvalidStateError) and the chain falls to the clipboard, which
 //   copies the new language's URL and says so (review R10d-STRESS-3; accepted).
+// - P1-4 owner screens (design p1-4-polish-design.md R2): the wrapper [data-ending-actions] (it
+//   settles; no class) holds the action row, then the manual field on a full-width line of its
+//   own under it, so the buttons keep one row on a tablet. ShareControl hands both parts to the
+//   card through its render prop, so the row is rendered inside the keyed control: a switch
+//   remounts Try another path and All stories with Share (order and settle unchanged).
 import Link from 'next/link'
 import { useRef } from 'react'
 import type { StepResult } from '../../core/engine'
@@ -87,29 +92,38 @@ export function EndingCard({
       <p data-ending-count="" className={styles.endingCount}>
         {count}
       </p>
-      <div ref={actions} data-ending-actions="" inert={!interactive} className={styles.actions}>
-        <button
-          type="button"
-          data-try-another=""
-          data-seq={view.seq}
-          className={styles.action}
-          onClick={() => {
-            const result = onTryAnother(view.seq)
-            if (result.accepted && actions.current !== null) actions.current.inert = true
-          }}
-        >
-          <span className={styles.actionLabel}>{strings.tryAnother}</span>
-        </button>
+      <div ref={actions} data-ending-actions="" inert={!interactive}>
         <ShareControl
           key={view.locale}
           title={view.title}
           storyId={storyId}
           contentLocale={view.locale}
           strings={strings}
-        />
-        <Link href={`/${locale}`} data-all-stories="" className={styles.action}>
-          <span className={styles.actionLabel}>{strings.allStories}</span>
-        </Link>
+        >
+          {({ share, field }) => (
+            <>
+              <div className={styles.actions}>
+                <button
+                  type="button"
+                  data-try-another=""
+                  data-seq={view.seq}
+                  className={styles.action}
+                  onClick={() => {
+                    const result = onTryAnother(view.seq)
+                    if (result.accepted && actions.current !== null) actions.current.inert = true
+                  }}
+                >
+                  <span className={styles.actionLabel}>{strings.tryAnother}</span>
+                </button>
+                {share}
+                <Link href={`/${locale}`} data-all-stories="" className={styles.action}>
+                  <span className={styles.actionLabel}>{strings.allStories}</span>
+                </Link>
+              </div>
+              {field}
+            </>
+          )}
+        </ShareControl>
       </div>
     </section>
   )

@@ -40,6 +40,10 @@
 // smallest WebP as src, width and height, fetchpriority high, alt "", no cross-origin mode, no lazy
 // loading), data-failed on a failed picture, the square shape, no preload of the next pictures in
 // the server HTML, and the scene and band CSS (read as text).
+// P1-4 owner screens (design p1-4-polish-design.md §5): T1 (the framed panel's rule, the player's
+// main rule, and two source checks: only the scene forms of .runDependent set a box, only
+// .player > main names main), T5 (the actions wrapper holds the row), T6 (ShareControl's render
+// prop), T7 (the field's rule) and T10 (the restart dialog's backdrop).
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -70,7 +74,7 @@ import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
 import styles from './player.module.css'
 import { ProgressSegments } from './progress-segments'
 import { dialogClosed, RESTART_QUESTION_ID, RestartDialog } from './restart-dialog'
-import { ShareControl, ShareFeedback } from './share-control'
+import { ShareControl, ShareFeedback, type ShareParts } from './share-control'
 import { StoryLanguageSwitch } from './story-language-switch'
 import { QUESTION_ID, StoryPart } from './story-part'
 import { playerFallbackStringsOf, playerStringsOf } from './strings'
@@ -872,6 +876,22 @@ describe('player CSS that the markup relies on (read as text)', () => {
       ` class="${styles.runDependent}"`,
     )
   })
+
+  // P1-4 owner screens (T10; D11-P11): the page behind the open restart dialog dims to the page's
+  // canvas colour at 0.7, with no motion. Engines that give ::backdrop no custom properties take
+  // the Canvas fallback, which color-scheme makes the dark Canvas (only this check sees those two).
+  it("the restart dialog's backdrop: the canvas colour, see-through, no motion (D11-P11)", () => {
+    expect(ruleBody(playerCss(), '.dialog::backdrop')).toBe(
+      [
+        '  color-scheme: dark;',
+        '  background-color: var(--color-canvas, Canvas);',
+        '  opacity: 0.7;',
+        '',
+      ].join('\n'),
+    )
+    const tokens = readFileSync(join(here, '..', 'styles', 'tokens.css'), 'utf8')
+    expect(tokens).toContain('\n    --color-canvas: #')
+  })
 })
 
 describe('the error fallback (D11-P17)', () => {
@@ -1007,10 +1027,13 @@ describe('Step 10c: the ending card (server markup)', () => {
           `<p data-lesson="" lang="${content}" dir="ltr" class="${styles.lesson}">` +
           `${escapeHtml(lesson)}</p>` +
           `<p data-ending-count="" class="${styles.endingCount}">${escapeHtml(count)}</p>` +
-          `<div data-ending-actions=""${interactive ? '' : ' inert=""'} class="${styles.actions}">`
+          // P1-4 owner screens (T5): the wrapper (no class; it settles) holds the action row,
+          // then the manual field once a share ends there, and nothing else before a tap.
+          `<div data-ending-actions=""${interactive ? '' : ' inert=""'}>` +
+          `<div class="${styles.actions}">`
         expect(inner.slice(0, head.length), where).toBe(head)
-        expect(inner.endsWith('</div>'), where).toBe(true)
-        const actions = inner.slice(head.length, -'</div>'.length)
+        expect(inner.endsWith('</div></div>'), where).toBe(true)
+        const actions = inner.slice(head.length, -'</div></div>'.length)
         // Try another path (with the seq it was rendered with), Share, All stories (route locale).
         const tryAnother =
           `<button type="button" data-try-another="" data-seq="${seq}" class="${styles.action}">` +
@@ -1106,20 +1129,32 @@ describe('Step 10c: share feedback (D11-P14, §4.3)', () => {
     },
   )
 
-  it('the share control renders its button and no status before a tap', () => {
+  // P1-4 owner screens (T6): the control hands the card its two parts through a render prop, Share
+  // (with "Link copied." after it once a copy is done) for the action row and the manual field (or
+  // null) for the line under it; the call count is checked, so a control that never calls it fails.
+  it('the share control renders its button and no status before a tap, through its render prop', () => {
     const [pkg] = fixtures
     if (pkg === undefined) throw new Error('no fixture')
     const strings = playerStringsOf('en', dataOf(pkg))
-    expect(
-      renderToString(
-        createElement(ShareControl, {
-          title: 'Two Paths',
-          storyId: 'two-paths',
-          contentLocale: 'hi',
-          strings,
-        }),
-      ),
-    ).toBe(
+    const calls: ShareParts[] = []
+    const html = renderToString(
+      // The render prop is a function, not a node: createElement takes it as a prop here (as a
+      // child its type is not ReactNode); the ending card passes it as JSX children.
+      // eslint-disable-next-line react/no-children-prop
+      createElement(ShareControl, {
+        title: 'Two Paths',
+        storyId: 'two-paths',
+        contentLocale: 'hi',
+        strings,
+        children: (parts: ShareParts) => {
+          calls.push(parts)
+          return parts.share
+        },
+      }),
+    )
+    expect(calls, 'the render prop, called once').toHaveLength(1)
+    expect(calls[0]?.field, 'no field before a tap').toBeNull()
+    expect(html).toBe(
       `<div class="${styles.share}"><button type="button" data-share="" class="${styles.action}">` +
         `<span class="${styles.actionLabel}">Share</span></button></div>`,
     )
@@ -1148,10 +1183,26 @@ describe('Step 10c: the card CSS (read as text)', () => {
     expect(icon).toMatch(/ {2}line-height: var\(--lh-[a-z]+\);\n/)
   })
 
-  it('the card sits on the story surface; the share field is a full-width line', () => {
+  // P1-4 owner screens (T7): the field follows the action row in the wrapper, so it is no flex item
+  // of the row (no flex-basis) and sits the row's own gap under it; the input keeps its rule.
+  it('the card sits on the story surface; the share field is a full-width line under the actions', () => {
     expect(ruleOf('.ending')).toContain('  background-color: var(--color-surface-story);\n')
-    expect(ruleOf('.shareField')).toContain('  flex-basis: 100%;\n')
-    expect(ruleOf('.shareUrl')).toContain('  min-block-size: var(--target-min);\n')
+    const field = ruleOf('.shareField')
+    expect(field).toContain('  margin-block: var(--gap-target) 0;\n')
+    expect(field).not.toMatch(/flex-basis/)
+    expect(ruleOf('.shareUrl')).toBe(
+      [
+        '  inline-size: 100%;',
+        '  min-block-size: var(--target-min);',
+        '  padding-block: var(--space-1);',
+        '  padding-inline: var(--space-3);',
+        '  border: 2px solid var(--color-line-strong);',
+        '  border-radius: var(--radius-control);',
+        '  background-color: var(--color-surface-raised);',
+        '  color: var(--color-text);',
+        '',
+      ].join('\n'),
+    )
   })
 
   // D11-P6 amended at 10c (A11Y-10c-2): at an ending the card fades in with the reveal's second
@@ -1658,9 +1709,21 @@ describe('Step 10e: scenes and the scene image (server markup)', () => {
 
   it('the scene CSS: one gradient rule at the legacy angle, and one rule per scene id (read as text)', () => {
     const css = playerCss()
+    // P1-4 owner screens (T1 a, b): the run area is a framed panel. It reaches --space-3 past
+    // main's content box on each side and pads by as much (the story keeps its width), pads
+    // --space-5 above and below and takes the cards' radius; main's top padding drops to
+    // --space-4 for the player's main only.
     expect(ruleBodyOf(css, '.runDependent[data-scene]')).toBe(
-      '  background-image: linear-gradient(160deg, var(--scene-from), var(--scene-to));\n',
+      [
+        '  margin-inline: calc(var(--space-3) * -1);',
+        '  padding-block: var(--space-5);',
+        '  padding-inline: var(--space-3);',
+        '  border-radius: var(--radius-card);',
+        '  background-image: linear-gradient(160deg, var(--scene-from), var(--scene-to));',
+        '',
+      ].join('\n'),
     )
+    expect(ruleBodyOf(css, '.player > main')).toBe('  padding-block-start: var(--space-4);\n')
     for (const id of SCENE_IDS) {
       expect(ruleBodyOf(css, `.runDependent[data-scene='${id}']`), id).toBe(
         `  --scene-from: var(--scene-${id}-from);\n  --scene-to: var(--scene-${id}-to);\n`,
@@ -1707,10 +1770,169 @@ describe('Step 10e: scenes and the scene image (server markup)', () => {
   })
 })
 
+// P1-4 owner screens (design p1-4-polish-design.md R1, T1 c and d): two source checks over
+// player.module.css. Guard-bypass catalogue v1, "File, route and path guards" class 5 (a near miss
+// must not match) applies, so each check has near-miss positives; classes 1-4 (route groups, file
+// forms, case, separators) cannot apply to selectors inside one stylesheet. Documented limit: a
+// rule in another stylesheet (base.css, shell.module.css) is outside these checks; the e2e T2 and
+// T2b (computed values on the page) catch those.
+describe('P1-4 owner screens: the framed panel, source checks over player.module.css', () => {
+  /** The panel rule and the per-scene rules: the only rules naming .runDependent that set a box. */
+  const SCENE_COMPOUND = /^\.runDependent\[data-scene(?:='[a-z-]+')?\]$/
+  /** A padding or margin declaration, longhand or shorthand, at the start of a body line. */
+  const SETS_BOX = /(?:^|\n)\s*(?:padding|margin)(?:-[a-z-]+)?\s*:/
+  /** main as a type, an id or an attribute value; never .main, .mainly, [data-main], .main-menu. */
+  const NAMES_MAIN = /(?<![\w.-])main(?![\w-])/
+
+  /** (c) The shared marker: every rule naming .runDependent, but the scene forms, that sets a box. */
+  const markerBoxRules = (css: string): string[] =>
+    cssRules(css).flatMap((rule) =>
+      SETS_BOX.test(rule.body)
+        ? rule.selectors.filter((selector) => {
+            const last = lastCompound(selector)
+            return last.includes('runDependent') && !SCENE_COMPOUND.test(last)
+          })
+        : [],
+    )
+  /** (d) Every selector naming main (a type, an id or an attribute value). */
+  const mainSelectors = (css: string): string[] =>
+    cssRules(css)
+      .flatMap((rule) => rule.selectors)
+      .filter((selector) => NAMES_MAIN.test(selector))
+
+  const MARKER_NEGATIVES = [
+    '.runDependent {\n  padding-block: var(--space-5);\n}\n',
+    '.player .runDependent {\n  padding-inline: var(--space-3);\n}\n',
+    '.player > .runDependent {\n  margin-inline: 0;\n}\n',
+    '.runDependent:not([data-scene]) {\n  padding: 0;\n}\n',
+    '.runDependent:where(*) {\n  margin-block-start: 0;\n}\n',
+    '.runDependent:is(div) {\n  padding-inline-start: 1px;\n}\n',
+    '.other,\n.runDependent {\n  margin: 0;\n}\n',
+    "[class*='runDependent'] {\n  padding-block: 1px;\n}\n",
+    ':global(.x) .runDependent {\n  padding-block: 1px;\n}\n',
+    '@media (min-width: 1px) {\n  .runDependent {\n    padding-block: 1px;\n  }\n}\n',
+    '@container (min-width: 1px) {\n  .runDependent {\n    margin-inline: 0;\n  }\n}\n',
+    '@layer x {\n  .runDependent {\n    margin-inline: 0;\n  }\n}\n',
+    // Review A3: the bare form first in a list whose last part is the scene form, so a reader that
+    // does not split the list at its commas reads only the scene form and lets it through.
+    '.runDependent,\n.runDependent[data-scene] {\n  padding-block: 1px;\n}\n',
+  ]
+  const MARKER_POSITIVES = [
+    '.runDependent[data-scene] {\n  margin-inline: calc(var(--space-3) * -1);\n  padding-block: var(--space-5);\n}\n',
+    ":global(:root[data-saved-run]) .player[data-run-phase='opening'] .runDependent {\n  visibility: hidden;\n}\n",
+    '.runDependent .x {\n  padding: 0;\n}\n',
+    '.segments {\n  padding-block: 0;\n}\n',
+    // Review A3: combinators without spaces, so a reader that cuts the compound at whitespace only
+    // takes .runDependent for part of the last compound and flags these.
+    '.runDependent>.x {\n  padding: 0;\n}\n',
+    '.runDependent+.x {\n  margin: 0;\n}\n',
+    '.runDependent~.x {\n  margin: 0;\n}\n',
+  ]
+  const MAIN_NEGATIVES = [
+    ':global(main) {\n  padding-block-start: var(--space-4);\n}\n',
+    '.player main {\n  padding-block-start: 0;\n}\n',
+    'main:not(.runDependent) {\n  padding-block-start: 0;\n}\n',
+    ':global(#main) {\n  padding-block-start: 0;\n}\n',
+    ":global([id='main']) {\n  padding-block-start: 0;\n}\n",
+    '.player > main,\nmain {\n  padding-block-start: 0;\n}\n',
+    '@supports (display: grid) {\n  :global(main) {\n    padding-block-start: 0;\n  }\n}\n',
+  ]
+  const MAIN_POSITIVES = [
+    '.player > main {\n  padding-block-start: var(--space-4);\n}\n',
+    '.main {\n  outline: none;\n}\n',
+    '.mainly {\n  outline: none;\n}\n',
+    '[data-main] {\n  outline: none;\n}\n',
+    '.main-menu {\n  outline: none;\n}\n',
+    // Review A3: the allowed selector in a list, so a reader that does not split the list at its
+    // commas reads one selector naming main that is not exactly .player > main, and flags it.
+    '.player > main,\n.other {\n  outline: none;\n}\n',
+  ]
+
+  it('(c) only the run area (the scene forms) sets padding or margin among the rules naming .runDependent', () => {
+    const css = playerCss()
+    // Not blind: the reader sees the panel rule, the 10 scene rules and the saved-run hint.
+    const named = cssRules(css)
+      .flatMap((rule) => rule.selectors)
+      .filter((selector) => lastCompound(selector).includes('runDependent'))
+    expect(named).toContain('.runDependent[data-scene]')
+    expect(named).toContain(
+      ":global(:root[data-saved-run]) .player[data-run-phase='opening'] .runDependent",
+    )
+    expect(named).toHaveLength(12)
+    expect(markerBoxRules(css), 'rules that would pad the segments or the switch').toEqual([])
+  })
+
+  it.each(MARKER_NEGATIVES)('(c) rejects %j', (sample) => {
+    expect(markerBoxRules(`\n${sample}`)).not.toEqual([])
+  })
+
+  it.each(MARKER_POSITIVES)('(c) passes %j', (sample) => {
+    expect(markerBoxRules(`\n${sample}`)).toEqual([])
+  })
+
+  it('(d) no rule but .player > main names main (the error fallback keeps its 48 px)', () => {
+    expect(mainSelectors(playerCss())).toEqual(['.player > main'])
+  })
+
+  it.each(MAIN_NEGATIVES)('(d) rejects %j', (sample) => {
+    expect(mainSelectors(`\n${sample}`).filter((s) => s !== '.player > main')).not.toEqual([])
+  })
+
+  it.each(MAIN_POSITIVES)('(d) passes %j', (sample) => {
+    expect(mainSelectors(`\n${sample}`).filter((s) => s !== '.player > main')).toEqual([])
+  })
+})
+
 /** The declarations of the one rule whose selector list is exactly `selector`. */
 function ruleBodyOf(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const rules = all(css, new RegExp(`\\n${escaped} \\{\\n([^}]*)\\}`, 'g'))
   expect(rules, selector).toHaveLength(1)
   return rules[0]?.[1] ?? ''
+}
+
+/**
+ * Every rule of `css` (Prettier's layout: "<selector list> {\n<body>}"), indented ones inside
+ * @media, @container, @supports and @layer included, as its selectors split at top-level commas
+ * and its body. Comments are blanked first, so comment text is never read as a selector.
+ */
+function cssRules(css: string): { readonly selectors: string[]; readonly body: string }[] {
+  const clean = css
+    .replace(/\r\n/g, '\n')
+    .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ' '))
+  return all(clean, /(?:^|\n)[ \t]*([^\s{}@][^{}]*?) \{\n([^{}]*)\}/g).map((match) => ({
+    selectors: splitTopLevel(match[1] ?? ''),
+    body: match[2] ?? '',
+  }))
+}
+
+/** `text` split at commas outside parentheses and brackets, each part trimmed. */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') depth--
+    else if (c === ',' && depth === 0) {
+      parts.push(text.slice(start, i).trim())
+      start = i + 1
+    }
+  }
+  parts.push(text.slice(start).trim())
+  return parts
+}
+
+/** The last compound selector: the text after the last top-level combinator (space, >, + or ~). */
+function lastCompound(selector: string): string {
+  let depth = 0
+  let cut = 0
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i] ?? ''
+    if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') depth--
+    else if (depth === 0 && (/\s/.test(c) || c === '>' || c === '+' || c === '~')) cut = i + 1
+  }
+  return selector.slice(cut).trim()
 }

@@ -42,10 +42,28 @@
  * scene's gradient at the legacy angle (pt/src/scenes.js) from the --scene-<id>-from/-to tokens;
  * the story card and the ending card stay on --color-surface-story. Every text and non-text token
  * is a declared pair on both ends of every scene (contrast-pairs.ts), so nothing here adds a pair.
- * Background only: the run area keeps its size and place.
+ * P1-4 owner screens (design p1-4-polish-design.md R1): a framed panel. The gradient gets rounded
+ * corners and inner spacing, so the title, the picture band, the cards and Back sit inside it.
+ * Inline, the panel reaches --space-3 past main's content box on each side and pads by as much,
+ * so the story keeps its width (no new wrap, the same band); above, main's top padding drops by
+ * more than the panel adds (below). No overflow clip: focus rings near its edge stay whole. Only
+ * the run area carries data-scene: the segments and the story-language switch share the
+ * .runDependent marker (the saved-run hint) and must not take this box.
  */
 .runDependent[data-scene] {
+  margin-inline: calc(var(--space-3) * -1);
+  padding-block: var(--space-5);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-card);
   background-image: linear-gradient(160deg, var(--scene-from), var(--scene-to));
+}
+
+/*
+ * The gap above the run area: --space-4 here plus the panel's --space-5 (was --space-7, base.css).
+ * The player's main only: the error fallback's main has no .player parent and keeps --space-7.
+ */
+.player > main {
+  padding-block-start: var(--space-4);
 }
 
 .runDependent[data-scene='forest-day'] {
@@ -458,6 +476,20 @@
   color: var(--color-text);
 }
 
+/*
+ * P1-4 owner screens (design p1-4-polish-design.md R3): the page behind the open dialog dims (the
+ * menu stays open behind it, C13). The canvas colour, see-through; no transition or animation, so
+ * nothing moves under any motion setting. Engines before Chrome 122, Safari 17.4 and Firefox 120
+ * (inside the build's target) give ::backdrop no custom properties: there the colour falls back to
+ * Canvas, which color-scheme makes the dark Canvas. Forced colours force the colour to Canvas and
+ * keep the opacity.
+ */
+.dialog::backdrop {
+  color-scheme: dark;
+  background-color: var(--color-canvas, Canvas);
+  opacity: 0.7;
+}
+
 .dialogQuestion {
   margin-block: 0 var(--space-5);
   color: var(--color-text-strong);
@@ -522,7 +554,8 @@
 
 /*
  * Share (D11-P14): the button, then what it left: "Link copied." next to it, or the read-only field
- * holding the URL on its own line.
+ * holding the URL on its own line under the action row (P1-4 owner screens: the field follows the
+ * row in the card's actions wrapper, so it is no flex item of the row and takes the full width).
  */
 .share {
   display: flex;
@@ -538,9 +571,9 @@
 
 .shareField {
   display: flex;
-  flex-basis: 100%;
   flex-direction: column;
   gap: var(--space-1);
+  margin-block: var(--gap-target) 0;
   font-size: var(--fs-label);
   line-height: var(--lh-label);
 }

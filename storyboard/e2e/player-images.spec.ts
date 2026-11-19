@@ -50,8 +50,18 @@
 // - T-e5 measures layout shift as T-a20 does (Chromium only): a resumed load of the long Hindi
 //   passage, its font files held 1.5 s, also under the test-only wide Devanagari fallback and, on
 //   the phones, at 150% text.
+// - The owner's P1-4 picture screens (design §10.3, R34), screens 27-29, are the last describe:
+//   local only and skipped unless SCREENS=1, as e2e/screens.spec.ts, which shoots the player's
+//   screens 14-26 on the review build. They are here because only this spec may open the picture
+//   story. Staging leg, the 3 Chromium projects at 100% text, and screen 29 at 150% on
+//   chromium-phone only (R34). Each asserts its state with this spec's checks (expectLoaded,
+//   expectFailed), then waits for every animation and font before the full-page shot. Screens 27
+//   and 29 show a loaded picture, which the 1×1 stub would leave invisible, so their stub serves a
+//   visible test picture instead (testPictureWebp: drawn by Chromium's canvas, labelled TEST
+//   PICTURE, never story art), and each asserts the img shows it (expectTestPicture). Screen 28
+//   keeps the 1×1 stub: its start picture is aborted, and no other picture is on screen.
 import { createHash } from 'node:crypto'
-import type { Page, Request } from '@playwright/test'
+import type { Browser, Page, Request } from '@playwright/test'
 import { CONTENT_PUBLIC_BASE, MEDIA_ORIGIN } from '../src/config/security-headers'
 import type { LocaleCode } from '../src/core/locales'
 import {
@@ -77,6 +87,8 @@ import {
   prefsText,
   RUN,
   seedPrefs,
+  settleForScreenshot,
+  step10ScreenPath,
   waitOpen,
   walk,
   wideDevanagariFallback,
@@ -1403,6 +1415,171 @@ test.describe('the scene images, Step 10e', { tag: '@staging' }, () => {
       expect(await page.locator(IMG).getAttribute('data-failed')).toBeNull()
       hold.release()
       await expectFailed(page, before)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// The owner's P1-4 picture screens, 27-29 (design §10.3, R34; header above)
+
+/** The visible test picture of screens 27 and 29: the wide shape, so it fills the start box. */
+const TEST_PICTURE = WIDE
+
+/**
+ * The visible test picture (review I1: the 1×1 stub shows nothing, so a loaded picture looked like a
+ * failed one): a simple scene with a centred TEST PICTURE label, drawn by Chromium's canvas and
+ * encoded as WebP. It is drawn in a browser context of its own on about:blank (no request, nothing
+ * the test's context or its guard sees), then closed. Throws when the canvas gives no WebP.
+ */
+async function testPictureWebp(browser: Browser): Promise<Buffer> {
+  const context = await browser.newContext()
+  try {
+    const blank = await context.newPage()
+    const dataUrl = await blank.evaluate(
+      ({ width, height }) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const g = canvas.getContext('2d')
+        if (g === null) throw new Error('no 2d canvas context')
+        const sky = g.createLinearGradient(0, 0, 0, height)
+        sky.addColorStop(0, '#8ec5e8')
+        sky.addColorStop(1, '#eaf4dc')
+        g.fillStyle = sky
+        g.fillRect(0, 0, width, height)
+        g.fillStyle = '#f4c542'
+        g.beginPath()
+        g.arc(width * 0.84, height * 0.2, height * 0.09, 0, Math.PI * 2)
+        g.fill()
+        g.fillStyle = '#7cb85f'
+        g.beginPath()
+        g.moveTo(0, height)
+        g.quadraticCurveTo(width * 0.3, height * 0.4, width * 0.64, height)
+        g.fill()
+        g.fillStyle = '#3f7d36'
+        g.beginPath()
+        g.moveTo(width * 0.36, height)
+        g.quadraticCurveTo(width * 0.76, height * 0.46, width, height * 0.78)
+        g.lineTo(width, height)
+        g.fill()
+        // The label stays in the middle, so a band that crops the picture (object-fit: cover)
+        // keeps it.
+        const panel = { x: width * 0.17, y: height * 0.35, w: width * 0.66, h: height * 0.3 }
+        g.fillStyle = 'rgba(255, 255, 255, 0.88)'
+        g.fillRect(panel.x, panel.y, panel.w, panel.h)
+        g.strokeStyle = '#1f2a37'
+        g.lineWidth = 6
+        g.strokeRect(panel.x, panel.y, panel.w, panel.h)
+        g.fillStyle = '#1f2a37'
+        g.textAlign = 'center'
+        g.textBaseline = 'middle'
+        g.font = `bold ${Math.round(height * 0.12)}px sans-serif`
+        g.fillText('TEST PICTURE', width / 2, height * 0.46)
+        g.font = `${Math.round(height * 0.045)}px sans-serif`
+        g.fillText(
+          `e2e placeholder, not story art (${width} × ${height})`,
+          width / 2,
+          height * 0.575,
+        )
+        return canvas.toDataURL('image/webp', 0.9)
+      },
+      { width: TEST_PICTURE.width, height: TEST_PICTURE.height },
+    )
+    const prefix = 'data:image/webp;base64,'
+    if (!dataUrl.startsWith(prefix)) {
+      throw new Error(`the canvas gave no WebP: ${dataUrl.slice(0, 32)}`)
+    }
+    return Buffer.from(dataUrl.slice(prefix.length), 'base64')
+  } finally {
+    await context.close()
+  }
+}
+
+/**
+ * Screens 27 and 29: the img shows the visible test picture, not the 1×1 stub. A srcset `w`
+ * descriptor scales the natural size by the source size (`sizes`, in CSS px) over the descriptor
+ * width, so the test picture's natural width is its source size (hundreds of px) and its natural
+ * height keeps the picture's ratio, while the 1×1 stub's natural width is 1 or less.
+ */
+async function expectTestPicture(page: Page): Promise<void> {
+  const natural = await page.locator(IMG).evaluate((img: HTMLImageElement) => ({
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  }))
+  const label = `the img shows the visible test picture, not the 1×1 stub (natural ${natural.width}x${natural.height})`
+  expect(natural.width, label).toBeGreaterThanOrEqual(100)
+  expect(
+    Math.abs(natural.height - (natural.width * TEST_PICTURE.height) / TEST_PICTURE.width),
+    `${label}: the ${TEST_PICTURE.width}x${TEST_PICTURE.height} ratio`,
+  ).toBeLessThanOrEqual(1)
+}
+
+/** Asserts the text size, waits for every animation and font, then takes the full-page shot. */
+async function shootScreen(page: Page, nn: string, name: string, scale: TextScale): Promise<void> {
+  expect(await page.locator('html').getAttribute(TEXT_SCALE_ATTRIBUTE), 'the text size').toBe(
+    scale === 100 ? null : String(scale),
+  )
+  await settleForScreenshot(page)
+  await page.screenshot({
+    path: step10ScreenPath(nn, name, test.info().project.name, scale),
+    fullPage: true,
+  })
+}
+
+test.describe('the P1-4 owner screens: pictures', { tag: '@staging' }, () => {
+  test.skip(process.env['SCREENS'] !== '1', 'owner screenshots: run with SCREENS=1')
+  test.skip(
+    ({ browserName }) => browserName === 'webkit',
+    'the P1-4 owner set is the 3 Chromium viewports (design §10.3)',
+  )
+  // Screens 27 and 29: the stub serves the visible test picture for every picture URL (review I1).
+  test.use({
+    mediaStub: async ({ browser }, provide) => {
+      await provide({ ...STUB, body: await testPictureWebp(browser) })
+    },
+  })
+
+  test('screen 27: a picture node (the start picture loaded), en', async ({ page }) => {
+    await openPlayer(page, urlOf('en'))
+    await expectLoaded(page, 'start')
+    await expectTestPicture(page)
+    await shootScreen(page, '27', 'player-picture-en', 100)
+  })
+
+  test('screen 29 (R34): a picture node at 150% text on the phone, en', async ({ page }) => {
+    test.skip(test.info().project.name !== 'chromium-phone', 'R34 names the phone only')
+    await seedPrefs(page, prefsText(150))
+    await openPlayer(page, urlOf('en'))
+    await expectLoaded(page, 'start')
+    await expectTestPicture(page)
+    const line = await firstLine(page)
+    console.log(
+      `[player-images] screen 29 (${test.info().project.name}): first line ` +
+        `${line.top.toFixed(1)} to ${line.bottom.toFixed(1)} of innerHeight ${line.innerHeight} ` +
+        `at 150% (R34, an accepted risk)`,
+    )
+    await shootScreen(page, '29', 'player-picture-150-en', 150)
+  })
+
+  // The T-e3 "aborted after hydration" case: the stub leaves the start picture out, so it aborts.
+  // Its own stub replaces the one above: the 1×1 picture (no other picture is on screen).
+  test.describe('a picture that fails', () => {
+    const start = picture('start')
+    test.use({
+      mediaStub: { ...STUB, urls: MEDIA_URLS.filter((url) => !start.urls.includes(url)) },
+    })
+
+    test('screen 28: a failed picture keeps its box, en', async ({ page, errors }) => {
+      errors.allow({ chromium: [ABORTED_LINE] })
+      const hold = await holdPicture(page, start)
+      await openHeld(page, urlOf('en'))
+      await expect.poll(hold.held, { timeout: 5000 }).toBeGreaterThan(0)
+      await frames(page)
+      const before = await bandBoxes(page)
+      expect(await page.locator(IMG).getAttribute('data-failed')).toBeNull()
+      hold.release()
+      await expectFailed(page, before)
+      await shootScreen(page, '28', 'player-picture-failed-en', 100)
     })
   })
 })

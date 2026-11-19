@@ -1020,3 +1020,61 @@ export async function sharedPoint(
     y < viewport.height
   return { x, y, usable }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The owner's P1-4 screens (design p1-step10-design.md §10.3): screens.spec.ts shoots the player
+// on the review build (screens 14-26), player-images.spec.ts the pictures on the staging build
+// (screens 27-29). Local only, skipped unless SCREENS=1, as Step 7's screens.
+
+/** Where the P1-4 screens go: storyboard/migration-input/step10-screens/ (git-ignored). */
+const STEP10_SCREENS_DIR = path.join(ROOT, 'migration-input', 'step10-screens')
+
+/** A P1-4 screen's file: <nn>-<screen>-<project>-<variant>.png, the variant its text size. */
+export function step10ScreenPath(
+  nn: string,
+  name: string,
+  project: string,
+  scale: TextScale,
+): string {
+  return path.join(STEP10_SCREENS_DIR, `${nn}-${name}-${project}-${scale}.png`)
+}
+
+/** How long settleForScreenshot waits for the page's animations before it checks them. */
+const ANIMATIONS_WAIT_MS = 10_000
+
+/**
+ * Before a screenshot: parks the pointer at the page's top-left corner, off every control, so no
+ * shot shows the hover the last click left behind; waits for every font, for every animation of
+ * the page to finish (a step's reveal, the ending card's fade; none of them is infinite) and for
+ * two frames, then fails if any animation has not finished or a font is still loading, so no shot
+ * catches a mid-animation frame.
+ */
+export async function settleForScreenshot(page: Page): Promise<void> {
+  await page.mouse.move(0, 0)
+  await page.evaluate(async (waitMs) => {
+    await document.fonts.ready
+    await Promise.race([
+      Promise.all(
+        document.getAnimations().map((animation) => animation.finished.catch(() => undefined)),
+      ),
+      new Promise((resolve) => setTimeout(resolve, waitMs)),
+    ])
+  }, ANIMATIONS_WAIT_MS)
+  await settleFonts(page)
+  expect(
+    await page.evaluate(() =>
+      document
+        .getAnimations()
+        .filter((animation) => animation.playState !== 'finished')
+        .map(
+          (animation) =>
+            `${(animation as Partial<{ animationName: string }>).animationName ?? 'animation'} ` +
+            animation.playState,
+        ),
+    ),
+    'animations not finished before the screenshot',
+  ).toEqual([])
+  expect(await page.evaluate(() => document.fonts.status), 'fonts before the screenshot').toBe(
+    'loaded',
+  )
+}

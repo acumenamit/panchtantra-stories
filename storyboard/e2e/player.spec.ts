@@ -31,6 +31,9 @@
 // files under a test-only wide Devanagari fallback and checks the header keeps its rows.
 // Step 10e (design §2.5, T-a21, F2): T-a21 loops playerNotFoundPaths(leg), which adds the staging-only
 // picture story's read URL on the review leg (on the staging leg it is a real page).
+// P1-4 owner screens (design p1-4-polish-design.md §5): T2 and T2c (the run area is a framed panel,
+// the last describe but one), T2b (in T-a22: the fallback's main keeps its 48 px) and T11 (next to
+// T-b8: the restart dialog dims the page behind it, read from screenshot pixels too).
 import type { ElementHandle, Page, Request } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY, type TextScale } from '../src/core/progress/records'
@@ -1482,6 +1485,15 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     const fallback = page.locator('main[data-player-error]')
     await expect(fallback).toBeVisible()
     await expect(page.locator(PLAYER), 'the player is unmounted').toHaveCount(0)
+    // P1-4 owner screens (T2b): only the player's main lost its top padding to the framed panel;
+    // the fallback's main has no .player parent and keeps base.css's --space-7 (48 px).
+    expect(
+      await fallback.evaluate((main) => ({
+        paddingBlockStart: getComputedStyle(main).getPropertyValue('padding-block-start'),
+        runAreas: main.querySelectorAll('[data-run]').length,
+      })),
+      "the fallback's main: its top padding, and no run area in it",
+    ).toEqual({ paddingBlockStart: '48px', runAreas: 0 })
     const heading = fallback.locator('h1')
     await expect(heading).toHaveText(message('en', 'player.errorTitle'))
     await expect(heading).toBeFocused()
@@ -1946,6 +1958,44 @@ function expectLaidOutApart(
       ).toBe(false)
     }
   }
+}
+
+/**
+ * P1-4 T11: the RGB of the viewport at `point` (CSS pixels): a screenshot at CSS scale, decoded in
+ * a blank page of the same context (no CSP there) through an Image and a canvas.
+ */
+async function pixelAt(
+  page: Page,
+  point: { readonly x: number; readonly y: number },
+): Promise<number[]> {
+  const png = await page.screenshot({ scale: 'css' })
+  const blank = await page.context().newPage()
+  try {
+    return await blank.evaluate(
+      async ({ data, x, y }) => {
+        const image = new Image()
+        image.src = `data:image/png;base64,${data}`
+        await image.decode()
+        const canvas = document.createElement('canvas')
+        canvas.width = image.naturalWidth
+        canvas.height = image.naturalHeight
+        const context = canvas.getContext('2d')
+        if (context === null) throw new Error('no 2d context')
+        context.drawImage(image, 0, 0)
+        return [...context.getImageData(x, y, 1, 1).data].slice(0, 3)
+      },
+      { data: png.toString('base64'), x: point.x, y: point.y },
+    )
+  } finally {
+    await blank.close()
+  }
+}
+
+/** A computed 'rgb(r, g, b)' or 'rgba(r, g, b, a)' colour as [r, g, b]. */
+function rgbOf(color: string): number[] {
+  const match = /^rgba?\((\d+), (\d+), (\d+)/.exec(color)
+  if (match === null) throw new Error(`not an rgb colour: ${color}`)
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
 test.describe('the story player, Step 10b', { tag: '@review' }, () => {
@@ -2630,6 +2680,132 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
       'the page scrolled when Menu was tapped',
     ).toBe(tap.scrollY)
   })
+
+  // P1-4 owner screens (design p1-4-polish-design.md R3, T11; D11-P11): the page behind the open
+  // restart dialog dims to the page's canvas colour at 0.7, with no motion, and the menu stays open
+  // behind it (C13; only an accepted Start again closes it, T-b8). The dim is read from screenshot
+  // pixels as well, so a backdrop that computes right but paints nothing fails. Forced colours
+  // (Chromium only: Playwright's WebKit ignores the emulation) force the backdrop to Canvas, the
+  // colour of html's forced background (as T-b6 reads it). Each emulation is set before the page
+  // opens, so before the menu and the dialog.
+  for (const mode of ['plain', 'forced colours', 'reduced motion'] as const) {
+    test(`T11 the restart dialog dims the page behind it; the menu stays open behind (${mode})`, async ({
+      page,
+      browserName,
+    }) => {
+      test.skip(
+        mode === 'forced colours' && browserName !== 'chromium',
+        "Playwright's WebKit ignores the forced-colours emulation",
+      )
+      if (mode === 'forced colours') await page.emulateMedia({ forcedColors: 'active' })
+      if (mode === 'reduced motion') await page.emulateMedia({ reducedMotion: 'reduce' })
+      await seedProgressOnce(page, {
+        'river-stones': {
+          activeRun: { path: ['start', 'flat_stones', 'big_rock'], locale: 'en' },
+        },
+      })
+      await openPlayer(page, playerPath('en', 'river-stones'))
+      await expect(page.locator(PART)).toHaveAttribute('data-node', 'big_rock')
+      expect(
+        await page.evaluate(() => ({
+          forced: matchMedia('(forced-colors: active)').matches,
+          reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        })),
+        'the emulated media',
+      ).toEqual({ forced: mode === 'forced colours', reduced: mode === 'reduced motion' })
+      const menu = page.locator(MENU)
+      const dialog = page.locator(DIALOG)
+      await menu.click()
+      await expect(menu).toHaveAttribute('aria-expanded', 'true')
+      await expect(page.locator(PANEL)).toBeVisible()
+      await settleFonts(page)
+      // P: inside the run area's top padding, just inside its inline padding (the scene gradient).
+      const point = await page.locator(RUN).evaluate((run) => {
+        const box = run.getBoundingClientRect()
+        return { x: Math.round(box.left + 14), y: Math.round(box.top + 10) }
+      })
+      const before = mode === 'plain' ? await pixelAt(page, point) : null
+
+      await page.locator(MENU_RESTART).click()
+      await expect(dialog, 'the dialog after Start again').toHaveJSProperty('open', true)
+      await frames(page)
+      const shown = await dialog.evaluate((element) => {
+        const backdrop = getComputedStyle(element, '::backdrop')
+        const box = element.getBoundingClientRect()
+        return {
+          backgroundColor: backdrop.backgroundColor,
+          opacity: backdrop.opacity,
+          colorScheme: backdrop.colorScheme,
+          animationName: backdrop.animationName,
+          transitionDuration: backdrop.transitionDuration,
+          page: getComputedStyle(document.documentElement).backgroundColor,
+          dialog: { left: box.left, top: box.top, right: box.right, bottom: box.bottom },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        }
+      })
+      console.log(
+        `[player] T11 ${mode} (${test.info().project.name}): ${JSON.stringify(shown)}; ` +
+          `P ${JSON.stringify(point)} before ${JSON.stringify(before)}`,
+      )
+      expect(shown.backgroundColor, "the backdrop is the page's canvas colour").toBe(shown.page)
+      expect(shown.opacity, 'the backdrop is see-through').toBe('0.7')
+      expect(shown.animationName, 'no animation').toBe('none')
+      expect(shown.transitionDuration, 'no transition').toBe('0s')
+      if (mode === 'forced colours') {
+        expect(shown.backgroundColor, "forced colours: Canvas, Playwright's light theme").toBe(
+          'rgb(255, 255, 255)',
+        )
+      } else {
+        expect(shown.backgroundColor, 'the canvas token').toBe('rgb(13, 10, 5)')
+        expect(shown.colorScheme, 'the dark scheme').toBe('dark')
+      }
+      await expect(menu, 'the menu behind the dialog').toHaveAttribute('aria-expanded', 'true')
+      await expect(page.locator(PANEL), 'the menu panel behind the dialog').toBeVisible()
+
+      if (before !== null) {
+        const backdrop = rgbOf(shown.backgroundColor)
+        expect(
+          point.x >= 0 &&
+            point.y >= 0 &&
+            point.x < shown.viewport.width &&
+            point.y < shown.viewport.height,
+          'precondition: P lies in the viewport',
+        ).toBe(true)
+        expect(
+          point.x < shown.dialog.left ||
+            point.x > shown.dialog.right ||
+            point.y < shown.dialog.top ||
+            point.y > shown.dialog.bottom,
+          'precondition: P lies outside the dialog',
+        ).toBe(true)
+        expect(
+          Math.max(...before.map((value, index) => Math.abs(value - (backdrop[index] ?? 0)))),
+          'precondition: the page at P differs from the backdrop colour by 20 or more',
+        ).toBeGreaterThanOrEqual(20)
+        const after = await pixelAt(page, point)
+        const expected = before.map((value, index) => 0.3 * value + 0.7 * (backdrop[index] ?? 0))
+        console.log(
+          `[player] T11 pixels (${test.info().project.name}): before ${JSON.stringify(before)} ` +
+            `after ${JSON.stringify(after)} expected ${JSON.stringify(expected.map((v) => Math.round(v * 10) / 10))}`,
+        )
+        for (const [index, value] of after.entries()) {
+          expect(
+            Math.abs(value - (expected[index] ?? 0)),
+            `channel ${index} at P: ${value}, expected 0.3 x before + 0.7 x the backdrop`,
+          ).toBeLessThanOrEqual(3)
+        }
+      }
+
+      // T-b8 unchanged: the dialog's Escape closes the dialog only; the menu stays open.
+      await page.keyboard.press('Escape')
+      await expect(dialog, 'the dialog after Escape').toHaveJSProperty('open', false)
+      await expect(menu, 'the menu after Escape in the dialog').toHaveAttribute(
+        'aria-expanded',
+        'true',
+      )
+      await expect(page.locator(PANEL)).toBeVisible()
+    })
+  }
 
   // Review FB-4 (design §6 Reflow, "tested at 320 px and 150%"): the shell's 320 px test measures
   // the header with the menu closed, where Start again is a 0 x 0 box. Here the panel and the
@@ -3825,6 +4001,244 @@ test.describe('the story player, Step 10d', { tag: '@review' }, () => {
       held.rows,
       'header height, nav top, nav height and main top (px from the header top)',
     ).toEqual(after.rows)
+  }
+})
+
+// ---------------------------------------------------------------------------------------------
+// P1-4 owner screens (design p1-4-polish-design.md R1, T2, T2c): the run area is a framed panel.
+// It reaches --space-3 (12 px) past main's content box on each side and pads by as much, so the
+// title, the story card, the ending card and Back keep their width and place across; it pads
+// --space-5 (24 px) above and below, with the cards' radius; main's top padding is --space-4
+// (16 px) for the player's main only, so the title sits 40 px under the header (was 48). The
+// segments and the story-language switch share the run area's .runDependent marker and must not
+// take its box: their values are the ones measured before the panel (design §1.1, §3.8.3). Every
+// offset is a fixed px padding, independent of the font, so there is no wide-fallback variant;
+// the panel's share of a font-arrival shift is T-e5's (player-images.spec.ts).
+
+/** The phones, where 150% text and the 320 px case run. */
+const PANEL_PHONES: readonly string[] = ['chromium-phone', 'webkit-iphone']
+
+const PANEL_CASES = [
+  { story: 'river-stones', node: 'flat_stones', seeded: true },
+  { story: 'lantern-walk', node: 'ending_light', seeded: false },
+] as const
+
+/** Opens `story` at `node` on /`code` at `scale` text: flat_stones seeded, ending_light walked. */
+async function openPanelCase(
+  page: Page,
+  at: (typeof PANEL_CASES)[number],
+  code: LocaleCode,
+  scale: TextScale,
+): Promise<void> {
+  if (scale !== 100) await seedPrefs(page, prefsText(scale))
+  if (at.seeded) {
+    await seedProgressOnce(page, {
+      [at.story]: { activeRun: { path: ['start', at.node], locale: code } },
+    })
+  }
+  await openPlayer(page, playerPath(code, at.story))
+  if (!at.seeded) await walk(page, at.story, ['c1', 'c1'])
+  await expect(page.locator(PART)).toHaveAttribute('data-node', at.node)
+  await settleFonts(page)
+  expect(
+    await page.locator('html').getAttribute(TEXT_SCALE_ATTRIBUTE),
+    'precondition: the text size',
+  ).toBe(scale === 100 ? null : String(scale))
+}
+
+/** The panel, what sits in it, the header, main and the two other .runDependent elements. */
+async function panelLayout(page: Page) {
+  return page.evaluate(() => {
+    const element = (selector: string): Element => {
+      const found = document.querySelector(selector)
+      if (found === null) throw new Error(`no ${selector}`)
+      return found
+    }
+    const box = (selector: string) => {
+      const found = document.querySelector(selector)
+      if (found === null) return null
+      const rect = found.getBoundingClientRect()
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+    }
+    const values = (selector: string, names: readonly string[]): string[] => {
+      const style = getComputedStyle(element(selector))
+      return names.map((name) => style.getPropertyValue(name))
+    }
+    const BOX = [
+      'padding-block-start',
+      'padding-block-end',
+      'padding-inline-start',
+      'padding-inline-end',
+      'margin-inline-start',
+      'margin-inline-end',
+    ] as const
+    const run = getComputedStyle(element('[data-run]'))
+    const main = element('[data-player] > main')
+    const mainStyle = getComputedStyle(main)
+    return {
+      scene: element('[data-run]').getAttribute('data-scene'),
+      backgroundImage: run.backgroundImage,
+      radius: [
+        run.borderTopLeftRadius,
+        run.borderTopRightRadius,
+        run.borderBottomRightRadius,
+        run.borderBottomLeftRadius,
+      ],
+      padding: values('[data-run]', BOX.slice(0, 4)),
+      margin: values('[data-run]', BOX.slice(4)),
+      overflow: [run.overflowX, run.overflowY],
+      panel: box('[data-run]'),
+      header: box('[data-player] > header'),
+      title: box('[data-part] [data-story] h1'),
+      storyCard: box('[data-part] [data-story-card]'),
+      storyMax: parseFloat(getComputedStyle(element('[data-part] [data-story]')).maxInlineSize),
+      endingCard: box('[data-part] section[data-ending]'),
+      back: box('[data-part] button[data-back]'),
+      mainContent:
+        main.clientWidth -
+        parseFloat(mainStyle.getPropertyValue('padding-inline-start')) -
+        parseFloat(mainStyle.getPropertyValue('padding-inline-end')),
+      segments: values('header [role="progressbar"][data-segments]', BOX),
+      storyLanguage: values('header nav button[data-story-language]', BOX),
+      innerWidth: window.innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }
+  })
+}
+
+test.describe('the story player, P1-4 owner screens: the framed panel', { tag: '@review' }, () => {
+  for (const at of PANEL_CASES) {
+    for (const code of ENABLED_LOCALE_CODES) {
+      for (const scale of [100, 150] as const) {
+        test(`T2 /${code} ${at.story} ${at.node} at ${scale}%: the run area is a framed panel; the story keeps its width`, async ({
+          page,
+        }) => {
+          test.skip(
+            scale !== 100 && !PANEL_PHONES.includes(test.info().project.name),
+            '150% text: the phones',
+          )
+          await openPanelCase(page, at, code, scale)
+          const layout = await panelLayout(page)
+          console.log(
+            `[player] T2 /${code} ${at.node} ${scale}% (${test.info().project.name}): ` +
+              JSON.stringify(layout),
+          )
+          const { panel, header, title, storyCard, endingCard, back } = layout
+          // Preconditions: the scene gradient is painted, and everything measured is there.
+          expect(layout.scene, 'precondition: the run area carries data-scene').not.toBeNull()
+          expect(layout.backgroundImage, 'precondition: the scene gradient').toMatch(
+            /^linear-gradient\(/,
+          )
+          if (!panel || !header || !title || !storyCard || !back) {
+            throw new Error(`precondition: a measured element is missing ${JSON.stringify(layout)}`)
+          }
+          if (at.node === 'ending_light' && !endingCard) {
+            throw new Error('precondition: no ending card')
+          }
+
+          // The panel's own box: the cards' radius, 24 px above and below, 12 px across, reaching
+          // 12 px past main's content box; nothing clipped (focus rings near its edge show).
+          expect(layout.radius, 'the panel radius').toEqual(['24px', '24px', '24px', '24px'])
+          expect(layout.padding, 'the panel padding (block start, end; inline start, end)').toEqual(
+            ['24px', '24px', '12px', '12px'],
+          )
+          expect(layout.margin, 'the panel margin-inline').toEqual(['-12px', '-12px'])
+          expect(layout.overflow, 'the panel overflow').toEqual(['visible', 'visible'])
+
+          // The gaps: 16 px outside the panel plus 24 px inside it.
+          expect(
+            Math.abs(title.top - header.bottom - 40),
+            'header bottom to title top: 40 px',
+          ).toBeLessThanOrEqual(0.5)
+          expect(
+            Math.abs(title.top - panel.top - 24),
+            'panel top to title top: 24 px',
+          ).toBeLessThanOrEqual(0.5)
+          if (at.node === 'flat_stones') {
+            expect(
+              Math.abs(panel.bottom - back.bottom - 24),
+              'Back bottom to panel bottom: 24 px',
+            ).toBeLessThanOrEqual(0.5)
+          }
+
+          // Inside the panel across, at least its 12 px padding from each edge.
+          const inside = [
+            ['title', title],
+            ['story card', storyCard],
+            ...(endingCard ? [['ending card', endingCard] as const] : []),
+          ] as const
+          for (const [name, inner] of inside) {
+            expect(
+              inner.left - panel.left,
+              `${name}: from the panel's start edge`,
+            ).toBeGreaterThanOrEqual(11.5)
+            expect(
+              panel.right - inner.right,
+              `${name}: from the panel's end edge`,
+            ).toBeGreaterThanOrEqual(11.5)
+          }
+          // The story keeps today's width: the measure, or main's content width when narrower.
+          expect(
+            Math.abs(
+              storyCard.right - storyCard.left - Math.min(layout.storyMax, layout.mainContent),
+            ),
+            `the story card width (measure ${layout.storyMax}, main content ${layout.mainContent})`,
+          ).toBeLessThanOrEqual(0.5)
+
+          // The segments and the switch share the marker class, not the panel's box.
+          expect(layout.segments, 'the segments: padding block, inline; margin inline').toEqual([
+            '0px',
+            '0px',
+            '0px',
+            '0px',
+            '0px',
+            '0px',
+          ])
+          expect(layout.storyLanguage, 'the switch: padding block, inline; margin inline').toEqual([
+            '4px',
+            '4px',
+            '16px',
+            '16px',
+            '0px',
+            '0px',
+          ])
+
+          // On screen, with no horizontal scroll.
+          expect(panel.left, 'the panel start edge on screen').toBeGreaterThanOrEqual(0)
+          expect(panel.right, 'the panel end edge on screen').toBeLessThanOrEqual(layout.innerWidth)
+          expect(layout.scrollWidth, 'horizontal scroll').toBeLessThanOrEqual(layout.clientWidth)
+        })
+      }
+    }
+  }
+
+  // T2c: at 320 px (the narrowest width the spec names) the panel's edge, 4 px from the screen's,
+  // stays on screen. A start edge past the screen's is not scrollable, so the scroll check alone
+  // (T-a17) would not see it.
+  for (const code of ENABLED_LOCALE_CODES) {
+    for (const scale of [100, 150] as const) {
+      test(`T2c /${code} at 320 px and ${scale}%: the panel stays on screen`, async ({ page }) => {
+        test.skip(!PANEL_PHONES.includes(test.info().project.name), '320 px: the phones')
+        const viewport = page.viewportSize()
+        if (!viewport) throw new Error('the project sets no viewport')
+        await page.setViewportSize({ width: 320, height: viewport.height })
+        const at = PANEL_CASES[0]
+        await openPanelCase(page, at, code, scale)
+        const layout = await panelLayout(page)
+        console.log(
+          `[player] T2c /${code} ${scale}% (${test.info().project.name}): panel ` +
+            `${JSON.stringify(layout.panel)}; scroll ${layout.scrollWidth}/${layout.clientWidth}`,
+        )
+        expect(layout.innerWidth, 'precondition: a 320 px viewport').toBe(320)
+        if (!layout.panel) throw new Error('precondition: no panel')
+        expect(layout.panel.left, 'the panel start edge on screen').toBeGreaterThanOrEqual(0)
+        expect(layout.panel.right, 'the panel end edge on screen').toBeLessThanOrEqual(
+          layout.innerWidth,
+        )
+        expect(layout.scrollWidth, 'horizontal scroll').toBeLessThanOrEqual(layout.clientWidth)
+      })
+    }
   }
 })
 
