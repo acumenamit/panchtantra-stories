@@ -50,9 +50,42 @@
 //   failedImages (by image id), so its box stays, the img is hidden and the gradient shows, also on
 //   a later visit to that node. After each committed part while open, the next pictures are
 //   preloaded at low priority (useImagePrefetch: the 1-2 real candidates, never the current one).
+// - Step 11 (design p1-step11-design.md §4.2 to §4.6, N1 to N19; spec §6.4): narration. One
+//   narration session (useState, above the run area's key, so a restart remount keeps it) read
+//   through useSyncExternalStore; a layout effect attaches it (one controller) and its cleanup
+//   disposes the controller, so leaving the player (All stories, Grown-ups, the byline, the error
+//   boundary) stops the clip. The server and hydration render Read to me off; the actions' layout
+//   effect then takes prefs.readToMe (setOn: no controller call), so opening never plays.
+//   - Every narration call runs synchronously inside its tap, before that tap's storage write:
+//     narration.onStep(result) is the first statement of onAccepted (choices, Back, Try another
+//     path, Start again, the dialog's confirm); the story-language switch calls onSwitch after its
+//     accepted result; Read to me calls the session, then writes prefs.readToMe; the playback
+//     button calls the session. The session ignores a narration tap within SETTLE_MS of the last
+//     applied one (a timer; no inert, so focus stays). Another tab's pref change is not followed.
+//   - The run footer holds the narration group (NarrationControls) on every part when the run's
+//     language has narration. The unavailable message is announced in the live region at most once
+//     per runEpoch, SETTLE_MS after it appeared, and only if it still shows for the same part
+//     (narrationAnnouncementOf); "Loading" and the refused-play cue are not announced.
+//   - N27 (design §20.2; REQ:273): an applied narration tap (Read to me either way, the playback
+//     button in any kind) holds the rest of the run area for SETTLE_MS, so the second tap of a
+//     double tap that a layout move puts on a choice, Back, the ending card's actions or the AI
+//     voice link does nothing: those nodes are inert (partHoldOf) and choose, back and restart are
+//     refused through isInteractive (refs set in the tap, so before the commit too). Not hold():
+//     its settle makes the run footer inert, and the footer holds the narration group, so a focused
+//     Read to me would lose focus. The footer, the group and the narration buttons are never held
+//     this way (N17's session hold covers them) and keep focus; the header is not held. One timer
+//     per hold, released only by its own id; a new part clears it (tokens never repeat on a page).
+//     A held or false tap starts no hold. Nothing is announced and nothing looks different.
 // Strings arrive finished from the server (src/ui/player/strings.ts); no catalogue here. Imports
 // are relative (C15).
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { StepResult } from '../../core/engine'
 import type { LocaleCode } from '../../core/locales'
 import { SAVED_RUN_ATTRIBUTE } from '../../core/progress/saved-run-hint'
@@ -60,6 +93,14 @@ import { createPlayerActions, type PlayerActions } from '../../reader/player/act
 import { endingCountOf } from '../../reader/player/endings'
 import { nodeImageOf } from '../../reader/player/images'
 import { localeSwitchOf } from '../../reader/player/locales'
+import {
+  createNarrationSession,
+  narrationAnnouncementOf,
+  narrationDisplayOf,
+  narrationOfferedIn,
+  narrationPartOf,
+  type NarrationPlayback,
+} from '../../reader/player/narration'
 import { graphOf, type PlayerData } from '../../reader/player/player-data'
 import { sceneIdOf } from '../../reader/player/scene'
 import { segmentsOf } from '../../reader/player/segments'
@@ -70,6 +111,7 @@ import { LiveRegion } from '../a11y/live-region'
 import shell from '../shell/shell.module.css'
 import { StorageBanner } from '../shell/storage-banner'
 import { EndingCard } from './ending-card'
+import { NarrationControls } from './narration-controls'
 import { PlayerHeader } from './player-header'
 import { PlayerMenu } from './player-menu'
 import styles from './player.module.css'
@@ -102,6 +144,29 @@ export function startAgainHeld(cancelled: string | null, settling: string | null
   return cancelled !== null && cancelled === settling
 }
 
+/** Which run-area nodes refuse taps now (N27); exported for its unit test. */
+export interface PartHold {
+  /** Not opening and not settling: the run footer, with Back and the narration group, is live. */
+  readonly interactive: boolean
+  /** The hold after an applied narration tap: the choices, Back, the ending card's actions and the
+   * AI voice link are inert and refused; the footer and the narration buttons are not. */
+  readonly held: boolean
+}
+
+export function partHoldOf(input: {
+  /** The run is opening (before open() resolved). */
+  readonly opening: boolean
+  /** The part on screen. */
+  readonly token: string
+  /** The part a step's settle or a restart-dialog cancel holds, or null. */
+  readonly settling: string | null
+  /** The part the narration hold holds, or null. */
+  readonly narrationHeld: string | null
+}): PartHold {
+  const interactive = !input.opening && input.settling !== input.token
+  return { interactive, held: input.narrationHeld === input.token }
+}
+
 export function Player({ data, strings, locale }: PlayerProps) {
   // The token of the part that is settling (its run-area controls inert), else null.
   const [settling, setSettling] = useState<string | null>(null)
@@ -118,6 +183,14 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const [sessionEndings, setSessionEndings] = useState<readonly string[]>([])
   // Step 10e (§5): the ids of the pictures that failed to load or decode on this page.
   const [failedImages, setFailedImages] = useState<readonly string[]>([])
+  // Step 11 N27: the part the narration hold holds (null at first, so the server and hydration
+  // render as before), and the id of the latest hold, which runs the release effect again.
+  const [narrationHeld, setNarrationHeld] = useState<string | null>(null)
+  const [narrationHolds, setNarrationHolds] = useState(0)
+  // Set in the tap, so isInteractive refuses before the commit (C28's reason); the id guards the
+  // release, so an old timer never releases a newer hold.
+  const narrationHeldToken = useRef<string | null>(null)
+  const narrationHoldId = useRef(0)
   const settlingToken = useRef<string | null>(null)
   // The token the last restart-dialog cancel held (hold()); see startAgainHeld.
   const cancelledToken = useRef<string | null>(null)
@@ -136,6 +209,9 @@ export function Player({ data, strings, locale }: PlayerProps) {
   )
   // The page's prefs (the text size): read by the menu's radios and by TextScaleSync.
   const [prefs] = useState(() => readerStores().prefs)
+  // Step 11 (N19): the page's narration session, above the run area's key. Nothing in it touches
+  // the document before a tap, so the server render creates one too.
+  const [narration] = useState(() => createNarrationSession({ data }))
   // Created after hydration, with the controller; there are no taps to handle before that.
   const actions = useRef<PlayerActions | null>(null)
 
@@ -144,8 +220,21 @@ export function Player({ data, strings, locale }: PlayerProps) {
     controller.getSnapshot,
     controller.getSnapshot,
   )
+  // Read to me off and idle on the server and while hydrating (the session's first snapshot).
+  const narrationSnapshot = useSyncExternalStore(
+    narration.subscribe,
+    narration.getSnapshot,
+    narration.getSnapshot,
+  )
   const opening = snapshot.phase === 'opening'
   const view = partViewOf(data, snapshot.state)
+  // Step 11: the group shows when the run's language has narration (N1, N12); what it shows is the
+  // 4.4 table for the part on screen.
+  const narrationOffered = narrationOfferedIn(data, view.locale)
+  const narrationDisplay = narrationDisplayOf(
+    narrationSnapshot,
+    narrationPartOf(data, snapshot.state),
+  )
   const segments = segmentsOf(data, snapshot.state)
   // "Ending x of y found": stored or found on this page, current ending ids only (D11-P13).
   const endingsFound = endingCountOf(data.endingIds, storedEndings, sessionEndings)
@@ -165,9 +254,18 @@ export function Player({ data, strings, locale }: PlayerProps) {
       controller,
       isInteractive: () => {
         const { phase, state } = controller.getSnapshot()
-        return phase === 'open' && settlingToken.current !== tokenOf(state)
+        const now = partHoldOf({
+          opening: phase !== 'open',
+          token: tokenOf(state),
+          settling: settlingToken.current,
+          narrationHeld: narrationHeldToken.current,
+        })
+        return now.interactive && !now.held
       },
       onAccepted: (result) => {
+        // Step 11 (N5, 4.6): first, synchronously, so play() runs inside the tap and before the
+        // controller's save (a microtask queued by dispatch).
+        narration.onStep(result)
         // A found ending counts at once, before the controller's save lands (§4.2 step 6).
         for (const effect of result.effects) {
           if (effect.type !== 'recordEnding') continue
@@ -182,6 +280,9 @@ export function Player({ data, strings, locale }: PlayerProps) {
         setAnimated(token)
       },
     })
+    // Step 11 (N3, N4): Read to me as remembered, after hydration; no controller call, so opening
+    // or resuming never plays.
+    narration.setOn(prefs.getSnapshot().readToMe)
     void controller.open()
 
     // The stored endings (§4.2 step 4): read once now and again on every later change of the
@@ -206,7 +307,54 @@ export function Player({ data, strings, locale }: PlayerProps) {
       live = false
       unsubscribe()
     }
-  }, [controller, data.storyId])
+  }, [controller, data.storyId, narration, prefs])
+
+  // Step 11 (N19): one narration controller while the player is mounted; the cleanup disposes it
+  // (pause, src removed, load), so leaving the player stops the clip, and a StrictMode or Fast
+  // Refresh re-run attaches a fresh one.
+  useLayoutEffect(() => narration.attach(), [narration])
+
+  // Step 11 (N10, A17): the unavailable message, while the group shows it, is announced in the live
+  // region at most once per runEpoch, SETTLE_MS after it appeared and only if it still shows for the
+  // same part (narrationAnnouncementOf decides), so it never lands in the frame of "Page n". A
+  // part's key is its token and the run's language (a switch keeps the token). The timers outlive a
+  // change of the key on purpose (the decision reads where the message is now); unmount clears them.
+  const unavailableFor =
+    narrationOffered && narrationDisplay.message === 'unavailable'
+      ? `${view.token} ${view.locale}`
+      : null
+  const unavailableNow = useRef<string | null>(null)
+  const announcedEpoch = useRef<number | null>(null)
+  const announceTimers = useRef(new Set<number>())
+  const unavailableText = strings.narrationUnavailable
+  const { runEpoch } = view
+  useLayoutEffect(() => {
+    unavailableNow.current = unavailableFor
+  }, [unavailableFor])
+  useEffect(() => {
+    if (unavailableFor === null) return
+    const timers = announceTimers.current
+    const timer = window.setTimeout(() => {
+      timers.delete(timer)
+      const decision = {
+        runEpoch,
+        announcedEpoch: announcedEpoch.current,
+        shownFor: unavailableFor,
+        shownNow: unavailableNow.current,
+      }
+      if (!narrationAnnouncementOf(decision)) return
+      announcedEpoch.current = runEpoch
+      announce(unavailableText)
+    }, SETTLE_MS)
+    timers.add(timer)
+  }, [unavailableFor, runEpoch, unavailableText])
+  useEffect(() => {
+    const timers = announceTimers.current
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
 
   useLayoutEffect(() => {
     if (!opening) document.documentElement.removeAttribute(SAVED_RUN_ATTRIBUTE)
@@ -238,6 +386,32 @@ export function Player({ data, strings, locale }: PlayerProps) {
     return () => window.clearTimeout(timer)
   }, [token, holds])
 
+  // Step 11 N27: the release of the narration hold (declared after the settle, so it runs after
+  // it). A new hold (narrationHolds) clears the running timer and starts a new SETTLE_MS one; a new
+  // part or an unmount clears it. The callback releases only its own hold (the id), so an old timer
+  // never releases a newer hold, even if a commit came after the old timer's task.
+  useLayoutEffect(() => {
+    if (narrationHeldToken.current !== token) return
+    const id = narrationHolds
+    const timer = window.setTimeout(() => {
+      if (narrationHoldId.current !== id) return
+      narrationHeldToken.current = null
+      setNarrationHeld(null)
+    }, SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [token, narrationHolds])
+
+  // Step 11 N27: an applied narration tap holds the rest of the run area for SETTLE_MS (the
+  // choices, Back, the ending card's actions and the AI voice link), never the footer, the group or
+  // the narration buttons, so focus stays; it writes no storage and announces nothing.
+  const holdRunArea = (): void => {
+    narrationHoldId.current += 1
+    const held = tokenOf(controller.getSnapshot().state)
+    narrationHeldToken.current = held
+    setNarrationHeld(held)
+    setNarrationHolds(narrationHoldId.current)
+  }
+
   // The restart dialog closed with no accepted restart (Keep reading, Escape): the run area is held
   // for SETTLE_MS like a step, through isInteractive and inert, so the second tap of a double tap
   // never lands on a choice or Back under the dialog (D11-P7 amended at 10b, R2-STRESS-1). The
@@ -262,8 +436,31 @@ export function Player({ data, strings, locale }: PlayerProps) {
   // Try another path: RESTART from the run area, no dialog, held by the settle (D11-P11, P7).
   const tryAnother = (seq: number): StepResult => actions.current?.restart(seq) ?? refused()
   // The story-language switch: SET_LOCALE from the header, never held by the settle (D11-P4).
-  const setLocale = (target: LocaleCode): StepResult =>
-    actions.current?.setLocale(target) ?? refused()
+  // Step 11 (N6): with Read to me on, the same part's clip in the new language plays (or cues, or
+  // stops when missing) inside the switch tap, before the switch's save (a microtask).
+  const setLocale = (target: LocaleCode): StepResult => {
+    const result = actions.current?.setLocale(target) ?? refused()
+    if (result.accepted) narration.onSwitch(narrationPartOf(data, result.state))
+    return result
+  }
+
+  // Step 11 (N3, N9, N17, N27): Read to me. The session calls the controller first (play, or stop
+  // at any status), then the pref is written, so the choice carries to other stories, then the run
+  // area is held; a held tap writes nothing and holds nothing. With storage blocked the prefs use
+  // memory: it plays and is not remembered.
+  const toggleNarration = (): void => {
+    const on = narration.toggle(narrationPartOf(data, controller.getSnapshot().state))
+    if (on === null) return
+    prefs.update({ readToMe: on })
+    holdRunArea()
+  }
+  // Step 11 (N2, N8 to N10, N27): Pause, Resume, Play again or Tap to listen, for the part on
+  // screen; an applied one holds the run area, a held or false one does not.
+  const playNarration = (kind: NarrationPlayback): void => {
+    if (narration.playback(kind, narrationPartOf(data, controller.getSnapshot().state))) {
+      holdRunArea()
+    }
+  }
 
   // Start again from the menu or its dialog: RESTART, not held by the settle; an accepted one
   // closes the menu (D11-P11, P19, C13).
@@ -285,6 +482,10 @@ export function Player({ data, strings, locale }: PlayerProps) {
   const endReveal = (): void => {
     if (animated === token && revealDone !== token) setRevealDone(token)
   }
+
+  // N27: the run footer is live unless opening or settling; the narration hold holds the choices,
+  // Back, the ending card's actions and the AI voice link only.
+  const { interactive, held } = partHoldOf({ opening, token, settling, narrationHeld })
 
   return (
     <div data-player="" data-run-phase={snapshot.phase} className={styles.player}>
@@ -341,13 +542,26 @@ export function Player({ data, strings, locale }: PlayerProps) {
           <StoryPart
             key={token}
             view={view}
-            interactive={!opening && settling !== token}
+            interactive={interactive}
+            held={held}
             animate={animated === token}
             revealDone={revealDone === token}
             firstParagraphRef={firstParagraph}
             onChoose={choose}
             backLabel={strings.back}
             onBack={back}
+            narration={
+              narrationOffered ? (
+                <NarrationControls
+                  locale={locale}
+                  display={narrationDisplay}
+                  strings={strings}
+                  onToggle={toggleNarration}
+                  onPlayback={playNarration}
+                  linkHeld={held}
+                />
+              ) : null
+            }
             image={
               image === null ? null : (
                 <SceneImage
@@ -365,7 +579,7 @@ export function Player({ data, strings, locale }: PlayerProps) {
                   locale={locale}
                   strings={strings}
                   count={strings.endingCount[endingsFound] ?? ''}
-                  interactive={!opening && settling !== token}
+                  interactive={interactive && !held}
                   onTryAnother={tryAnother}
                 />
               ) : null

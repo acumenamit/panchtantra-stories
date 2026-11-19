@@ -1,7 +1,8 @@
 // Player actions (Step 10a; design §4.2 step 6, §5): the one synchronous event path from a tap to
 // the engine, and the Step 11 seam (spec §6.4: the audio call runs inside the tap handler).
 // - choose(seq, choiceId), back(seq), restart(seq): run-area events. While the run area is not
-//   interactive (opening, or settling for SETTLE_MS after a step) they are refused here with no
+//   interactive (opening, settling for SETTLE_MS after a step, or held for SETTLE_MS after a
+//   narration tap, Step 11 N27; the island's isInteractive decides) they are refused here with no
 //   dispatch. Otherwise they dispatch with the seq the control was rendered with (never the
 //   controller's live seq), so a second tap of a double tap is a stale-seq no-op in the engine.
 // - setLocale(locale): the story-language switch (10d) sits in the header, which is not settled,
@@ -20,7 +21,8 @@ import type { RunController } from '../progress/run-controller'
 
 export interface PlayerActionsOptions {
   readonly controller: Pick<RunController, 'dispatch' | 'getSnapshot'>
-  /** False while the run is opening or the run area is settling: run-area events are refused. */
+  /** False while the run is opening, the run area is settling or it is held after a narration
+   * tap (N27): run-area events are refused. */
   readonly isInteractive: () => boolean
   /** Called synchronously with every accepted result, before the action returns. */
   readonly onAccepted: (result: StepResult) => void

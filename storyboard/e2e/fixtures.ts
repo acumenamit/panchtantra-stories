@@ -24,10 +24,19 @@
 // on that page (page.route, never a context-wide route: routing turns off the HTTP cache, and other
 // specs count font requests) and answers it itself: a URL in mediaStub.urls, compared as the exact
 // string the page requests, gets mediaStub.body with mediaStub.contentType; any other media URL is
-// aborted. Nothing reaches the real media origin. The guard then allows a media request only when
-// that stub answered it, so a media request in a test without the option fails the test, and so
-// does one from another page of the same test (the stub covers its own page only) or one to a
-// look-alike origin. e2e/security-guard.spec.ts proves each bypass form.
+// aborted. Nothing that goes through Playwright's network layer reaches the real media origin. The
+// guard then allows a media request only when that stub answered it, so a media request in a test
+// without the option fails the test, and so does one from another page of the same test (the stub
+// covers its own page only) or one to a look-alike origin. e2e/security-guard.spec.ts proves each
+// bypass form.
+// P1-5a Step 11 (design p1-step11-design.md §8.3, A29): mediaStub.status (default 200) is the
+// status every listed URL is answered with (the narration spec's 402 and 540, REQ:210); unlisted
+// URLs are still aborted, never answered with it, and both count as answered by the stub. The two
+// claims above hold only on an engine whose media requests go through Playwright's network layer:
+// Windows WebKit fetches a detached audio element's src outside it (probe PR-3: no route, no
+// request event, a real connection), where neither the stub nor this guard sees the request. So
+// every test that sets a real media element's src asks the engine's media answer first and skips
+// where it is not routed with no escape (e2e/media-answer.ts mediaAnswerFor; design S10).
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test as base, expect, type Page, type Request } from '@playwright/test'
@@ -71,6 +80,8 @@ export interface MediaStub {
   /** What it serves for each of them. */
   readonly body: Uint8Array
   readonly contentType: string
+  /** The status every listed URL is answered with (default 200); unlisted URLs still abort. */
+  readonly status?: number
 }
 
 interface GuardFixtures {
@@ -103,7 +114,11 @@ export const test = base.extend<GuardFixtures, { buildIdentity: void }>({
           // A page that is closing or navigating away may drop the request first.
           if (known.has(request.url())) {
             await route
-              .fulfill({ status: 200, contentType: mediaStub.contentType, body })
+              .fulfill({
+                status: mediaStub.status ?? 200,
+                contentType: mediaStub.contentType,
+                body,
+              })
               .catch(() => undefined)
           } else {
             await route.abort().catch(() => undefined)

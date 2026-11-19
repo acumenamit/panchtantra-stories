@@ -13,7 +13,8 @@
 //   and announced in the page's one live region. manual: a labelled read-only
 //   input[data-share-url] holding the URL, focused and selected. idle and pending show nothing.
 // - The button sits in the card's actions, which settle with the run area (D11-P7): inert while the
-//   run opens or the part settles, so it needs no guard of its own.
+//   run opens or the part settles, or held after a narration tap (Step 11 N27), so it needs no
+//   guard of its own.
 // - P1-4 owner screens (design p1-4-polish-design.md R2): the control renders nothing of its own
 //   box; it hands the card its two parts through a render prop. share: the button, with "Link
 //   copied." after it once a copy is done, for the action row; field: the manual field, or null,

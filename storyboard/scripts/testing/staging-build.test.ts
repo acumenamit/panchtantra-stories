@@ -6,6 +6,10 @@
 // P1-4b Step 10e (design p1-step10-design.md §2.5, §4.5): the harness publishes with pictureStory,
 // so its run loads 4 stories and makes the picture story's 12 media HEADs on the stub (planned
 // expectation update); the direct publishFixturesAsStaging calls here stay as they were (C3).
+// P1-5a Step 11 (design p1-step11-design.md §8.1, §13.3 T11-22, §13.5): the harness also publishes
+// the narrated story (narrationStory), so its run loads 5 stories and makes 27 media HEADs (the
+// picture story's 12 and the narrated story's 15 clips of 6,048 bytes); planned expectation
+// updates of the first log line, the media lines, the HEAD count and the stories list.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,6 +36,7 @@ import {
   STAGING_NOTE,
   STAGING_POINTER_PATH,
 } from './staging-catalogue'
+import { NARRATION_STORY_ID } from './narration-story-id'
 import { PICTURE_STORY_ID } from './picture-story-id'
 import { startStubStorage, type StubStorage } from './stub-storage'
 
@@ -52,8 +57,8 @@ const STAGING_ENV_LINE =
 const MODE_LINE =
   'content: mode=staging seq=1 snapshot=catalogue/snapshots/1.json stories=3 excluded=0 featured=none'
 const BASE = 'http://127.0.0.1:1/storage/v1/object/public/content'
-/** The harness run's mode line: the 3 fixtures and the derived picture story. */
-const HARNESS_MODE_LINE = MODE_LINE.replace('stories=3', 'stories=4')
+/** The harness run's mode line: the 3 fixtures and the derived picture and narrated stories. */
+const HARNESS_MODE_LINE = MODE_LINE.replace('stories=3', 'stories=5')
 
 let root: string
 let stubs: StubStorage[]
@@ -352,11 +357,15 @@ describe('stagingBuild, the whole harness run (design §6.8)', () => {
       expect(h.out).toContain(STAGING_ENV_LINE)
       expect(h.out).toContain(HARNESS_MODE_LINE)
       expect(h.out[0]).toBe(
-        `staging-build: launch=${launch}; stub on 127.0.0.1 serves 4 packages under catalogue/staging.json: 3 fixtures and the derived picture story ${PICTURE_STORY_ID} with 12 media objects`,
+        `staging-build: launch=${launch}; stub on 127.0.0.1 serves 5 packages under catalogue/staging.json: 3 fixtures, the derived picture story ${PICTURE_STORY_ID} with 12 media objects and the derived narrated story ${NARRATION_STORY_ID} with 15 media objects`,
       )
-      // The picture story's 12 variants pass the loader's media HEAD gate on the stub.
+      // The picture story's 12 variants and the narrated story's 15 clips (15 × 6,048 bytes) pass
+      // the loader's media HEAD gate on the stub.
       expect(h.out).toContain(`content: media story=${PICTURE_STORY_ID} variants=12 bytes=408 ok`)
-      expect(h.stub()?.requests.filter((r) => r.method === 'HEAD')).toHaveLength(12)
+      expect(h.out).toContain(
+        `content: media story=${NARRATION_STORY_ID} variants=15 bytes=90720 ok`,
+      )
+      expect(h.stub()?.requests.filter((r) => r.method === 'HEAD')).toHaveLength(27)
       expect(h.out.indexOf('staging-build: stub closed')).toBe(h.out.indexOf(HARNESS_MODE_LINE) + 1)
       expect(h.out.at(-1)).toBe(`staging-build: ok (launch=${launch})`)
       const info = BuildInfo.parse(JSON.parse(readFileSync(outputs().contentInfo, 'utf8')))
@@ -365,6 +374,7 @@ describe('stagingBuild, the whole harness run (design §6.8)', () => {
         'lantern-walk',
         'river-stones',
         PICTURE_STORY_ID,
+        NARRATION_STORY_ID,
         'two-paths',
       ])
     },

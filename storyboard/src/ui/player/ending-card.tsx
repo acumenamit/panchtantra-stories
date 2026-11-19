@@ -10,8 +10,9 @@
 //   was rendered with), Share (D11-P14) and All stories (next/link to /{locale}, the route locale,
 //   like the header's exit).
 // - The actions settle with the run area (D11-P7): inert while the run opens or this part settles,
-//   so a tap that lands here within SETTLE_MS of the ending does nothing. An accepted Try another
-//   path makes them inert at once on their DOM node (C28).
+//   or held after a narration tap (Step 11 N27; the island passes interactive false then), so a tap
+//   that lands here within SETTLE_MS of the ending or of a narration tap does nothing. An accepted
+//   Try another path makes them inert at once on their DOM node (C28).
 // - The heading, alternate label, count and actions carry the page's language (the route locale).
 // - Step 10d (the 10c hand-off; D11-P4): a story-language switch keeps the part, and so this card,
 //   mounted, and only the lesson changes language. Share is keyed by the content locale, so a

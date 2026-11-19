@@ -4,7 +4,8 @@
 // asterisks included).
 // - Each button carries the seq it was rendered with (data-seq) and sends it with the tap, so a
 //   second tap of a double tap is a stale-seq no-op in the engine.
-// - `inert` while the run is opening or settling (the island decides). On an accepted tap the list
+// - `inert` while the run is opening or settling, or held after a narration tap (Step 11 N27; the
+//   island decides). On an accepted tap the list
 //   is made inert at once on its DOM node through a ref (C28): React state would apply only at the
 //   commit that already unmounts this list. A refused tap changes nothing.
 // - aria-labelledby names the question only when the node has one (the schema makes it optional).

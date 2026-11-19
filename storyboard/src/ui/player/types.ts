@@ -6,6 +6,9 @@
 // Step 10c adds the ending card: the lesson heading, the alternate label, the ending count (one
 // finished string per count), Try another path, Share and its two statuses.
 // Step 10d adds the story-language switch's visually hidden prefix.
+// Step 11 (design p1-step11-design.md §0.2) adds the run footer's narration group: Read to me, the
+// AI voice byline and its hidden suffix, the playback button's four labels and the status line's
+// two messages (NarrationStrings).
 import type { TextScale } from '../../core/progress'
 
 /** What the error fallback shows (D11-P17); the page passes them as PlayerBoundary props. */
@@ -61,4 +64,30 @@ export interface PlayerStrings extends PlayerFallbackStrings {
    * (the endonym follows it in its own lang).
    */
   readonly storyLanguage: string
+  /** Step 11 (N2, N13): the toggle's fixed label, the byline and its visually hidden suffix. */
+  readonly readToMe: string
+  readonly aiVoice: string
+  readonly aiVoiceAbout: string
+  /** Step 11 (N2, N8, N9, N26): the playback button's four labels. */
+  readonly pause: string
+  readonly resume: string
+  readonly playAgain: string
+  readonly tapToListen: string
+  /** Step 11 (N10 to N12): the status line, "Loading" and the unavailable message. */
+  readonly narrationLoading: string
+  readonly narrationUnavailable: string
 }
+
+/** What the narration group shows (Step 11; narration-controls.tsx). */
+export type NarrationStrings = Pick<
+  PlayerStrings,
+  | 'readToMe'
+  | 'aiVoice'
+  | 'aiVoiceAbout'
+  | 'pause'
+  | 'resume'
+  | 'playAgain'
+  | 'tapToListen'
+  | 'narrationLoading'
+  | 'narrationUnavailable'
+>

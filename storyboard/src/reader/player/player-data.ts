@@ -1,7 +1,16 @@
 // Player view model (Step 10a; design D11-P2, §5). The page builds PlayerData on the server from the
 // strict package and the enabled locales and passes it to the player island as props, so it holds
-// only what the player shows and what the engine needs. Not sent: provenance, assets (audio
-// included), description, theme, book, duration, alt and packageSha256 (Step 20 adds report data).
+// only what the player shows and what the engine needs. Not sent: provenance, the assets themselves
+// (only finished picture and clip URLs are), description, theme, book, duration, alt and
+// packageSha256 (Step 20 adds report data).
+// - Step 11 (design p1-step11-design.md N18, §4.1): each node carries its narration, page locale →
+//   the finished clip URL (options.mediaUrl of the audio asset's one variant), {} when it has none,
+//   so every node has the same keys. Audio URLs are sent now; the asset id field, path, mime, bytes,
+//   durationMs, provenance and narratedTextSha256 still are not. A clip in a locale the page does
+//   not build is skipped. The second lock, ids only: an audio asset for a node the package lacks
+//   (`narration node missing`), a second one for a node and locale (`narration duplicate`), a
+//   variant that is not audio/mpeg (`narration.mime missing`), or a clip while no mediaUrl was
+//   passed (`mediaUrl missing`), each as `player: <storyId> <locale> <nodeId> ...`.
 // - Step 10e (D11-P2 C14, P21): each node carries its picture as an ImageView (images.ts), or null
 //   when it has none (every phase-1 package, SPEC:189: no box). imageViewOf runs here, on the
 //   server, with options.mediaUrl, the reader's checked builder (mediaUrl from @/content, passed in
@@ -39,6 +48,8 @@ export interface PlayerNode {
   readonly choices: readonly PlayerChoice[]
   /** The node's picture (Step 10e), or null: no picture, so no box. */
   readonly image: ImageView | null
+  /** Step 11: page locale → the finished clip URL; {} when the node has no clip (N18). */
+  readonly narration: Readonly<Partial<Record<LocaleCode, string>>>
 }
 
 export interface PlayerNodeText {
@@ -77,7 +88,7 @@ export interface PlayerDataOptions {
   readonly locales: readonly LocaleCode[]
   /**
    * The reader's media URL builder (mediaUrl from @/content; server only, C14). Needed only by a
-   * package with a picture; a node with an image and no builder throws.
+   * package with a picture or a clip in a page locale; one of those and no builder throws.
    */
   readonly mediaUrl?: MediaUrlOf
 }
@@ -104,6 +115,37 @@ export function playerDataOf(pkg: StoryPackageV1, options: PlayerDataOptions): P
     return imageViewOf(asset, options.mediaUrl, { storyId: pkg.storyId, nodeId: node.id })
   }
 
+  // Step 11 (§4.1): node id → page locale → clip URL, from the audio assets in the page's locales.
+  const clips = new Map<string, Partial<Record<LocaleCode, string>>>()
+  for (const asset of pkg.assets) {
+    if (asset.kind !== 'audio' || !locales.includes(asset.locale)) continue
+    const { locale, nodeId } = asset
+    if (!pkg.nodes.some((node) => node.id === nodeId)) {
+      throw missing(locale, nodeId, 'narration node')
+    }
+    const variant = asset.variants[0]
+    if (variant === undefined || variant.mime !== 'audio/mpeg') {
+      throw missing(locale, nodeId, 'narration.mime')
+    }
+    const byLocale = clips.get(nodeId) ?? {}
+    if (byLocale[locale] !== undefined) {
+      throw new Error(`player: ${pkg.storyId} ${locale} ${nodeId} narration duplicate`)
+    }
+    if (options.mediaUrl === undefined) throw missing(locale, nodeId, 'mediaUrl')
+    byLocale[locale] = options.mediaUrl(variant.path)
+    clips.set(nodeId, byLocale)
+  }
+  /** In the page's locale order, so the payload does not depend on the order of the assets. */
+  const narrationOf = (nodeId: string): Partial<Record<LocaleCode, string>> => {
+    const byLocale = clips.get(nodeId) ?? {}
+    const narration: Partial<Record<LocaleCode, string>> = {}
+    for (const locale of locales) {
+      const url = byLocale[locale]
+      if (url !== undefined) narration[locale] = url
+    }
+    return narration
+  }
+
   const nodes: PlayerNode[] = pkg.nodes.map((node) => ({
     id: node.id,
     type: node.type,
@@ -112,6 +154,7 @@ export function playerDataOf(pkg: StoryPackageV1, options: PlayerDataOptions): P
     lessonIcon: node.type === 'ending' ? node.lessonIcon : null,
     choices: node.type === 'ending' ? [] : node.choices.map((c) => ({ id: c.id, next: c.next })),
     image: imageOf(node),
+    narration: narrationOf(node.id),
   }))
 
   const text: Partial<Record<LocaleCode, PlayerLocaleText>> = {}

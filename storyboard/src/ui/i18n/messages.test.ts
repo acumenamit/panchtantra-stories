@@ -13,6 +13,9 @@
 // numeric and total any.
 // Step 10d adds its 1 player key, player.storyLanguage (owner-approved as §0.2 drafts it), which
 // takes no argument.
+// Step 11 (design p1-step11-design.md §0.2, §14.5) adds its 9 narration keys (owner-approved as
+// §0.2 drafts them; one unavailable message, Q1), none of which takes an argument, and pins their
+// exact values in both languages (A19).
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,7 +53,7 @@ const ALL = LOCALES.flatMap((locale) =>
 
 /**
  * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4, Step 10b's 9, Step 10c's 7 and Step
- * 10d's 1 player keys (p1-step10 §0.2), sorted.
+ * 10d's 1 player keys (p1-step10 §0.2) and Step 11's 9 narration keys (p1-step11 §0.2), sorted.
  */
 const DESIGN_KEYS = [
   'gate.prompt',
@@ -66,6 +69,8 @@ const DESIGN_KEYS = [
   'notFound.body',
   'notFound.link',
   'notFound.title',
+  'player.aiVoice',
+  'player.aiVoiceAbout',
   'player.allStories',
   'player.altEnding',
   'player.back',
@@ -76,14 +81,21 @@ const DESIGN_KEYS = [
   'player.lessonHeading',
   'player.linkCopied',
   'player.menu',
+  'player.narrationLoading',
+  'player.narrationUnavailable',
   'player.page',
+  'player.pause',
+  'player.playAgain',
   'player.progress',
   'player.progressValue',
+  'player.readToMe',
   'player.restart',
   'player.restartQuestion',
+  'player.resume',
   'player.share',
   'player.startThisAgain',
   'player.storyLanguage',
+  'player.tapToListen',
   'player.textSize',
   'player.textSizeOption',
   'player.tryAnother',
@@ -91,6 +103,25 @@ const DESIGN_KEYS = [
   'storage.body',
   'storage.title',
 ]
+
+/** Step 11 (p1-step11-design.md §0.2, §14.5): the narration keys, exactly as the owner approved them. */
+const STEP11_VALUES: Readonly<Record<string, Readonly<Record<Locale, string>>>> = {
+  'player.aiVoice': { en: 'AI voice', hi: 'एआई आवाज़' },
+  'player.aiVoiceAbout': {
+    en: '(how these stories are made)',
+    hi: '(ये कहानियाँ कैसे बनाई जाती हैं)',
+  },
+  'player.narrationLoading': { en: 'Loading', hi: 'लोड हो रहा है' },
+  'player.narrationUnavailable': {
+    en: 'Narration isn’t available',
+    hi: 'कहानी सुनाई नहीं जा सकती',
+  },
+  'player.pause': { en: 'Pause', hi: 'रोकें' },
+  'player.playAgain': { en: 'Play again', hi: 'फिर से सुनें' },
+  'player.readToMe': { en: 'Read to me', hi: 'पढ़कर सुनाएँ' },
+  'player.resume': { en: 'Resume', hi: 'आगे सुनें' },
+  'player.tapToListen': { en: 'Tap to listen', hi: 'सुनने के लिए टैप करें' },
+}
 
 const SURFACES = [
   'meta',
@@ -168,10 +199,20 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the design keys (Step 7 and Steps 10a to 10d), sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7, Steps 10a to 10d and Step 11), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)
+  })
+
+  it('hold the 9 Step 11 narration keys exactly as the owner approved them (A19)', () => {
+    expect(Object.keys(STEP11_VALUES)).toHaveLength(9)
+    for (const [key, values] of Object.entries(STEP11_VALUES)) {
+      for (const locale of LOCALES) {
+        expect(CATALOGUE[locale][key], `${locale} ${key}`).toBe(values[locale])
+      }
+    }
+    expect(CATALOGUE.en['player.narrationUnavailable']).toContain('isn’t')
   })
 
   it('use flat dotted keys <surface>.<item> in camelCase', () => {

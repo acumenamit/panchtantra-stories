@@ -6,6 +6,12 @@
 // Step 10e (D11-P2 C14, P21): each node carries its picture as an ImageView with finished media URLs
 // (built by the mediaUrl the page passes), or null; never a path, mime, byte count or provenance. An
 // image that names no image asset, or a picture without a mediaUrl, stops the build with ids only.
+// Step 11 (design p1-step11-design.md N18, §4.1, A1 to A3; T11-1 to T11-3): each node carries its
+// narration as page locale → finished clip URL ({} when none), built by the same mediaUrl; never the
+// asset id field, path, mime, bytes, duration, provenance or narratedTextSha256. An audio asset for a
+// missing node, a second one for a node and locale, a non-MP3 variant, or a clip without a mediaUrl
+// stops the build with ids only; a clip in a locale the page does not build is skipped. A 14-node
+// story narrated in both languages stays within the budget.
 import { describe, expect, it } from 'vitest'
 import lanternWalk from '../../../fixtures/packages/lantern-walk.json'
 import riverStones from '../../../fixtures/packages/river-stones.json'
@@ -85,7 +91,16 @@ const PLAYER_DATA_KEYS = [
   'nodes',
   'text',
 ]
-const NODE_KEYS = ['id', 'type', 'isAlternate', 'scene', 'lessonIcon', 'choices', 'image']
+const NODE_KEYS = [
+  'id',
+  'type',
+  'isAlternate',
+  'scene',
+  'lessonIcon',
+  'choices',
+  'image',
+  'narration',
+]
 const NOT_SENT = [
   'provenance',
   'assets',
@@ -111,6 +126,11 @@ const NOT_SENT = [
   'access',
   'collectionId',
   'schemaVersion',
+  // Step 11: the audio asset's own fields and its provenance's (T11-1 g4).
+  'durationMs',
+  'narratedTextSha256',
+  'voice',
+  'vendor',
 ]
 
 function keysDeep(value: unknown, out = new Set<string>()): Set<string> {
@@ -145,6 +165,7 @@ describe('playerDataOf: the fixtures', () => {
           lessonIcon: node.type === 'ending' ? node.lessonIcon : null,
           choices: node.type === 'ending' ? [] : node.choices,
           image: null,
+          narration: {},
         })
       }
       expect(Object.keys(data.text)).toEqual(['en', 'hi'])
@@ -452,5 +473,245 @@ describe('playerDataOf: pictures (Step 10e; D11-P2 C14, P21)', () => {
   it('stays within the budget (SC16)', () => {
     const data = playerDataOf(pictures, { locales: ENABLED_LOCALE_CODES, mediaUrl })
     expect(Buffer.byteLength(JSON.stringify(data), 'utf8')).toBeLessThanOrEqual(BUDGET_BYTES)
+  })
+})
+
+// Step 11 (N18, §4.1): river-stones narrated as the staging story is (§8.1): every node in en and
+// hi but big_rock × hi, 15 clips, one MP3 variant each. The provenance names a vendor and a voice,
+// so a view that leaked it would hold those keys.
+type AudioAsset = Extract<StoryPackageV1['assets'][number], { kind: 'audio' }>
+const NARRATED_LOCALES = ['en', 'hi'] as const
+const CLIPS = riverStones.nodes.flatMap((node) =>
+  NARRATED_LOCALES.filter((locale) => !(node.id === 'big_rock' && locale === 'hi')).map(
+    (locale) => ({ nodeId: node.id, locale }),
+  ),
+)
+const NARRATED_TEXT_SHA = 'f'.repeat(64)
+const audioIdOf = (index: number): string => (index + 1).toString(16).padStart(64, '0')
+const clipPathOf = (storyId: string, index: number): string =>
+  `media/${storyId}/${audioIdOf(index)}-audio.mp3`
+function audioAssetOf(
+  storyId: string,
+  index: number,
+  nodeId: string,
+  locale: LocaleCode,
+): AudioAsset {
+  return {
+    kind: 'audio',
+    id: audioIdOf(index),
+    nodeId,
+    locale,
+    durationMs: 1008,
+    variants: [{ path: clipPathOf(storyId, index), mime: 'audio/mpeg', bytes: 6048 }],
+    provenance: { origin: 'ai_generated', vendor: 'vendor-name', voice: 'voice-name' },
+    narratedTextSha256: NARRATED_TEXT_SHA,
+  }
+}
+const narrated = StoryPackageV1.parse({
+  ...riverStones,
+  storyId: 'narrated',
+  assets: CLIPS.map((clip, i) => audioAssetOf('narrated', i, clip.nodeId, clip.locale)),
+})
+/** The finished URL the page should send for a node and locale, or undefined (no clip). */
+const expectedUrl = (nodeId: string, locale: string): string | undefined => {
+  const index = CLIPS.findIndex((c) => c.nodeId === nodeId && c.locale === locale)
+  return index < 0 ? undefined : `${BASE}/${clipPathOf('narrated', index)}`
+}
+
+describe('playerDataOf: narration (Step 11; N18, §4.1)', () => {
+  it('precondition: the synthetic parses with 15 audio assets (no big_rock × hi)', () => {
+    expect(narrated.assets).toHaveLength(15)
+    expect(narrated.assets.every((a) => a.kind === 'audio')).toBe(true)
+    expect(CLIPS.some((c) => c.nodeId === 'big_rock' && c.locale === 'hi')).toBe(false)
+  })
+
+  it('T11-1 (g1) each node’s narration is page locale → mediaUrl(path) of its clip', () => {
+    const data = playerDataOf(narrated, { locales: ENABLED_LOCALE_CODES, mediaUrl })
+    for (const node of data.nodes) {
+      const expected: Record<string, string> = {}
+      for (const locale of NARRATED_LOCALES) {
+        const url = expectedUrl(node.id, locale)
+        if (url !== undefined) expected[locale] = url
+      }
+      expect(node.narration, `(g1) ${node.id}`).toEqual(expected)
+    }
+    expect(data.nodes.find((n) => n.id === 'big_rock')?.narration, '(g1) en only').toEqual({
+      en: expectedUrl('big_rock', 'en'),
+    })
+  })
+
+  it('T11-1 (g2) only the page’s locales: with locales [en] no Hindi clip is sent', () => {
+    const data = playerDataOf(narrated, { locales: ['en'], mediaUrl })
+    for (const node of data.nodes) {
+      expect(Object.keys(node.narration), `(g2) ${node.id}`).toEqual(['en'])
+    }
+    const json = JSON.stringify(data)
+    for (const [i, clip] of CLIPS.entries()) {
+      if (clip.locale === 'hi') expect(json, '(g2)').not.toContain(clipPathOf('narrated', i))
+    }
+  })
+
+  it('T11-1 (g3) every node has the narration key; a node with no clip has {}', () => {
+    const hindi = playerDataOf(narrated, { locales: ['hi'], mediaUrl })
+    for (const node of hindi.nodes) expect(Object.keys(node), node.id).toEqual(NODE_KEYS)
+    expect(hindi.nodes.find((n) => n.id === 'big_rock')?.narration, '(g3) no clip').toEqual({})
+    for (const pkg of fixtures) {
+      const data = playerDataOf(pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })
+      for (const node of data.nodes) expect(node.narration, `(g3) ${node.id}`).toEqual({})
+    }
+  })
+
+  it('T11-1 (g4) no asset field, provenance or narrated-text hash reaches the page', () => {
+    const data = playerDataOf(narrated, { locales: ENABLED_LOCALE_CODES, mediaUrl })
+    const keys = keysDeep(data)
+    for (const name of NOT_SENT) expect(keys.has(name), `(g4) ${name}`).toBe(false)
+    const json = JSON.stringify(data)
+    for (const text of [NARRATED_TEXT_SHA, 'vendor-name', 'voice-name', 'audio/mpeg', '6048']) {
+      expect(json, `(g4) ${text}`).not.toContain(text)
+    }
+    // Every clip reference is a finished URL: 15 paths, each inside its URL.
+    expect(json.split('/media/narrated/').length - 1).toBe(15)
+    expect(json.split(`"${BASE}/media/narrated/`).length - 1).toBe(15)
+  })
+
+  it('T11-3 the second lock: an audio asset for a node the package lacks', () => {
+    const pkg = StoryPackageV1.parse({
+      ...narrated,
+      assets: [...narrated.assets, audioAssetOf('narrated', 40, 'nowhere', 'en')],
+    })
+    expect(() => playerDataOf(pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: narrated en nowhere narration node missing'),
+    )
+  })
+
+  it('T11-3 the second lock: two audio assets for one node and locale', () => {
+    const pkg = StoryPackageV1.parse({
+      ...narrated,
+      assets: [...narrated.assets, audioAssetOf('narrated', 40, 'far_bank', 'hi')],
+    })
+    expect(() => playerDataOf(pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: narrated hi far_bank narration duplicate'),
+    )
+  })
+
+  it('T11-3 the second lock: a variant that is not audio/mpeg', () => {
+    const bad = audioAssetOf('narrated', 40, 'flat_stones', 'en')
+    const pkg = StoryPackageV1.parse({
+      ...riverStones,
+      storyId: 'narrated',
+      assets: [
+        {
+          ...bad,
+          variants: [{ path: 'media/narrated/x-w768.webp', mime: 'image/webp', bytes: 34 }],
+        },
+      ],
+    })
+    expect(() => playerDataOf(pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })).toThrow(
+      new Error('player: narrated en flat_stones narration.mime missing'),
+    )
+  })
+
+  it('T11-3 the second lock: a clip while no mediaUrl was passed', () => {
+    expect(() => playerDataOf(narrated, { locales: ENABLED_LOCALE_CODES })).toThrow(
+      new Error('player: narrated en start mediaUrl missing'),
+    )
+  })
+
+  it('a clip in a locale the page does not build is skipped, with its locks', () => {
+    const pkg = StoryPackageV1.parse({
+      ...narrated,
+      assets: [...narrated.assets, audioAssetOf('narrated', 40, 'nowhere', 'hi')],
+    })
+    const data = playerDataOf(pkg, { locales: ['en'], mediaUrl })
+    expect(data.nodes.every((n) => Object.keys(n.narration).join() === 'en')).toBe(true)
+    // Without a mediaUrl too: the page builds no Hindi, so no Hindi clip is looked at.
+    const hindiOnly = StoryPackageV1.parse({
+      ...riverStones,
+      storyId: 'narrated',
+      assets: [audioAssetOf('narrated', 0, 'start', 'hi')],
+    })
+    expect(playerDataOf(hindiOnly, { locales: ['en'] }).nodes[0]?.narration).toEqual({})
+  })
+})
+
+// T11-2 (A2, SC16): the largest phase-1 story has 14 nodes; narrated in en and hi it carries 28
+// clip URLs. River-stones' passages, questions, labels and lessons, cycled over a 14-node chain.
+const BIG_NODES = 14
+const bigIds = Array.from({ length: BIG_NODES }, (_, i) => `n${String(i + 1).padStart(2, '0')}`)
+const riverNodeIds = riverStones.nodes.map((n) => n.id)
+function bigText(locale: 'en' | 'hi') {
+  const source = riverStones.text[locale]
+  const nodes = Object.fromEntries(
+    bigIds.map((id, i) => {
+      const stored = source.nodes[riverNodeIds[i % riverNodeIds.length] as 'start']
+      const last = i === BIG_NODES - 1
+      return [
+        id,
+        last
+          ? { text: stored.text, lesson: source.nodes.ending_dry.lesson }
+          : {
+              text: stored.text,
+              question: source.nodes.start.question,
+              choices: { c1: source.nodes.start.choices.c1 },
+            },
+      ]
+    }),
+  )
+  return { ...source, nodes }
+}
+const bigPackage = (assets: AudioAsset[]) =>
+  StoryPackageV1.parse({
+    ...riverStones,
+    storyId: 'fourteen-nodes',
+    startNodeId: bigIds[0],
+    progressSteps: bigIds.slice(0, 10),
+    nodes: bigIds.map((id, i) =>
+      i === BIG_NODES - 1
+        ? { id, type: 'ending', scene: 'meadow', isAlternate: false, image: null, lessonIcon: '🪨' }
+        : {
+            id,
+            type: 'single',
+            scene: 'stream',
+            isAlternate: false,
+            image: null,
+            choices: [{ id: 'c1', next: bigIds[i + 1] }],
+          },
+    ),
+    text: { en: bigText('en'), hi: bigText('hi') },
+    assets,
+  })
+const bigNarrated = bigPackage(
+  bigIds.flatMap((id, i) =>
+    NARRATED_LOCALES.map((locale, j) => audioAssetOf('fourteen-nodes', i * 2 + j, id, locale)),
+  ),
+)
+const bigSilent = bigPackage([])
+
+describe('T11-2 budget (SC16): a 14-node story narrated in both languages', () => {
+  const bytesOf = (pkg: StoryPackageV1): number =>
+    Buffer.byteLength(
+      JSON.stringify(playerDataOf(pkg, { locales: ENABLED_LOCALE_CODES, mediaUrl })),
+      'utf8',
+    )
+
+  it('precondition: 28 distinct clip URLs in the JSON', () => {
+    const json = JSON.stringify(
+      playerDataOf(bigNarrated, { locales: ENABLED_LOCALE_CODES, mediaUrl }),
+    )
+    const urls = new Set(json.match(/https:\/\/[^"]*-audio\.mp3/g) ?? [])
+    expect(urls.size).toBe(28)
+  })
+
+  it('(g1) stays at or under 96 KB raw (the measured bytes are printed)', () => {
+    const bytes = bytesOf(bigNarrated)
+    console.log(`T11-2: 14-node narrated PlayerData = ${bytes} bytes (budget ${BUDGET_BYTES})`)
+    expect(bytes, '(g1)').toBeLessThanOrEqual(BUDGET_BYTES)
+  })
+
+  it('(g2) narration adds at most 28 × (URL length + 16) bytes', () => {
+    const urlLength = `${BASE}/${clipPathOf('fourteen-nodes', 0)}`.length
+    const added = bytesOf(bigNarrated) - bytesOf(bigSilent)
+    console.log(`T11-2: narration adds ${added} bytes for 28 clips (URL length ${urlLength})`)
+    expect(added, '(g2)').toBeLessThanOrEqual(28 * (urlLength + 16))
   })
 })

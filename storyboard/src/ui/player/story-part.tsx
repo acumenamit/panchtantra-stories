@@ -18,6 +18,14 @@
 //   the story container and before the run footer, so the passage stays first and the focus target.
 // - Step 10e (D11-P21, §4.1): a node with a picture gets the scene image band from the island,
 //   between the title and the story card; a node without one gets nothing (no box).
+// - Step 11 (design p1-step11-design.md N1, N16, §4.7): when the run's language has narration the
+//   island passes the narration group (NarrationControls), which the run footer holds after Back.
+//   The footer then renders on every part, page 1 included (Back still only from page 2), and is
+//   inert while the run opens or this part settles, like the choices, so a tap on Read to me or
+//   the byline before open does nothing. With no narration the footer is exactly Step 10's.
+// - Step 11 N27 (design §20.2): `held` is the hold after an applied narration tap: the choices and
+//   Back (its own inert) refuse taps, while the footer, which holds the narration group, stays live
+//   so a focused narration button keeps focus. Not held, the markup is exactly as before.
 import { useRef, type ReactNode, type Ref } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { PartView } from '../../reader/player/view'
@@ -31,6 +39,9 @@ export interface StoryPartProps {
   readonly view: PartView
   /** False while the run is opening or this part is settling: the choices and Back are inert. */
   readonly interactive: boolean
+  /** Step 11 N27: the hold after an applied narration tap: the choices and Back are inert, the
+   * run footer (with the narration group) is not. */
+  readonly held?: boolean
   /** True when an accepted step rendered this part (the reveal runs). */
   readonly animate: boolean
   /** True after a pointerdown or keydown ended the reveal. */
@@ -44,11 +55,14 @@ export interface StoryPartProps {
   readonly ending?: ReactNode
   /** Step 10e: the scene image band of a node with a picture (after the title). */
   readonly image?: ReactNode
+  /** Step 11: the narration group, in the run footer after Back (none: no narration). */
+  readonly narration?: ReactNode
 }
 
 export function StoryPart({
   view,
   interactive,
+  held,
   animate,
   revealDone,
   firstParagraphRef,
@@ -57,9 +71,12 @@ export function StoryPart({
   onBack,
   ending,
   image,
+  narration,
 }: StoryPartProps) {
   const controls = useRef<HTMLElement>(null)
   const hasQuestion = view.question !== null
+  const hasBack = view.page > 1
+  const hasNarration = narration !== undefined && narration !== null
   return (
     <div
       data-part=""
@@ -96,32 +113,36 @@ export function StoryPart({
               seq={view.seq}
               choices={view.choices}
               labelledBy={hasQuestion ? QUESTION_ID : undefined}
-              inert={!interactive}
+              inert={!interactive || held === true}
               onChoose={onChoose}
             />
           )}
         </div>
       </div>
       {ending}
-      {view.page > 1 ? (
+      {hasBack || hasNarration ? (
         <footer
           ref={controls}
           data-part-controls=""
           inert={!interactive}
           className={styles.partControls}
         >
-          <button
-            type="button"
-            data-back=""
-            data-seq={view.seq}
-            className={styles.action}
-            onClick={() => {
-              const result = onBack(view.seq)
-              if (result.accepted && controls.current !== null) controls.current.inert = true
-            }}
-          >
-            <span className={styles.actionLabel}>{backLabel}</span>
-          </button>
+          {hasBack ? (
+            <button
+              type="button"
+              data-back=""
+              data-seq={view.seq}
+              inert={held}
+              className={styles.action}
+              onClick={() => {
+                const result = onBack(view.seq)
+                if (result.accepted && controls.current !== null) controls.current.inert = true
+              }}
+            >
+              <span className={styles.actionLabel}>{backLabel}</span>
+            </button>
+          ) : null}
+          {narration}
         </footer>
       ) : null}
     </div>

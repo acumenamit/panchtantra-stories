@@ -44,6 +44,15 @@
 // main rule, and two source checks: only the scene forms of .runDependent set a box, only
 // .player > main names main), T5 (the actions wrapper holds the row), T6 (ShareControl's render
 // prop), T7 (the field's rule) and T10 (the restart dialog's backdrop).
+// Step 11 (design p1-step11-design.md §4.4, §4.7, §4.8, §5, N1, N2, N13, N14, N16, N26; T11-14 to
+// T11-17): a narrated story's opening markup (the run footer on page 1, inert, holding Read to me
+// and the AI voice byline in the route locale), no narration hook on any fixture, the narration
+// group for every row of the 4.4 table (order, hooks, the byline, the reserved playback labels),
+// the narration CSS read as text (the finite pulse, the forced-colours cue, the byline, the
+// reserved box) and the 9 strings.
+// Step 11 N27 (design §20.2, §20.3.3; T11-25, T11-26): the run-area hold after a narration tap:
+// partHoldOf over 7 literal rows, and the held markup (the choices, Back and the AI voice link
+// inert; the footer, the group and both narration buttons not), byte-equal to today when not held.
 // The HTML is read with small regular expressions (React writes attributes in JSX prop order).
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -57,6 +66,14 @@ import twoPaths from '../../../fixtures/packages/two-paths.json'
 import { start, step, type StepResult } from '../../core/engine'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../../core/locales'
 import { StoryPackageV1 } from '../../core/package/v1'
+import {
+  HOW_STORIES_ARE_MADE_ID,
+  NARRATION_PLAYBACKS,
+  narrationDisplayOf,
+  type NarrationPart,
+  type NarrationPlayback,
+  type NarrationSessionSnapshot,
+} from '../../reader/player/narration'
 import { graphOf, playerDataOf, type PlayerData } from '../../reader/player/player-data'
 import { sceneIdOf } from '../../reader/player/scene'
 import { segmentsOf } from '../../reader/player/segments'
@@ -67,7 +84,8 @@ import { translator } from '../i18n/messages'
 import shell from '../shell/shell.module.css'
 import { SCENE_IDS } from '../styles/contrast-pairs'
 import { EndingCard, LESSON_HEADING_ID } from './ending-card'
-import { Player, startAgainHeld } from './player'
+import { NarrationControls } from './narration-controls'
+import { partHoldOf, Player, startAgainHeld } from './player'
 import { PlayerFallback } from './player-boundary'
 import { SceneImage } from './scene-image'
 import { PLAYER_MENU_ID, PlayerMenu, TEXT_SIZE_NAME } from './player-menu'
@@ -732,6 +750,16 @@ describe('the player strings (server-only)', () => {
         linkCopied: t('player.linkCopied'),
         copyLink: t('player.copyLink'),
         storyLanguage: t('player.storyLanguage'),
+        // Step 11 (p1-step11-design.md §0.2, T11-17 g1): the narration group's 9 strings.
+        readToMe: t('player.readToMe'),
+        aiVoice: t('player.aiVoice'),
+        aiVoiceAbout: t('player.aiVoiceAbout'),
+        pause: t('player.pause'),
+        resume: t('player.resume'),
+        playAgain: t('player.playAgain'),
+        tapToListen: t('player.tapToListen'),
+        narrationLoading: t('player.narrationLoading'),
+        narrationUnavailable: t('player.narrationUnavailable'),
       })
       // Step 10c: "Ending {found} of {total} found" for every found from 0 to the ending count.
       const endings = data.endingIds.length
@@ -1936,3 +1964,926 @@ function lastCompound(selector: string): string {
   }
   return selector.slice(cut).trim()
 }
+
+// Step 11 (design p1-step11-design.md N1, N2, N13, N16, §4.7; T11-14): river-stones narrated as
+// the staging story is (every node in en and hi but big_rock × hi), with a mediaUrl, so the
+// PlayerData comes from playerDataOf; and an English-only narrated story for a page in Hindi,
+// whose run reads in English while the chrome stays Hindi.
+const MEDIA_BASE = 'https://media.example/storage/v1/object/public/content'
+const narratedMediaUrl = (path: string): string => `${MEDIA_BASE}/${path}`
+const narratedPackage = (storyId: string, locales: readonly ('en' | 'hi')[]): StoryPackageV1 =>
+  StoryPackageV1.parse({
+    ...riverStones,
+    storyId,
+    locales,
+    text: Object.fromEntries(locales.map((locale) => [locale, riverStones.text[locale]])),
+    assets: riverStones.nodes
+      .flatMap((node) =>
+        locales
+          .filter((locale) => !(node.id === 'big_rock' && locale === 'hi'))
+          .map((locale) => ({ nodeId: node.id, locale })),
+      )
+      .map(({ nodeId, locale }, i) => {
+        const id = (i + 1).toString(16).padStart(64, '0')
+        return {
+          kind: 'audio',
+          id,
+          nodeId,
+          locale,
+          durationMs: 1008,
+          variants: [{ path: `media/${storyId}/${id}-audio.mp3`, mime: 'audio/mpeg', bytes: 6048 }],
+          provenance: { origin: 'unknown' },
+          narratedTextSha256: '0'.repeat(64),
+        }
+      }),
+  })
+const riverParsed = StoryPackageV1.parse(riverStones)
+const narratedData = playerDataOf(narratedPackage('narrated', ['en', 'hi']), {
+  locales: ENABLED_LOCALE_CODES,
+  mediaUrl: narratedMediaUrl,
+})
+const englishNarrated = playerDataOf(narratedPackage('narrated-en', ['en']), {
+  locales: ENABLED_LOCALE_CODES,
+  mediaUrl: narratedMediaUrl,
+})
+
+/** The narration hooks in document order (4.8), e.g. ['read-to-me', 'ai-voice']. */
+const narrationHooks = (html: string): string[] =>
+  all(html, /\sdata-(read-to-me|ai-voice|narration-control|narration-message)(?==)/g).map(
+    (m) => m[1] ?? '',
+  )
+
+describe('Step 11: narration in the run footer, server markup (T11-14; N1, N13, N16)', () => {
+  it.each(ENABLED_LOCALE_CODES)(
+    '%s: page 1 holds one inert footer with Read to me (not pressed) then the AI voice link, in the route locale',
+    (locale) => {
+      const html = renderPlayer(narratedData, locale)
+      const t = translator(locale)
+      // Precondition: the narrated render is the start passage in the route locale.
+      expect(paragraphsIn(html).join('\n\n')).toBe(riverParsed.text[locale]?.nodes['start']?.text)
+      // (g1) One footer, inert while the run opens, holding the group and nothing else.
+      const footers = startTags(html, 'footer')
+      expect(footers, '(g1) one footer on page 1').toHaveLength(1)
+      expect(footers[0], '(g1) the run footer').toContain(' data-part-controls=""')
+      expect(footers[0], '(g1) inert while opening').toContain(' inert=""')
+      const footer = /<footer\b[^>]*>([\s\S]*?)<\/footer>/.exec(html)?.[1] ?? ''
+      expect(footer, '(g1) the group first').toMatch(/^<div data-narration=""/)
+      expect(
+        narrationHooks(footer),
+        '(g1) Read to me, then the link; no playback, no message',
+      ).toEqual(['read-to-me', 'ai-voice'])
+      expect(footer, '(g1) no Back at page 1').not.toContain('data-back')
+      const toggle = startTags(footer, 'button').filter((tag) =>
+        tag.includes(' data-read-to-me=""'),
+      )
+      expect(toggle, '(g1) Read to me, not pressed').toEqual([
+        `<button type="button" data-read-to-me="" aria-pressed="false" class="${styles.action}">`,
+      ])
+      // (g2) The labels and the link are the route locale's.
+      const button = /<button\b[^>]*\sdata-read-to-me=""[^>]*>([\s\S]*?)<\/button>/.exec(footer)
+      expect(textOf(button?.[1]), '(g2) Read to me').toBe(t('player.readToMe'))
+      const link = /<a\b([^>]*)>([\s\S]*?)<\/a>/.exec(footer)
+      expect(attrOf(link?.[1], 'href'), '(g2) href').toBe(
+        `/${locale}/grown-ups#${HOW_STORIES_ARE_MADE_ID}`,
+      )
+      expect(textOf(link?.[2]), '(g2) the byline').toBe(
+        `${t('player.aiVoice')} ${t('player.aiVoiceAbout')}`,
+      )
+    },
+  )
+
+  it('a Hindi page reading an English-only narrated story: the run is English, the group stays Hindi', () => {
+    const html = renderPlayer(englishNarrated, 'hi')
+    const t = translator('hi')
+    expect(startTags(html, 'div').filter((tag) => /\sdata-story=""/.test(tag))[0]).toContain(
+      ' lang="en"',
+    )
+    const footer = /<footer\b[^>]*>([\s\S]*?)<\/footer>/.exec(html)?.[1] ?? ''
+    expect(narrationHooks(footer), '(g2) the group is offered for the run language').toEqual([
+      'read-to-me',
+      'ai-voice',
+    ])
+    const button = /<button\b[^>]*\sdata-read-to-me=""[^>]*>([\s\S]*?)<\/button>/.exec(footer)
+    expect(textOf(button?.[1]), '(g2) Read to me in the route locale').toBe(t('player.readToMe'))
+    const link = /<a\b([^>]*)>([\s\S]*?)<\/a>/.exec(footer)
+    expect(attrOf(link?.[1], 'href'), '(g2) the route locale’s Grown-ups').toBe(
+      `/hi/grown-ups#${HOW_STORIES_ARE_MADE_ID}`,
+    )
+    expect(textOf(link?.[2]), '(g2) the byline in the route locale').toBe(
+      `${t('player.aiVoice')} ${t('player.aiVoiceAbout')}`,
+    )
+    expect(startTags(html, 'footer')[0], 'the footer carries the page language').not.toContain(
+      ' lang=',
+    )
+  })
+
+  it.each(cases)(
+    '%s/%s (g3): a story without narration has no narration hook and no footer on page 1',
+    (_, locale, pkg) => {
+      const data = playerDataOf(pkg, {
+        locales: ENABLED_LOCALE_CODES,
+        mediaUrl: narratedMediaUrl,
+      })
+      const html = renderPlayer(data, locale)
+      for (const hook of ['data-narration', 'data-read-to-me', 'data-ai-voice']) {
+        expect(html, `(g3) ${hook}`).not.toContain(hook)
+      }
+      expect(html, '(g3) no footer on page 1').not.toContain('<footer')
+    },
+  )
+})
+
+// Step 11 (design §4.4, §4.7, §4.8, N2, N13, N15, N26; T11-15): the narration group for every row
+// of the 4.4 table, as NarrationControls renders the display narrationDisplayOf gives.
+const PART: NarrationPart = { url: `${MEDIA_BASE}/media/narrated/a-audio.mp3`, token: '0:3' }
+const current = (status: NarrationSessionSnapshot['status']): NarrationSessionSnapshot => ({
+  on: true,
+  status,
+  token: PART.token,
+  url: PART.url,
+})
+interface GroupRow {
+  readonly name: string
+  readonly snapshot: NarrationSessionSnapshot
+  readonly part: NarrationPart
+  readonly status: string
+  readonly on: boolean
+  readonly kind: NarrationPlayback | null
+  readonly pulse: boolean
+  readonly message: 'loading' | 'unavailable' | null
+}
+const GROUP_ROWS: readonly GroupRow[] = [
+  {
+    name: 'off',
+    snapshot: { on: false, status: 'idle', token: null, url: null },
+    part: PART,
+    status: 'idle',
+    on: false,
+    kind: null,
+    pulse: false,
+    message: null,
+  },
+  {
+    name: 'no clip',
+    snapshot: { on: true, status: 'idle', token: null, url: null },
+    part: { url: null, token: PART.token },
+    status: 'idle',
+    on: true,
+    kind: null,
+    pulse: false,
+    message: 'unavailable',
+  },
+  {
+    name: 'ready',
+    snapshot: { on: true, status: 'idle', token: null, url: null },
+    part: PART,
+    status: 'idle',
+    on: true,
+    kind: 'tap-to-listen',
+    pulse: false,
+    message: null,
+  },
+  ...(
+    [
+      ['loading', 'pause', false, 'loading'],
+      ['buffering', 'pause', false, 'loading'],
+      ['playing', 'pause', false, null],
+      ['paused', 'resume', false, null],
+      ['ended', 'play-again', false, null],
+      ['blocked', 'tap-to-listen', true, null],
+      ['unavailable', 'tap-to-listen', false, 'unavailable'],
+    ] as const
+  ).map(([status, kind, pulse, message]) => ({
+    name: status,
+    snapshot: current(status),
+    part: PART,
+    status,
+    on: true,
+    kind,
+    pulse,
+    message,
+  })),
+]
+const groupCases = GROUP_ROWS.flatMap((row) =>
+  ENABLED_LOCALE_CODES.map((locale) => [row.name, locale, row] as const),
+)
+
+function renderGroup(row: GroupRow, locale: LocaleCode): string {
+  return renderToString(
+    createElement(NarrationControls, {
+      locale,
+      display: narrationDisplayOf(row.snapshot, row.part),
+      strings: playerStringsOf(locale, narratedData),
+      onToggle: () => {},
+      onPlayback: () => {},
+    }),
+  )
+}
+
+const PLAYBACK_KEYS = {
+  pause: 'player.pause',
+  resume: 'player.resume',
+  'play-again': 'player.playAgain',
+  'tap-to-listen': 'player.tapToListen',
+} as const
+
+describe('Step 11: the narration group for every row of the 4.4 table (T11-15)', () => {
+  it('covers all four playback kinds and both messages (the scan is not empty)', () => {
+    expect(new Set(GROUP_ROWS.map((row) => row.kind))).toEqual(
+      new Set([null, ...NARRATION_PLAYBACKS]),
+    )
+    expect(new Set(GROUP_ROWS.map((row) => row.message))).toEqual(
+      new Set([null, 'loading', 'unavailable']),
+    )
+    expect(groupCases).toHaveLength(20)
+  })
+
+  it.each(groupCases)('%s/%s', (_, locale, row) => {
+    const html = renderGroup(row, locale)
+    const t = translator(locale)
+    // (g1) Read to me, the link, the playback button when a kind applies, the message when one does.
+    expect
+      .soft(narrationHooks(html), '(g1) order')
+      .toEqual([
+        'read-to-me',
+        'ai-voice',
+        ...(row.kind === null ? [] : ['narration-control']),
+        ...(row.message === null ? [] : ['narration-message']),
+      ])
+    // (g2) The hooks of 4.8, exactly.
+    const group = startTags(html, 'div')[0] ?? ''
+    expect
+      .soft(group, '(g2) the group')
+      .toBe(
+        `<div data-narration="" data-status="${row.status}"${row.on ? ' data-on=""' : ''} class="${styles.narration}">`,
+      )
+    expect
+      .soft(startTags(html, 'button')[0], '(g2) aria-pressed')
+      .toBe(
+        `<button type="button" data-read-to-me="" aria-pressed="${row.on}" class="${styles.action}">`,
+      )
+    const playback = startTags(html, 'button').filter((tag) =>
+      tag.includes(' data-narration-control=""'),
+    )
+    expect
+      .soft(playback, '(g2) the playback button')
+      .toEqual(
+        row.kind === null
+          ? []
+          : [
+              `<button type="button" data-narration-control="" data-kind="${row.kind}"${row.pulse ? ' data-pulse=""' : ''} class="${styles.action}">`,
+            ],
+      )
+    const message = /<p\b([^>]*)>([\s\S]*?)<\/p>/.exec(html)
+    expect.soft(attrOf(message?.[1], 'data-narration-message'), '(g2) message').toBe(row.message)
+    if (row.message !== null) {
+      expect
+        .soft(textOf(message?.[2]), '(g2) message text')
+        .toBe(
+          t(row.message === 'loading' ? 'player.narrationLoading' : 'player.narrationUnavailable'),
+        )
+    }
+    const hooks = new Set(all(html, /\s(data-[a-z-]+)=/g).map((m) => m[1]))
+    expect
+      .soft([...hooks].sort(), '(g2) no other data attribute')
+      .toEqual(
+        [
+          'data-narration',
+          'data-status',
+          ...(row.on ? ['data-on'] : []),
+          'data-read-to-me',
+          'data-pip',
+          'data-ai-voice',
+          ...(row.kind === null ? [] : ['data-narration-control', 'data-kind']),
+          ...(row.pulse ? ['data-pulse'] : []),
+          ...(row.message === null ? [] : ['data-narration-message']),
+        ].sort(),
+      )
+    // (g3) The byline: a text link to the Grown-ups section, same tab, visible text then a hidden
+    // suffix; the byline class, never the button look.
+    const link = /<a\b([^>]*)>([\s\S]*?)<\/a>/.exec(html)
+    expect
+      .soft(attrOf(link?.[1], 'href'), '(g3) href')
+      .toBe(`/${locale}/grown-ups#${HOW_STORIES_ARE_MADE_ID}`)
+    expect.soft(attrOf(link?.[1], 'target'), '(g3) no target').toBeNull()
+    expect.soft(attrOf(link?.[1], 'class'), '(g3) the byline class').toBe(styles.byline)
+    expect.soft(link?.[1] ?? '', '(g3) never the button look').not.toContain(styles.action)
+    expect
+      .soft(link?.[2], '(g3) visible text, then the hidden suffix')
+      .toBe(
+        `<span class="${styles.actionLabel}">${escapeHtml(t('player.aiVoice'))}</span> <span class="${a11y.visuallyHidden}">${escapeHtml(t('player.aiVoiceAbout'))}</span>`,
+      )
+    // (g4) The message is no live region of its own (N15).
+    expect.soft(message?.[1] ?? '', '(g4) no role').not.toContain('role=')
+    expect.soft(message?.[1] ?? '', '(g4) no aria-live').not.toContain('aria-live')
+    // (g5) Every control label carries the action label class (the Hindi paint offset).
+    const toggle = /<button\b[^>]*\sdata-read-to-me=""[^>]*>([\s\S]*?)<\/button>/.exec(html)
+    expect
+      .soft(toggle?.[1], '(g5) Read to me: the pip, then the label')
+      .toBe(
+        `<span data-pip="" aria-hidden="true" class="${styles.pip}"></span><span class="${styles.actionLabel}">${escapeHtml(t('player.readToMe'))}</span>`,
+      )
+    // (g6) The playback button holds the four labels in one box, in fixed order; only the current
+    // one is visible and named.
+    if (row.kind !== null) {
+      const inner =
+        /<button\b[^>]*\sdata-narration-control=""[^>]*>([\s\S]*?)<\/button>/.exec(html)?.[1] ?? ''
+      expect
+        .soft(inner, '(g6) the label box')
+        .toMatch(new RegExp(`^<span class="${styles.playbackLabels}">[\\s\\S]*</span>$`))
+      // Leaf spans only: the label box itself holds tags, so [^<]* never matches it.
+      const labels = all(inner, /<span class="([^"]*)"([^>]*)>([^<]*)<\/span>/g)
+      expect
+        .soft(
+          labels.map((m) => textOf(m[3])),
+          '(g6) four labels, fixed order (g5: each an action label)',
+        )
+        .toEqual(NARRATION_PLAYBACKS.map((kind) => t(PLAYBACK_KEYS[kind])))
+      NARRATION_PLAYBACKS.forEach((kind, i) => {
+        const [, className = '', rest = ''] = labels[i] ?? []
+        const visible = kind === row.kind
+        expect
+          .soft(className, `(g6) ${kind} class`)
+          .toBe(visible ? styles.actionLabel : `${styles.actionLabel} ${styles.reserve}`)
+        expect.soft(rest, `(g6) ${kind} aria-hidden`).toBe(visible ? '' : ' aria-hidden="true"')
+      })
+    }
+  })
+})
+
+// Step 11 (design N13, N14, N26, §5 items 6-8; T11-16): the narration CSS, read as text. Two small
+// readers, each with its own samples below (reader code in a test is guard code, process-v2):
+/** The status line's placeholder (review round 1, R1-L-2; T11-16 g5). */
+const RESERVED_LINE = '.narration:has(> [data-narration-control]:last-child)::after'
+/** A CSS escape at the start of a text: a backslash and 1-6 hex digits and one space, or one character. */
+const CSS_ESCAPE = /^\\(?:[0-9a-f]{1,6}[ \t\n]?|[\s\S])/i
+/**
+ * A selector's last compound: what follows its last combinator outside parentheses, brackets and
+ * escapes (a hex escape's space ends the escape; it is no combinator).
+ */
+function subjectOf(selector: string): string {
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i] ?? ''
+    if (c === '\\') i += (CSS_ESCAPE.exec(selector.slice(i))?.[0].length ?? 1) - 1
+    else if (c === '(' || c === '[') depth++
+    else if (c === ')' || c === ']') depth--
+    else if (depth === 0 && /[\s>+~]/.test(c)) start = i + 1
+  }
+  return selector.slice(start)
+}
+/** Escapes resolved, then lower case: pseudo-element and attribute names fold case (review round 2). */
+const cssFolded = (text: string): string =>
+  text
+    .replace(/\\([0-9a-f]{1,6})[ \t\n]?/gi, (_escape, hex: string) => {
+      const code = parseInt(hex, 16)
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '�'
+    })
+    .replace(/\\([\s\S])/g, '$1')
+    .toLowerCase()
+/** A compound without the arguments of :not() and :has(): they name other elements. */
+function withoutOtherElements(compound: string): string {
+  let out = ''
+  let i = 0
+  while (i < compound.length) {
+    const open = /^:(?:not|has)\(/.exec(compound.slice(i))
+    if (open === null) {
+      out += compound[i] ?? ''
+      i++
+      continue
+    }
+    let depth = 0
+    let end = i + open[0].length - 1
+    for (; end < compound.length; end++) {
+      if (compound[end] === '(') depth++
+      else if (compound[end] === ')') {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    i = end + 1
+  }
+  return out
+}
+/**
+ * A selector with each :local(...) and :global(...) replaced by what it holds (any letter case,
+ * nested, escapes skipped): Next's CSS Modules pipeline unwraps them (postcss-modules-local-by-
+ * default), so `:local(.narration::after)` is the group's own ::after (review S11-R3-FS-3).
+ */
+function unwrapModuleScopes(selector: string): string {
+  let out = ''
+  let i = 0
+  while (i < selector.length) {
+    if (selector[i] === '\\') {
+      const length = CSS_ESCAPE.exec(selector.slice(i))?.[0].length ?? 1
+      out += selector.slice(i, i + length)
+      i += length
+      continue
+    }
+    const open = /^:(?:local|global)\(/i.exec(selector.slice(i))
+    if (open === null) {
+      out += selector[i] ?? ''
+      i++
+      continue
+    }
+    let depth = 1
+    let end = i + open[0].length
+    for (; end < selector.length && depth > 0; end++) {
+      const c = selector[end] ?? ''
+      if (c === '\\') end += (CSS_ESCAPE.exec(selector.slice(end))?.[0].length ?? 1) - 1
+      else if (c === '(') depth++
+      else if (c === ')') depth--
+    }
+    out += unwrapModuleScopes(selector.slice(i + open[0].length, depth === 0 ? end - 1 : end))
+    i = end
+  }
+  return out
+}
+/**
+ * A box the narration group itself generates (g5): a ::before or ::after (any letter case, escapes
+ * resolved) whose subject is the group: its class (also after a type, or inside :is() or :where()),
+ * one of its data hooks (data-narration, data-on, data-status), or no class, attribute or id and no
+ * type but div (every div or every child, the group among them). Review round 2 (S11-R2-FS-3,
+ * R2-TPP-1) widened it from "starts with .narration"; it errs towards flagging. :local() and
+ * :global() are unwrapped first (S11-R3-FS-3).
+ */
+const isGroupPlaceholder = (selector: string): boolean => {
+  const subject = cssFolded(subjectOf(unwrapModuleScopes(selector)))
+  const pseudo = /::?(?:before|after)$/.exec(subject)
+  if (pseudo === null) return false
+  const own = withoutOtherElements(subject.slice(0, pseudo.index))
+  return (
+    /\.narration(?![\w-])/.test(own) ||
+    /\[\s*data-(?:narration|on|status)\s*(?:[~|^$*]?=|\])/.test(own) ||
+    (!/[.#[]/.test(own) && /^(?:\*|div)?(?![\w-])/.test(own))
+  )
+}
+/** A declaration that sets a border width or style, a padding, a margin or a size (T11-16 g2). */
+const SETS_BOX_CUE =
+  /(?:^|\n)\s*(?:border(?:-(?:block|inline|top|right|bottom|left)(?:-(?:start|end))?)?(?:-(?:width|style))?|padding[a-z-]*|margin[a-z-]*|(?:min-|max-)?(?:inline-size|block-size|width|height))\s*:/
+/** The physical properties a rule body declares (T11-16 g4; the lint's rc12 rules, in short). */
+const physicalIn = (body: string): string[] =>
+  all(body, /(?:^|\n)\s*([a-z-]+)\s*:/g)
+    .map((m) => m[1] ?? '')
+    .filter(
+      (name) =>
+        /^(?:left|right|top|bottom|width|height)$/.test(name) ||
+        /^(?:min|max)-(?:width|height)$/.test(name) ||
+        /(?:^|-)(?:left|right|top|bottom)(?:-|$)/.test(name) ||
+        /-(?:x|y)$/.test(name),
+    )
+
+describe('Step 11: the CSS readers catch each form (samples)', () => {
+  it.each([
+    '  border: 4px solid var(--color-accent);\n',
+    '  border-width: 4px;\n',
+    '  border-style: dashed;\n',
+    '  border-block-start-width: 1px;\n',
+    '  border-inline-style: solid;\n',
+    '  padding-inline: var(--space-1);\n',
+    '  margin: 0;\n',
+    '  inline-size: 1rem;\n',
+    '  min-block-size: 1rem;\n',
+    '  max-width: 1rem;\n',
+    '    outline: none;\n    padding: 0;\n',
+  ])('the box reader flags %j', (sample) => {
+    expect(sample).toMatch(SETS_BOX_CUE)
+  })
+
+  it.each([
+    '  border-color: Highlight;\n',
+    '  border-block-color: Highlight;\n',
+    '  box-shadow: 0 0 0 var(--space-1) var(--color-accent);\n',
+    '  animation-name: none;\n',
+    '  outline-offset: 2px;\n',
+  ])('the box reader passes %j', (sample) => {
+    expect(sample).not.toMatch(SETS_BOX_CUE)
+  })
+
+  it.each([
+    RESERVED_LINE,
+    '.narration::after',
+    '.narration:after',
+    '.narration::before',
+    '.narration[data-on]::after',
+    ".narration:not([data-status='idle'])::after",
+    '.partControls > .narration::after',
+    ":global(html[data-e2e-mutant='MW-66']) .narration::after",
+    // Review round 2 (S11-R2-FS-3, R2-TPP-1): the group's box written another way. Pseudo-element
+    // and attribute names in another letter case; the group's own data hooks; its class inside
+    // :is() or :where() or after a type; every child or every div, the group among them; CSS
+    // escapes (a hex escape's space ends the escape, it is no combinator).
+    '.narration::AFTER',
+    '.narration:AFTER',
+    '[data-narration]::after',
+    '.partControls > [DATA-ON]::after',
+    "[data-status='playing']::before",
+    ':is(.narration)::after',
+    ':where(.narration)::before',
+    'div.narration::after',
+    '.partControls > *::after',
+    '.partControls > ::before',
+    '.partControls > div:last-child::after',
+    '.narr\\61 tion::after',
+    '.narration::\\61 fter',
+    // Review S11-R3-FS-3: CSS Modules unwraps :local(...) and :global(...) into what they hold, so
+    // a pseudo-element inside them is the group's own box.
+    ':local(.narration::after)',
+    '.partControls > :local(.narration::before)',
+    ':global(.partControls) :LOCAL(.narration:not([data-on])::after)',
+    ':global(div.narration::before)',
+  ])('the placeholder reader flags %j', (selector) => {
+    expect(isGroupPlaceholder(selector)).toBe(true)
+  })
+
+  it.each([
+    '.narration',
+    '.narrationMessage::after',
+    '.narration > p::after',
+    '.narration [data-narration-control]::before',
+    '.pip::after',
+    '.narration:has(> [data-narration-control]:last-child)',
+    // Review round 2: :has() and :not() name other elements; the message's own hook is not the
+    // group's.
+    '.partControls:has(> .narration)::after',
+    '.action:not(.narration)::before',
+    '[data-narration-message]::after',
+    // S11-R3-FS-3: unwrapped, these name other elements.
+    ':local(.narrationMessage::after)',
+    ':local(.narration) > :local(p::after)',
+    ':global(.pip)::before',
+  ])('the placeholder reader passes %j', (selector) => {
+    expect(isGroupPlaceholder(selector)).toBe(false)
+  })
+
+  it('the physical reader flags physical names and passes logical ones and line-height', () => {
+    expect(
+      physicalIn(
+        [
+          '  margin-left: 0;',
+          '  padding-top: 0;',
+          '  border-right-width: 1px;',
+          '  border-top-left-radius: 0;',
+          '  width: 1rem;',
+          '  max-height: 1rem;',
+          '  left: 0;',
+          '  overflow-x: auto;',
+          '',
+        ].join('\n'),
+      ),
+    ).toEqual([
+      'margin-left',
+      'padding-top',
+      'border-right-width',
+      'border-top-left-radius',
+      'width',
+      'max-height',
+      'left',
+      'overflow-x',
+    ])
+    expect(
+      physicalIn(
+        [
+          '  line-height: var(--lh-label);',
+          '  margin-inline-end: 0;',
+          '  inset-block-start: 0;',
+          '  min-block-size: 1rem;',
+          '  text-decoration-line: underline;',
+          '  border-width: 2px;',
+          '',
+        ].join('\n'),
+      ),
+    ).toEqual([])
+  })
+})
+
+describe('Step 11: the narration CSS (read as text; T11-16)', () => {
+  const css = playerCss()
+  const tokens = readFileSync(join(here, '..', 'styles', 'tokens.css'), 'utf8')
+  const declared = new Set(all(tokens, /(--[a-z0-9-]+):/g).map((m) => m[1]))
+  const noComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '')
+  /** The bodies of every @media (forced-colors: active) block. */
+  const forcedBlocks = all(
+    noComments(css),
+    /\n@media \(forced-colors: active\) \{\n([\s\S]*?)\n\}\n/g,
+  ).map((m) => m[1] ?? '')
+  const forcedNarration = forcedBlocks.filter((block) => block.includes('[data-pulse]'))
+  const keyframes = /\n@keyframes narrationPulse \{\n([\s\S]*?)\n\}\n/.exec(css)?.[1] ?? ''
+  const NEW_SELECTORS = [
+    '.narration',
+    '.pip',
+    ".action[aria-pressed='true']",
+    ".action[aria-pressed='true'] .pip",
+    '.byline',
+    '.playbackLabels',
+    '.playbackLabels > span',
+    '.reserve',
+    '.action[data-pulse]',
+    '.action[data-pulse]:focus-visible',
+    '.narrationMessage',
+    RESERVED_LINE,
+  ]
+
+  it('precondition: every narration selector, the keyframes and one forced-colours block are found', () => {
+    for (const selector of NEW_SELECTORS) ruleBodyOf(css, selector)
+    expect(keyframes).not.toBe('')
+    expect(forcedNarration).toHaveLength(1)
+  })
+
+  it('(g1) the cue: a static accent border and a 6-run alternate box-shadow pulse on --duration-calm, never infinite', () => {
+    const body = ruleBodyOf(css, '.action[data-pulse]')
+    for (const line of [
+      'border-color: var(--color-accent);',
+      'animation-name: narrationPulse;',
+      'animation-duration: var(--duration-calm);',
+      'animation-iteration-count: 6;',
+      'animation-direction: alternate;',
+    ]) {
+      expect.soft(body, `(g1) ${line}`).toContain(`  ${line}\n`)
+    }
+    expect
+      .soft(keyframes, '(g1) a box-shadow ring in the accent')
+      .toMatch(/box-shadow: 0 0 0 var\(--space-1\) var\(--color-accent\);/)
+    expect.soft(noComments(css), '(g1) no infinite animation').not.toMatch(/\binfinite\b/)
+    // Review round 1 (R1-L-4): the pulse would paint over the focus ring's canvas halo (base.css).
+    expect
+      .soft(
+        ruleBodyOf(css, '.action[data-pulse]:focus-visible'),
+        '(g1) no pulse while the focus ring shows',
+      )
+      .toBe('  animation-name: none;\n')
+  })
+
+  it('(g2) no [data-pulse] rule and no pulse keyframe sets a border width or style, padding, margin or size', () => {
+    const pulseRules = cssRules(css).filter((rule) =>
+      rule.selectors.some((s) => s.includes('[data-pulse]')),
+    )
+    expect(pulseRules.length, 'precondition: the top rule, the focus rule and the forced one').toBe(
+      3,
+    )
+    for (const rule of pulseRules) {
+      expect.soft(rule.body, `(g2) ${rule.selectors.join(', ')}`).not.toMatch(SETS_BOX_CUE)
+    }
+    expect.soft(keyframes, '(g2) the keyframes').not.toMatch(SETS_BOX_CUE)
+  })
+
+  it('(g3) forced colours keep the cue (a Highlight border) and the filled pip (CanvasText)', () => {
+    const rules = cssRules(forcedNarration[0] ?? '')
+    const bodyOf = (selector: string): string =>
+      (rules.find((rule) => rule.selectors.join(', ') === selector)?.body ?? '').trimEnd()
+    expect
+      .soft(bodyOf('.action[data-pulse]'), '(g3) the pulsing button')
+      .toBe(
+        [
+          '    forced-color-adjust: none;',
+          '    border-color: Highlight;',
+          '    background-color: Canvas;',
+          '    color: CanvasText;',
+          '    animation-name: none;',
+        ].join('\n'),
+      )
+    expect
+      .soft(bodyOf(".action[aria-pressed='true'] .pip"), '(g3) the filled pip')
+      .toBe(
+        [
+          '    forced-color-adjust: none;',
+          '    border-color: CanvasText;',
+          '    background-color: CanvasText;',
+        ].join('\n'),
+      )
+  })
+
+  it('(g4) tokens and logical properties only; the byline, the group, the message and the reserved box', () => {
+    const bodies = [
+      ...NEW_SELECTORS.map((selector) => [selector, ruleBodyOf(css, selector)] as const),
+      ...cssRules(forcedNarration[0] ?? '').map(
+        (rule) => [`forced ${rule.selectors.join(', ')}`, rule.body] as const,
+      ),
+      ['@keyframes narrationPulse', keyframes] as const,
+    ]
+    for (const [selector, body] of bodies) {
+      // The one length literal allowed is every control's 2px border (as .action and .segment).
+      const lengths = body.replace(/border: 2px solid var\(--[a-z0-9-]+\);/g, '')
+      expect.soft(lengths, `(g4) ${selector}: no length literal`).not.toMatch(/\d(?:px|rem|em)\b/)
+      expect.soft(body, `(g4) ${selector}: no colour literal`).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+      expect.soft(physicalIn(body), `(g4) ${selector}: logical properties`).toEqual([])
+      for (const [, name] of all(body, /var\((--[a-z0-9-]+)\)/g)) {
+        expect.soft(declared.has(name ?? ''), `(g4) ${selector}: ${name} is a token`).toBe(true)
+      }
+    }
+    const byline = ruleBodyOf(css, '.byline')
+    expect.soft(byline, '(g4) a 44 px target').toContain('  min-block-size: var(--target-min);\n')
+    expect.soft(byline, '(g4) underlined').toContain('  text-decoration-line: underline;\n')
+    expect
+      .soft(byline, '(g4) the accent text colour')
+      .toContain('  color: var(--color-text-accent);\n')
+    expect.soft(byline, '(g4) no border').not.toMatch(/\n\s*border/)
+    expect.soft(byline, '(g4) no fill').not.toMatch(/\n\s*background/)
+    const group = ruleBodyOf(css, '.narration')
+    expect.soft(group, '(g4) wraps').toContain('  flex-wrap: wrap;\n')
+    expect.soft(group, '(g4) items at the start').toContain('  align-items: start;\n')
+    expect
+      .soft(ruleBodyOf(css, '.narrationMessage'), '(g4) the message on its own line')
+      .toContain('  flex-basis: 100%;\n')
+    expect
+      .soft(ruleBodyOf(css, '.playbackLabels'), '(g4) the label box is a grid')
+      .toContain('  display: grid;\n')
+    expect
+      .soft(ruleBodyOf(css, '.playbackLabels > span'), '(g4) one cell for every label')
+      .toContain('  grid-area: 1 / 1;\n')
+    // Review round 1: a one-line label sits in the middle of a cell that a wrapped reserved label
+    // made two lines tall (R1-L-1); Back keeps its own height beside the group (R1-4, owner
+    // screens 31 and 32).
+    expect
+      .soft(ruleBodyOf(css, '.playbackLabels'), '(g4) the shown label centred in the cell')
+      .toContain('  align-items: center;\n')
+    expect
+      .soft(ruleBodyOf(css, '.partControls'), '(g4) Back keeps its own height beside the group')
+      .toContain('  align-items: start;\n')
+    expect
+      .soft(ruleBodyOf(css, '.reserve'), '(g4) reserved labels keep their box')
+      .toBe('  visibility: hidden;\n')
+  })
+
+  // Review round 1 (R1-L-2; design §17): the status line keeps its box while Read to me is on and
+  // the part has a clip (the playback button shows) and no message shows (the button is last).
+  it('(g5) the status line keeps its box: an empty line of the message’s size, only while the playback button is the last child', () => {
+    const placeholders = cssRules(css)
+      .flatMap((rule) => rule.selectors)
+      .filter(isGroupPlaceholder)
+    expect
+      .soft(placeholders, '(g5) one placeholder, only while the playback button is the last child')
+      .toEqual([RESERVED_LINE])
+    expect
+      .soft(ruleBodyOf(css, RESERVED_LINE), '(g5) an empty line of the label size and leading')
+      .toBe(
+        [
+          "  content: '';",
+          '  flex-basis: 100%;',
+          '  block-size: calc(var(--fs-label) * var(--lh-label));',
+          '',
+        ].join('\n'),
+      )
+    const message = ruleBodyOf(css, '.narrationMessage')
+    for (const line of [
+      'flex-basis: 100%;',
+      'margin-block: 0;',
+      'font-size: var(--fs-label);',
+      'line-height: var(--lh-label);',
+    ]) {
+      expect.soft(message, `(g5) the status line it stands for: ${line}`).toContain(`  ${line}\n`)
+    }
+    expect
+      .soft(message, '(g5) the status line has no padding or border of its own')
+      .not.toMatch(/\n\s*(?:padding|border)/)
+  })
+})
+
+// Step 11 N27 (design §20.2.2, §20.3.3; T11-25): which run-area nodes refuse taps now. The rows are
+// literals (never computed from the code): the part on screen is runEpoch 1 seq 3.
+describe('the run-area hold after a narration tap: partHoldOf (T11-25; N27)', () => {
+  const here = tokenOf({ runEpoch: 1, seq: 3 })
+  const earlier = tokenOf({ runEpoch: 0, seq: 2 })
+  const another = tokenOf({ runEpoch: 1, seq: 4 })
+  const rows = [
+    [
+      '(r1) opening',
+      { opening: true, token: here, settling: null, narrationHeld: null },
+      { interactive: false, held: false },
+    ],
+    [
+      '(r2) settling this part',
+      { opening: false, token: here, settling: here, narrationHeld: null },
+      { interactive: false, held: false },
+    ],
+    [
+      '(r3) the narration hold of this part: the footer stays live',
+      { opening: false, token: here, settling: null, narrationHeld: here },
+      { interactive: true, held: true },
+    ],
+    [
+      '(r4) the narration hold of an earlier part holds nothing now',
+      { opening: false, token: here, settling: null, narrationHeld: earlier },
+      { interactive: true, held: false },
+    ],
+    [
+      '(r5) a restart-dialog cancel during the narration hold',
+      { opening: false, token: here, settling: here, narrationHeld: here },
+      { interactive: false, held: true },
+    ],
+    [
+      '(r6) a settle of another part',
+      { opening: false, token: here, settling: another, narrationHeld: null },
+      { interactive: true, held: false },
+    ],
+    [
+      '(r7) neither',
+      { opening: false, token: here, settling: null, narrationHeld: null },
+      { interactive: true, held: false },
+    ],
+  ] as const
+
+  it('the 7 rows are distinct inputs (the table is not empty)', () => {
+    expect(new Set(rows.map(([, input]) => JSON.stringify(input))).size).toBe(7)
+  })
+
+  it.each(rows)('%s', (name, input, expected) => {
+    expect(partHoldOf(input), name).toEqual(expected)
+  })
+})
+
+// Step 11 N27 (design §20.2.2, §20.2.6, §20.3.3; T11-26): the held markup. During the narration
+// hold the choices and Back carry inert, the run footer does not (it holds the narration group);
+// the AI voice link carries its own inert, the group and both narration buttons do not. Not held,
+// the markup is byte-equal to the calls without the new props (the server and hydration render).
+describe('the run-area hold after a narration tap: the held markup (T11-26; N27, §4.7)', () => {
+  const graph = graphOf(narratedData)
+  const page2 = partViewOf(
+    narratedData,
+    start(graph, { path: ['start', 'flat_stones'], locale: 'en' }),
+  )
+  const playing = narrationDisplayOf(current('playing'), PART)
+  const groupProps = {
+    locale: 'en' as const,
+    display: playing,
+    strings: playerStringsOf('en', narratedData),
+    onToggle: () => {},
+    onPlayback: () => {},
+  }
+  const partProps = {
+    view: page2,
+    interactive: true,
+    animate: false,
+    revealDone: false,
+    firstParagraphRef: createRef<HTMLParagraphElement>(),
+    onChoose: refuse,
+    backLabel: 'Back',
+    onBack: refuse,
+  }
+  const part = (held: boolean | undefined, linkHeld: boolean | undefined): string =>
+    renderToString(
+      createElement(StoryPart, {
+        ...partProps,
+        ...(held === undefined ? {} : { held }),
+        narration: createElement(NarrationControls, {
+          ...groupProps,
+          ...(linkHeld === undefined ? {} : { linkHeld }),
+        }),
+      }),
+    )
+  const group = (linkHeld: boolean | undefined): string =>
+    renderToString(
+      createElement(NarrationControls, {
+        ...groupProps,
+        ...(linkHeld === undefined ? {} : { linkHeld }),
+      }),
+    )
+  const tagsWith = (html: string, element: string, hook: string): string[] =>
+    startTags(html, element).filter((tag) => tag.includes(` ${hook}=`))
+
+  it('(g1) StoryPart held: the choices and Back inert, the footer live', () => {
+    const html = part(true, true)
+    // Precondition: page 2 of the narrated story, with its choices, Back and the narration group.
+    expect(tagsWith(html, 'ul', 'data-choices'), 'precondition: the choices').toHaveLength(1)
+    expect(tagsWith(html, 'button', 'data-back'), 'precondition: Back').toHaveLength(1)
+    expect(narrationHooks(html), 'precondition: the narration group').toEqual([
+      'read-to-me',
+      'ai-voice',
+      'narration-control',
+    ])
+    expect
+      .soft(tagsWith(html, 'ul', 'data-choices')[0], '(g1) the choices inert')
+      .toContain(' inert=""')
+    expect
+      .soft(tagsWith(html, 'button', 'data-back')[0], '(g1) Back inert (its own)')
+      .toContain(' inert=""')
+    expect
+      .soft(tagsWith(html, 'footer', 'data-part-controls')[0], '(g1) the footer stays live')
+      .not.toContain('inert')
+  })
+
+  it('(g2) NarrationControls with linkHeld: only the AI voice link inert', () => {
+    const html = group(true)
+    expect
+      .soft(tagsWith(html, 'a', 'data-ai-voice')[0], '(g2) the AI voice link inert (its own)')
+      .toContain(' inert=""')
+    for (const [what, element, hook] of [
+      ['the group', 'div', 'data-narration'],
+      ['Read to me', 'button', 'data-read-to-me'],
+      ['the playback button', 'button', 'data-narration-control'],
+    ] as const) {
+      const tags = tagsWith(html, element, hook)
+      expect(tags, `precondition: ${what}`).toHaveLength(1)
+      expect.soft(tags[0], `(g2) ${what} never inert by the hold`).not.toContain('inert')
+    }
+  })
+
+  it('(g3) not held: byte-equal to the calls without the new props', () => {
+    expect.soft(part(false, false), '(g3) StoryPart held false').toBe(part(undefined, undefined))
+    expect.soft(group(false), '(g3) NarrationControls linkHeld false').toBe(group(undefined))
+    expect
+      .soft(part(undefined, undefined), '(g3) no inert anywhere when live and not held')
+      .not.toContain('inert')
+  })
+})

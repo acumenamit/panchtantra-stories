@@ -8,7 +8,9 @@
 // - Starts the loopback Storage stub (stub-storage.ts) and publishes the 3 committed fixtures as a
 //   staging catalogue, plus the test-only picture story derived from river-stones and its 12 media
 //   variants (publishFixturesAsStaging with pictureStory; design p1-step10-design.md §2.5, §4.5), so
-//   the loader's media HEAD gate makes 12 HEAD requests to the stub. Then preview:staging's
+//   the loader's media HEAD gate makes 12 HEAD requests to the stub; and (P1-5a Step 11, design
+//   p1-step11-design.md §8.1) the test-only narrated story derived from river-stones and its 15
+//   silent clips (narrationStory), 15 HEADs more, 27 in all. Then preview:staging's
 //   shared steps (runStagingSteps): the loader against the stub's 127.0.0.1 base (allowed for a
 //   loopback server), after which the stub is closed at once; next build; check-build; the mode
 //   check. Build env: review is preview:staging's (stagingEnvs(...).build: a simulated Preview with
@@ -21,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { runCheckBuild, type CheckBuildOptions } from '../check-build'
 import { isEntryPoint, loadContent, type Env, type LoaderOptions } from '../load-content'
 import { nextSpawner, runStagingSteps, stagingEnvs, type SpawnNext } from '../preview-staging'
+import { NARRATION_STORY_ID } from './narration-story-id'
 import { PICTURE_STORY_ID } from './picture-story-id'
 import { FIXTURES_DIR, publishFixturesAsStaging } from './staging-catalogue'
 import { startStubStorage, type StubStorage } from './stub-storage'
@@ -105,9 +108,14 @@ export async function stagingBuild(options: StagingBuildOptions): Promise<number
     log('staging-build: stub closed')
   }
   try {
-    const catalogue = await publishFixturesAsStaging(stub, FIXTURES_DIR, { pictureStory: true })
+    const catalogue = await publishFixturesAsStaging(stub, FIXTURES_DIR, {
+      pictureStory: true,
+      narrationStory: true,
+    })
+    const mediaOfStory = (storyId: string): number =>
+      catalogue.media.filter((object) => object.path.startsWith(`media/${storyId}/`)).length
     log(
-      `staging-build: launch=${launch}; stub on 127.0.0.1 serves ${catalogue.packages.length} packages under ${catalogue.pointerPath}: ${catalogue.packages.length - 1} fixtures and the derived picture story ${PICTURE_STORY_ID} with ${catalogue.media.length} media objects`,
+      `staging-build: launch=${launch}; stub on 127.0.0.1 serves ${catalogue.packages.length} packages under ${catalogue.pointerPath}: ${catalogue.packages.length - 2} fixtures, the derived picture story ${PICTURE_STORY_ID} with ${mediaOfStory(PICTURE_STORY_ID)} media objects and the derived narrated story ${NARRATION_STORY_ID} with ${mediaOfStory(NARRATION_STORY_ID)} media objects`,
     )
     const envs = stagingEnvs(options.env, stub.baseUrl)
     const code = await runStagingSteps({

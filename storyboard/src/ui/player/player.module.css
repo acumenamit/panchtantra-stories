@@ -456,14 +456,165 @@
   accent-color: var(--color-accent);
 }
 
-/* The run footer (D11-P10): Back, under the story card, in the page's language. */
+/*
+ * The run footer (D11-P10): Back, under the story card, in the page's language. Step 11: items
+ * align at the start, so Back keeps its own height beside a narration group that wraps onto more
+ * lines (a narrow phone, the status line), instead of stretching with it (owner screens 31, 32).
+ */
 .partControls {
   display: flex;
   flex-wrap: wrap;
+  align-items: start;
   gap: var(--gap-target);
   max-inline-size: var(--measure-story);
   margin-block: var(--space-5) 0;
   margin-inline: auto;
+}
+
+/*
+ * Step 11: narration in the run footer (design p1-step11-design.md N1, N2, N13, N14, N26, §4.7,
+ * §5). The group follows Back: Read to me, the AI voice byline, the playback button, then the
+ * status line on its own last line. It takes the rest of Back's line (a zero basis, so a state
+ * change never moves it to another line) and wraps on its own at 320 px and 150%; its items align
+ * at the start, so a control appearing never re-centres the others. Every colour is a declared
+ * pair already: line-strong and accent on every surface, the status line's --color-text and the
+ * byline's --color-text-accent on both ends of every scene (contrast-pairs.ts).
+ */
+.narration {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: var(--gap-target);
+}
+
+/* Read to me's pip: an outline when off, filled when on, so the state is not colour alone. */
+.pip {
+  flex: none;
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+  margin-inline-end: var(--space-2);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+}
+
+.action[aria-pressed='true'] {
+  background-color: var(--color-surface-selected);
+}
+
+.action[aria-pressed='true'] .pip {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent);
+}
+
+/*
+ * The AI voice byline (N13, CRIT-5): a text link, not a control look: the base link colour and
+ * underline at label size, no border, no fill, and a 44 px target.
+ */
+.byline {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-min);
+  color: var(--color-text-accent);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  text-decoration-line: underline;
+}
+
+/*
+ * The playback button's four labels share one grid cell (N26): the box is the widest label's in
+ * every state, so a label change without input moves nothing. Reserved labels keep their box
+ * and are hidden from sight and from the accessible name (they are aria-hidden too). Beside Back
+ * at 320 px and 150% a reserved label can wrap and make the cell two lines tall; the shown label
+ * then sits in its middle, not on its top line (review round 1, R1-L-1).
+ */
+.playbackLabels {
+  display: grid;
+  align-items: center;
+  justify-items: center;
+}
+
+.playbackLabels > span {
+  grid-area: 1 / 1;
+}
+
+.reserve {
+  visibility: hidden;
+}
+
+/*
+ * Tap to listen's cue (N14): a static accent border, so the cue holds without motion, and a finite
+ * box-shadow pulse (paint only). Under reduced motion the duration is 0 ms and the safety net in
+ * base.css runs it once, so nothing moves while the border stays. The cue never changes the box.
+ */
+@keyframes narrationPulse {
+  to {
+    box-shadow: 0 0 0 var(--space-1) var(--color-accent);
+  }
+}
+
+.action[data-pulse] {
+  border-color: var(--color-accent);
+  animation-name: narrationPulse;
+  animation-duration: var(--duration-calm);
+  animation-iteration-count: 6;
+  animation-direction: alternate;
+  animation-timing-function: var(--ease-calm);
+}
+
+/*
+ * While the focus ring shows, the pulse would paint its ring over the ring's canvas halo (base.css),
+ * leaving the amber ring on an amber pulse; so it stops, and the accent border keeps the cue
+ * (review round 1, R1-L-4). When focus leaves, the pulse runs again from its start.
+ */
+.action[data-pulse]:focus-visible {
+  animation-name: none;
+}
+
+/* The status line ("Loading", the unavailable message): its own last line in the group. */
+.narrationMessage {
+  flex-basis: 100%;
+  margin-block: 0;
+  color: var(--color-text);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+/*
+ * The status line keeps its box (review round 1, R1-L-2; design p1-step11-design.md §17). While
+ * Read to me is on and the part has a clip, the playback button shows; when it is the group's last
+ * child (no message), an empty placeholder line of the message's own size and leading takes the
+ * status line's place. So loading, buffering and playing never change the page height: at the
+ * bottom of a long page a page one line shorter would pull the scroll position back and move every
+ * box on screen, Pause included. Off, or on a part with no clip, there is no playback button and so
+ * no placeholder. Empty generated content: no text, nothing announced. A browser without :has()
+ * drops the rule and keeps the round-1 rows.
+ */
+.narration:has(> [data-narration-control]:last-child)::after {
+  content: '';
+  flex-basis: 100%;
+  block-size: calc(var(--fs-label) * var(--lh-label));
+}
+
+/*
+ * Forced colours (CRIT-9): borders are forced to a system colour and box-shadow to none, so the
+ * cue would vanish. As the segments do, the pulsing button keeps a Highlight border on Canvas, and
+ * the pressed pip keeps a fill in the user's text colour.
+ */
+@media (forced-colors: active) {
+  .action[data-pulse] {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background-color: Canvas;
+    color: CanvasText;
+    animation-name: none;
+  }
+
+  .action[aria-pressed='true'] .pip {
+    forced-color-adjust: none;
+    border-color: CanvasText;
+    background-color: CanvasText;
+  }
 }
 
 /* The restart dialog (D11-P11): a native modal dialog; the browser centres it. */

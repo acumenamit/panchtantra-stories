@@ -10,7 +10,8 @@
 //   (all four headers on it); the request follows it, as for /en, and the final response is the
 //   404 with the four headers.
 // - Step 10e (design §2.5, F2): the unmatched paths are playerNotFoundPaths('gated'), which adds the
-//   staging-only picture story's read URL.
+//   staging-only picture story's read URL; Step 11 (design p1-step11-design.md §8.1, A28) adds the
+//   staging-only narrated story's read URL too: 14 paths.
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { expect, test } from './fixtures'
@@ -118,7 +119,7 @@ test.describe('the gated build', { tag: '@gated' }, () => {
     request,
   }) => {
     const paths = [...playerPaths().map((player) => player.path), ...playerNotFoundPaths('gated')]
-    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(13)
+    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(14)
     for (const routePath of paths) {
       const response = await page.goto(routePath)
       if (!response) throw new Error(`no response for ${routePath}`)

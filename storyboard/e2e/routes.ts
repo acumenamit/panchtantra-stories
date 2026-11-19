@@ -20,6 +20,10 @@
 //   function, and the Vitest scan in scripts/testing/staging-catalogue.test.ts holds that (§9.1 G4).
 //   It answers only for the run's own leg (E2E_LAUNCH, when set): asked for another leg's paths on
 //   the staging leg, it would hand a spec the picture page, so it throws (review R-FS-1).
+//   P1-5a Step 11 (design p1-step11-design.md §2.2, §8.1, A28): it also adds the staging-only
+//   narrated story's read URL, after the picture story's, on every leg but staging. Its id comes
+//   from the leaf module scripts/testing/narration-story-id.ts; this file names it only in its
+//   import and in the function, and the same Vitest scan holds that for it (T11-24).
 // - formatted(): a UI string that takes arguments, formatted by the app's own ICU subset.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -27,6 +31,7 @@ import type { Page } from '@playwright/test'
 import { APP_NAME } from '../src/core/app-info'
 import { formatMessage, parseMessage, type MessageValues } from '../src/core/i18n/message-format'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
+import { NARRATION_STORY_ID } from '../scripts/testing/narration-story-id'
 import { PICTURE_STORY_ID } from '../scripts/testing/picture-story-id'
 import { launchLeg, legOpen, type LaunchLeg } from './launch-leg'
 
@@ -275,7 +280,9 @@ export const PLAYER_NOT_FOUND_PATHS = [
  * The player-shaped URLs that are the bilingual 404 on `leg` (T-a21, the gated player test):
  * PLAYER_NOT_FOUND_PATHS, plus the read URL of the staging-only picture story on every leg but
  * staging (design §2.5, S4, F2). On the staging leg that URL is a real page whose pictures load from
- * the media origin, so only player-images.spec.ts, with its media stub, opens it there.
+ * the media origin, so only player-images.spec.ts, with its media stub, opens it there. Step 11
+ * (A28): then the read URL of the staging-only narrated story, likewise a real page on staging,
+ * which only player-audio.spec.ts opens there.
  */
 export function playerNotFoundPaths(leg: LaunchLeg): string[] {
   const run = process.env.E2E_LAUNCH
@@ -285,7 +292,11 @@ export function playerNotFoundPaths(leg: LaunchLeg): string[] {
     )
   }
   if (leg === 'staging') return [...PLAYER_NOT_FOUND_PATHS]
-  return [...PLAYER_NOT_FOUND_PATHS, `/en/stories/${PICTURE_STORY_ID}/read`]
+  return [
+    ...PLAYER_NOT_FOUND_PATHS,
+    `/en/stories/${PICTURE_STORY_ID}/read`,
+    `/en/stories/${NARRATION_STORY_ID}/read`,
+  ]
 }
 
 // ---------------------------------------------------------------------------------------------

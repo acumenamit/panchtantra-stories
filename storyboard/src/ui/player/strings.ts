@@ -9,6 +9,7 @@ import 'server-only'
 // Step 10c: the ending card (D11-P13, P14) and the ending count "Ending {found} of {total} found"
 // for every found from 0 to the story's ending count (the card and the live region, D11-P9).
 // Step 10d: the story-language switch's prefix (D11-P4).
+// Step 11 (design p1-step11-design.md §0.2): the narration group's 9 strings, owner-approved.
 import type { LocaleCode } from '../../core/locales'
 import { TEXT_SCALES, type TextScale } from '../../core/progress'
 import type { PlayerData } from '../../reader/player/player-data'
@@ -69,5 +70,14 @@ export function playerStringsOf(
     linkCopied: t('player.linkCopied'),
     copyLink: t('player.copyLink'),
     storyLanguage: t('player.storyLanguage'),
+    readToMe: t('player.readToMe'),
+    aiVoice: t('player.aiVoice'),
+    aiVoiceAbout: t('player.aiVoiceAbout'),
+    pause: t('player.pause'),
+    resume: t('player.resume'),
+    playAgain: t('player.playAgain'),
+    tapToListen: t('player.tapToListen'),
+    narrationLoading: t('player.narrationLoading'),
+    narrationUnavailable: t('player.narrationUnavailable'),
   }
 }

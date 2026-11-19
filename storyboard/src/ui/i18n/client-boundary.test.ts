@@ -13,7 +13,8 @@
 //   still computed only by launch.ts.
 // - P1-4b (design p1-step10-design.md §2.1 to §2.5): the player island's client files (five
 //   from 10a, four from 10b, two from 10c, one from 10d, one from 10e) are scanned, and its server half
-//   (src/ui/player/strings.ts, which calls t()) is never a client file.
+//   (src/ui/player/strings.ts, which calls t()) is never a client file. Step 11 (design
+//   p1-step11-design.md §2.1, A31) adds narration-controls.tsx; strings.ts stays server-only.
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
 //   which turns zod's eval probe off before any schema is built (spec §9 CSP: no 'unsafe-eval';
 //   the stores and zod reach every reader page, design §11 R10). Type-only imports are fine.
@@ -261,6 +262,8 @@ describe('the client boundary in the repo', () => {
         'src/ui/player/story-language-switch.tsx',
         // Step 10e (design §2.5).
         'src/ui/player/scene-image.tsx',
+        // Step 11 (design p1-step11-design.md §2.1): the run footer's narration group.
+        'src/ui/player/narration-controls.tsx',
       ]),
     )
     // The player's server half builds its strings with t(); it is never a client file.

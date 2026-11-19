@@ -1111,3 +1111,78 @@ export async function settleForScreenshot(page: Page): Promise<void> {
     'loaded',
   )
 }
+
+// ---------------------------------------------------------------------------------------------
+// Text-size and font variants (moved unchanged from player-share.spec.ts at P1-5a Step 11, design
+// p1-step11-design.md A38, so player-audio.spec.ts runs its layout checks under the same wide
+// Devanagari fallback with the self-hosted font files aborted; rules LAYOUT STABILITY).
+
+export interface RowVariant {
+  readonly code: LocaleCode
+  readonly scale: 100 | 150
+  /** The wide Devanagari fallback, the self-hosted font files aborted. */
+  readonly wide: boolean
+}
+
+export const ROW_PHONES: readonly string[] = ['chromium-phone', 'webkit-iphone']
+export const LORA_FILE = /\/_next\/static\/media\/lora[^/]*\.woff2$/
+export const NOTO_FILE = /\/_next\/static\/media\/noto[-_]sans[-_]devanagari[^/]*\.woff2$/
+/** An aborted font file: Chromium logs each one; WebKit logs none. */
+export const FONT_FAILED_LINE = /^Failed to load resource: net::ERR_FAILED$/
+
+/**
+ * Before the page opens: the variant's text size and, for a wide variant, the wide Devanagari
+ * fallback with every self-hosted font file aborted (Chromium logs each abort). Returns the count
+ * of aborted requests so far.
+ */
+export async function prepareVariant(
+  page: Page,
+  variant: RowVariant,
+  errors: ConsoleErrors,
+): Promise<() => number> {
+  if (variant.scale !== 100) await seedPrefs(page, prefsText(variant.scale))
+  let aborted = 0
+  if (variant.wide) {
+    errors.allow({ chromium: [FONT_FAILED_LINE] })
+    await wideDevanagariFallback(page)
+    await page.route(
+      (url) => LORA_FILE.test(url.pathname) || NOTO_FILE.test(url.pathname),
+      async (route) => {
+        aborted++
+        await route.abort().catch(() => undefined)
+      },
+    )
+  }
+  return () => aborted
+}
+
+/**
+ * The wide variant's precondition (design §5): font files were aborted, every self-hosted
+ * Devanagari face failed and both wide 'Noto Sans Devanagari' faces loaded, so the wide fallback
+ * lays out the Devanagari text for the whole test.
+ */
+export async function expectWideFallback(page: Page, aborted: number): Promise<void> {
+  expect(aborted, 'precondition: font files aborted').toBeGreaterThan(0)
+  await page.evaluate(async () => {
+    await (window as unknown as Record<string, unknown>)['__e2eWideFallback']
+  })
+  await settleFonts(page)
+  const faces = await page.evaluate(() =>
+    [...document.fonts].map((face) => ({
+      family: face.family.replace(/["']/g, ''),
+      status: face.status,
+    })),
+  )
+  const own = faces.filter(
+    (face) => face.family !== 'Noto Sans Devanagari' && /devanagari/i.test(face.family),
+  )
+  expect(own.length, 'precondition: the self-hosted Devanagari faces').toBeGreaterThan(0)
+  expect(
+    own.map((face) => `${face.family}: ${face.status}`),
+    'precondition: every self-hosted Devanagari face failed',
+  ).toEqual(own.map((face) => `${face.family}: error`))
+  expect(
+    faces.filter((face) => face.family === 'Noto Sans Devanagari').map((face) => face.status),
+    'precondition: both wide fallback faces loaded',
+  ).toEqual(['loaded', 'loaded'])
+}

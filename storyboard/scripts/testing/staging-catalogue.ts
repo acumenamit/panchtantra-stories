@@ -13,6 +13,12 @@
 //   media/<PICTURE_STORY_ID>/<64 hex>-w<width>.webp   the 34-byte 1×1 WebP, image/webp
 // No file under fixtures/ changes and no word is written: the derived story repeats the fixture's
 // own Hindi flat_stones passage and copies every other text as stored.
+// P1-5a (design p1-step11-design.md §3.23 N23, §8.1; Step 11): with `narrationStory: true` the
+// catalogue also holds a test-only narrated story derived from river-stones (narratedStoryOf: the
+// fixture as stored plus 15 audio assets, scripts/testing/narration-story.ts), right after the
+// picture story, and the stub serves its 15 clips, so the loader makes 15 more HEAD requests:
+//   media/<NARRATION_STORY_ID>/<64 hex>-audio.mp3     the 6,048-byte silent MP3, audio/mpeg
+// Each variant is served with the stub bytes of its declared mime (mediaOf).
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -27,6 +33,17 @@ import {
 } from '../../src/core/package/catalogue-build'
 import { StoryPackageV1 } from '../../src/core/package/v1'
 import { FIXTURES_SEQ, FIXTURES_TIMESTAMP } from '../build-fixtures-catalogue'
+import {
+  NARRATION_CLIP,
+  NARRATION_CLIP_TYPE,
+  NARRATION_CLIPS,
+  NARRATION_DURATION_MS,
+  NARRATION_NODES,
+  narratedTextSha256Of,
+  narrationAssetId,
+  narrationClipPath,
+} from './narration-story'
+import { NARRATION_STORY_ID } from './narration-story-id'
 import { PICTURE_STORY_ID } from './picture-story-id'
 import type { StubStorage } from './stub-storage'
 
@@ -47,7 +64,7 @@ export interface StagingPackage {
   readonly bytes: Uint8Array<ArrayBuffer>
 }
 
-/** One media object the stub serves: a declared variant of the picture story. */
+/** One media object the stub serves: a declared variant of a derived story. */
 export interface StagingMedia {
   readonly path: string
   readonly bytes: Uint8Array<ArrayBuffer>
@@ -59,15 +76,20 @@ export interface StagingCatalogue {
   readonly snapshotPath: string
   readonly pointerBytes: Uint8Array<ArrayBuffer>
   readonly snapshotBytes: Uint8Array<ArrayBuffer>
-  /** In snapshot order (file name order; the picture story right after its fixture). */
+  /**
+   * In snapshot order (file name order; the picture story, then the narrated story, right after
+   * their fixture).
+   */
   readonly packages: readonly StagingPackage[]
-  /** The picture story's variants, in declaration order; empty without `pictureStory`. */
+  /** The derived stories' variants, in snapshot then declaration order; empty with neither option. */
   readonly media: readonly StagingMedia[]
 }
 
 export interface StagingOptions {
   /** Adds the derived picture story and its media (design p1-step10-design.md §4.5). */
   readonly pictureStory?: boolean
+  /** Adds the derived narrated story and its 15 clips (design p1-step11-design.md §8.1). */
+  readonly narrationStory?: boolean
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -181,14 +203,65 @@ export function pictureStoryOf(source: StoryPackageV1): StoryPackageV1 {
   }
 }
 
-/** The media objects the stub serves for a package: every declared variant, in order. */
-export function pictureMediaOf(pkg: Pick<StoryPackageV1, 'assets'>): StagingMedia[] {
+// ---------------------------------------------------------------------------------------------
+// The derived narrated story (design p1-step11-design.md §3.23 N23, §8.1)
+
+/** The fixture the narrated story is derived from. */
+export const NARRATION_SOURCE_ID = 'river-stones'
+
+/**
+ * The test-only narrated story (design §3.23): the river-stones fixture under NARRATION_STORY_ID,
+ * every field as stored (texts, aiUse, images: none) plus one audio asset per clip of
+ * NARRATION_CLIPS (every node in en and hi but big_rock in hi): one variant, the 42-frame silent
+ * MP3, provenance `{ origin: 'unknown' }` (code-made stubs, not AI-made, so aiUse stays as stored
+ * and the validator raises no A009).
+ */
+export function narratedStoryOf(source: StoryPackageV1): StoryPackageV1 {
+  if (source.storyId !== NARRATION_SOURCE_ID) {
+    throw new Error(`staging: the narrated story derives from ${NARRATION_SOURCE_ID} only`)
+  }
+  const pkg = structuredClone(source)
+  if (pkg.nodes.map((node) => node.id).join() !== NARRATION_NODES.join()) {
+    throw new Error(`staging: ${NARRATION_SOURCE_ID} no longer has the narrated story's nodes`)
+  }
+  const assets: StoryPackageV1['assets'][number][] = NARRATION_CLIPS.map(({ nodeId, locale }) => ({
+    kind: 'audio',
+    id: narrationAssetId(nodeId, locale),
+    nodeId,
+    locale,
+    durationMs: NARRATION_DURATION_MS,
+    variants: [
+      {
+        path: narrationClipPath(nodeId, locale),
+        mime: NARRATION_CLIP_TYPE,
+        bytes: NARRATION_CLIP.length,
+      },
+    ],
+    provenance: { origin: 'unknown' },
+    narratedTextSha256: narratedTextSha256Of(nodeId, locale),
+  }))
+  return { ...pkg, storyId: NARRATION_STORY_ID, assets: [...pkg.assets, ...assets] }
+}
+
+/** The stub bytes of each mime a derived story declares: the 1×1 WebP and the silent MP3. */
+const STUB_BYTES: Readonly<Partial<Record<string, Uint8Array<ArrayBuffer>>>> = {
+  [PICTURE_WEBP_TYPE]: PICTURE_WEBP,
+  [NARRATION_CLIP_TYPE]: NARRATION_CLIP,
+}
+
+/**
+ * The media objects the stub serves for a package: every declared variant, in order, with the
+ * stub bytes of its declared mime and that mime as its content type.
+ */
+export function mediaOf(pkg: Pick<StoryPackageV1, 'storyId' | 'assets'>): StagingMedia[] {
   return pkg.assets.flatMap((asset) =>
-    asset.variants.map((variant) => ({
-      path: variant.path,
-      bytes: PICTURE_WEBP,
-      contentType: variant.mime,
-    })),
+    asset.variants.map((variant) => {
+      const bytes = STUB_BYTES[variant.mime]
+      if (bytes === undefined) {
+        throw new Error(`staging: no stub bytes for ${variant.mime} (${pkg.storyId})`)
+      }
+      return { path: variant.path, bytes, contentType: variant.mime }
+    }),
   )
 }
 
@@ -216,7 +289,8 @@ async function stagingPackageOf(raw: unknown): Promise<{ pkg: StoryPackageV1 } &
 /**
  * Each fixtures/packages/*.json, sorted by file name, strict-parsed and re-serialized as canonical
  * JCS (the committed files are not canonical), named by sha256 of those bytes. With
- * `pictureStory`, the derived picture story follows river-stones (storyId order).
+ * `pictureStory`, the derived picture story follows river-stones (storyId order); with
+ * `narrationStory`, the derived narrated story follows them (design p1-step11-design.md §8.1).
  */
 export async function stagingPackages(
   fixturesDir = FIXTURES_DIR,
@@ -235,6 +309,7 @@ async function stagingPackagesWithMedia(
     .sort()
   const packages: StagingPackage[] = []
   const media: StagingMedia[] = []
+  const derived: string[] = []
   for (const name of names) {
     const raw: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'))
     const { pkg, entry, bytes } = await stagingPackageOf(raw)
@@ -242,20 +317,30 @@ async function stagingPackagesWithMedia(
     if (options.pictureStory === true && pkg.storyId === PICTURE_SOURCE_ID) {
       const picture = await stagingPackageOf(pictureStoryOf(pkg))
       packages.push({ entry: picture.entry, bytes: picture.bytes })
-      media.push(...pictureMediaOf(picture.pkg))
+      media.push(...mediaOf(picture.pkg))
+      derived.push(PICTURE_STORY_ID)
+    }
+    if (options.narrationStory === true && pkg.storyId === NARRATION_SOURCE_ID) {
+      const narrated = await stagingPackageOf(narratedStoryOf(pkg))
+      packages.push({ entry: narrated.entry, bytes: narrated.bytes })
+      media.push(...mediaOf(narrated.pkg))
+      derived.push(NARRATION_STORY_ID)
     }
   }
-  if (options.pictureStory === true && media.length === 0) {
+  if (options.pictureStory === true && !derived.includes(PICTURE_STORY_ID)) {
     throw new Error(`staging: the picture story needs the fixture ${PICTURE_SOURCE_ID}`)
+  }
+  if (options.narrationStory === true && !derived.includes(NARRATION_STORY_ID)) {
+    throw new Error(`staging: the narrated story needs the fixture ${NARRATION_SOURCE_ID}`)
   }
   return { packages, media }
 }
 
 /**
  * Publishes the committed fixtures to `stub` as a staging catalogue: every package, the media
- * (with `pictureStory`), the snapshot (seq 1, featuredStoryId null, no approvalSha256: staging
- * skips the approval gate) and, last, the pointer catalogue/staging.json. Same packages, same
- * bytes.
+ * (with `pictureStory` or `narrationStory`), the snapshot (seq 1, featuredStoryId null, no
+ * approvalSha256: staging skips the approval gate) and, last, the pointer catalogue/staging.json.
+ * Same packages, same bytes.
  */
 export async function publishFixturesAsStaging(
   stub: Pick<StubStorage, 'put'>,

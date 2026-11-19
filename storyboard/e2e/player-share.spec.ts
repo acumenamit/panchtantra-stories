@@ -44,6 +44,7 @@ import {
   choice,
   consoleErrors,
   endingsOf,
+  expectWideFallback,
   FIRST_PARAGRAPH,
   fixtureGraph,
   frames,
@@ -52,10 +53,10 @@ import {
   pageValue,
   PART,
   PLAYER,
-  prefsText,
+  prepareVariant,
   recordAnnouncements,
+  ROW_PHONES,
   RUN,
-  seedPrefs,
   seedProgressOnce,
   settleFonts,
   sharedPoint,
@@ -63,8 +64,8 @@ import {
   tabReachesLinks,
   walk,
   watchDialogOpen,
-  wideDevanagariFallback,
   type ConsoleErrors,
+  type RowVariant,
 } from './page-helpers'
 import { formatted, message, playerFixture, playerPath, uiLang } from './routes'
 
@@ -506,13 +507,6 @@ async function reachEnding(
 // kept for the whole test by aborting the self-hosted font files (holding them makes WebKit never
 // let a choice be tapped; design §1.4, RP4).
 
-interface RowVariant {
-  readonly code: LocaleCode
-  readonly scale: 100 | 150
-  /** The wide Devanagari fallback, the self-hosted font files aborted. */
-  readonly wide: boolean
-}
-
 const ROW_VARIANTS: readonly RowVariant[] = [
   { code: 'en', scale: 100, wide: false },
   { code: 'hi', scale: 100, wide: false },
@@ -521,16 +515,11 @@ const ROW_VARIANTS: readonly RowVariant[] = [
   { code: 'hi', scale: 100, wide: true },
   { code: 'hi', scale: 150, wide: true },
 ]
-const ROW_PHONES: readonly string[] = ['chromium-phone', 'webkit-iphone']
 const ROW_TABLETS: readonly string[] = [
   'chromium-tablet',
   'chromium-tablet-landscape',
   'webkit-ipad',
 ]
-const LORA_FILE = /\/_next\/static\/media\/lora[^/]*\.woff2$/
-const NOTO_FILE = /\/_next\/static\/media\/noto[-_]sans[-_]devanagari[^/]*\.woff2$/
-/** An aborted font file: Chromium logs each one; WebKit logs none. */
-const FONT_FAILED_LINE = /^Failed to load resource: net::ERR_FAILED$/
 
 /** The test title's suffix; none for /en at 100% with the fonts loaded (the original case). */
 function variantName(variant: RowVariant): string {
@@ -544,63 +533,6 @@ function skipVariant(variant: RowVariant): void {
     variant.scale !== 100 && !ROW_PHONES.includes(test.info().project.name),
     '150% text: the phones',
   )
-}
-
-/**
- * Before the page opens: the variant's text size and, for a wide variant, the wide Devanagari
- * fallback with every self-hosted font file aborted (Chromium logs each abort). Returns the count
- * of aborted requests so far.
- */
-async function prepareVariant(
-  page: Page,
-  variant: RowVariant,
-  errors: ConsoleErrors,
-): Promise<() => number> {
-  if (variant.scale !== 100) await seedPrefs(page, prefsText(variant.scale))
-  let aborted = 0
-  if (variant.wide) {
-    errors.allow({ chromium: [FONT_FAILED_LINE] })
-    await wideDevanagariFallback(page)
-    await page.route(
-      (url) => LORA_FILE.test(url.pathname) || NOTO_FILE.test(url.pathname),
-      async (route) => {
-        aborted++
-        await route.abort().catch(() => undefined)
-      },
-    )
-  }
-  return () => aborted
-}
-
-/**
- * The wide variant's precondition (design §5): font files were aborted, every self-hosted
- * Devanagari face failed and both wide 'Noto Sans Devanagari' faces loaded, so the wide fallback
- * lays out the Devanagari text for the whole test.
- */
-async function expectWideFallback(page: Page, aborted: number): Promise<void> {
-  expect(aborted, 'precondition: font files aborted').toBeGreaterThan(0)
-  await page.evaluate(async () => {
-    await (window as unknown as Record<string, unknown>)['__e2eWideFallback']
-  })
-  await settleFonts(page)
-  const faces = await page.evaluate(() =>
-    [...document.fonts].map((face) => ({
-      family: face.family.replace(/["']/g, ''),
-      status: face.status,
-    })),
-  )
-  const own = faces.filter(
-    (face) => face.family !== 'Noto Sans Devanagari' && /devanagari/i.test(face.family),
-  )
-  expect(own.length, 'precondition: the self-hosted Devanagari faces').toBeGreaterThan(0)
-  expect(
-    own.map((face) => `${face.family}: ${face.status}`),
-    'precondition: every self-hosted Devanagari face failed',
-  ).toEqual(own.map((face) => `${face.family}: error`))
-  expect(
-    faces.filter((face) => face.family === 'Noto Sans Devanagari').map((face) => face.status),
-    'precondition: both wide fallback faces loaded',
-  ).toEqual(['loaded', 'loaded'])
 }
 
 test.describe('the story player, Step 10c: the ending card', { tag: '@review' }, () => {
