@@ -366,8 +366,10 @@ export async function scaleSeen(page: Page): Promise<ScaleSeen | null> {
 
 /**
  * Presses Tab until `selector` has focus. WebKit, like Safari's default setting, may skip some
- * controls on a plain Tab (Playwright's WebKit skips links), so the WebKit projects press Alt+Tab
- * (design §8 E2E 5). Chromium ignores Alt+Tab, so it presses Tab. Focus only ever arrives by key.
+ * controls on a plain Tab (Playwright's WebKit on Windows skips links; see tabReachesLinks), so the
+ * WebKit projects press Alt+Tab (design §8 E2E 5); Alt changes the link setting only on Cocoa
+ * (routes.ts), and the loop stops wherever focus arrives. Chromium ignores Alt+Tab, so it presses
+ * Tab. Focus only ever arrives by key.
  */
 export async function focusByKeyboard(
   page: Page,
@@ -384,6 +386,37 @@ export async function focusByKeyboard(
     if (focused) return
   }
   throw new Error(`${key} never focused ${selector}`)
+}
+
+/**
+ * Whether a plain Tab moves focus onto a link in this browser. Chromium: yes. Playwright's WebKit
+ * on Windows leaves links out of the Tab order (focusLinkForWebKit in routes.ts). On the Linux CI
+ * image, T8 in player-share.spec.ts expected Shift+Tab from the share field to skip All stories and
+ * land on Share, and it did not (CI run 44463931008; where focus went was not recorded). So a test
+ * that expects a Tab order around a link asks the browser first. Measured on a button and a link
+ * added at the end of the body for the probe and removed after it, so the answer does not depend
+ * on the page under test. Moves focus.
+ */
+export async function tabReachesLinks(page: Page): Promise<boolean> {
+  await page.evaluate(() => {
+    const box = document.createElement('div')
+    box.setAttribute('data-e2e-tab-probe', '')
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = 'probe'
+    const link = document.createElement('a')
+    link.href = '#e2e-tab-probe'
+    link.textContent = 'probe'
+    box.append(button, link)
+    document.body.append(box)
+  })
+  await page.locator('[data-e2e-tab-probe] > button').focus()
+  await page.keyboard.press('Tab')
+  const reached = await page.evaluate(
+    () => document.activeElement?.matches('[data-e2e-tab-probe] > a') ?? false,
+  )
+  await page.evaluate(() => document.querySelector('[data-e2e-tab-probe]')?.remove())
+  return reached
 }
 
 // ---------------------------------------------------------------------------------------------

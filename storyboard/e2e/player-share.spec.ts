@@ -60,6 +60,7 @@ import {
   settleFonts,
   sharedPoint,
   storedStory,
+  tabReachesLinks,
   walk,
   watchDialogOpen,
   wideDevanagariFallback,
@@ -1107,9 +1108,11 @@ test.describe('the story player, Step 10c: Share', { tag: '@review' }, () => {
   // own full-width line under the action row, still inside the settling wrapper; the row keeps Try
   // another path, Share and All stories (one row on the tablets). The field moved in the DOM, so
   // the visual, DOM and Tab orders agree (WCAG 1.3.2, 2.4.3): Tab from the field goes to Back, and
-  // Shift+Tab to All stories (Playwright's WebKit leaves links out of the Tab order, so Share
-  // there). Under the wide Devanagari fallback (the font files aborted) the layout must hold too;
-  // the keyboard order does not depend on the font, so it runs with the fonts loaded only.
+  // Shift+Tab to All stories where Tab reaches links, else to Share. Playwright's WebKit on Windows
+  // leaves links out of the Tab order; on the Linux CI image Shift+Tab from the field did not land
+  // on Share (CI run 44463931008), so tabReachesLinks asks the browser and the message names where
+  // focus landed. Under the wide Devanagari fallback (the font files aborted) the layout must hold
+  // too; the keyboard order does not depend on the font, so it runs with the fonts loaded only.
   for (const variant of ROW_VARIANTS) {
     test(`T-c2 the clipboard refuses: the field is on its own full-width line under the actions${variantName(variant)}`, async ({
       page,
@@ -1218,19 +1221,31 @@ test.describe('the story player, Step 10c: Share', { tag: '@review' }, () => {
           '(e) Tab from the field: Back',
         )
         .toBe(true)
+      const links = await tabReachesLinks(page)
+      if (browserName === 'chromium') {
+        expect(links, 'precondition: Chromium tabs to links').toBe(true)
+      }
       await field.focus()
       await expect(field).toBeFocused()
       await page.keyboard.press('Shift+Tab')
-      const previous = browserName === 'webkit' ? 'button[data-share]' : 'a[data-all-stories]'
+      const previous = links ? 'a[data-all-stories]' : 'button[data-share]'
+      const landed = await page.evaluate((selector) => {
+        const active = document.activeElement
+        const data =
+          active === null
+            ? []
+            : [...active.attributes]
+                .filter((attribute) => attribute.name.startsWith('data-'))
+                .map((attribute) => `[${attribute.name}]`)
+        return {
+          ok: active?.closest('section[data-ending]') != null && active.matches(selector),
+          on: active === null ? 'nothing' : `${active.tagName.toLowerCase()}${data.join('')}`,
+        }
+      }, previous)
       expect
         .soft(
-          await page.evaluate(
-            (selector) =>
-              document.activeElement?.closest('section[data-ending]') !== null &&
-              (document.activeElement?.matches(selector) ?? false),
-            previous,
-          ),
-          `(f) Shift+Tab from the field: ${previous}`,
+          landed.ok,
+          `(f) Shift+Tab from the field: ${previous} (Tab reaches links: ${links}; focus on ${landed.on})`,
         )
         .toBe(true)
     })
