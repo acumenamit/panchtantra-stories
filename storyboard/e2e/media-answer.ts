@@ -2,8 +2,10 @@
 // worker and engine, in a separate context that is not the guarded test context, a detached audio
 // element's GET of an https URL on a loopback TCP listener (it counts connections and closes each
 // at once) is routed and answered with the silent clip. It reports routed, seen, escapes and
-// decoded; mediaAllows decides whether a real-element test may run. A request that escapes
-// Playwright's routing reaches only that listener, never a real host. Not a spec.
+// decoded; mediaAllows decides whether a real-element test may run (Chromium only, design §23:
+// Linux WebKit answered routed, yet on the site page the guard saw clip requests the media stub
+// never answered). A probe request that escapes Playwright's routing reaches only that listener,
+// never a real host. Not a spec.
 // Its own file (review round 1, S11-R1-FS-2): security-guard.spec.ts needs the answer for G4-G6,
 // while e2e/narration-media.ts, which exports the built clip URLs, is held to player-audio.spec.ts
 // by the Vitest scan of e2e/ (T11-24). This file exports no clip URL and loads nothing that builds
@@ -176,17 +178,23 @@ async function askMedia(browser: Browser, engine: string): Promise<MediaAnswer> 
 /**
  * Whether a real-element test may run on this engine (A33): 'routed' (SPY, G4-G6) needs the
  * engine's media requests routed with no escape; 'decoded' (NETWORK, S5) also needs the clip to
- * decode.
+ * decode. Only Chromium may run one (design §23): on Linux WebKit (CI run 44604741639) this probe
+ * answered routed with no escape, yet for each clip load on the site page the guard saw a request
+ * the media stub never answered, so a WebKit answer is not trusted on any platform.
  */
 export function mediaAllows(
-  answer: Pick<MediaAnswer, 'routed' | 'escapes' | 'decoded'>,
+  answer: Pick<MediaAnswer, 'engine' | 'routed' | 'escapes' | 'decoded'>,
   need: 'routed' | 'decoded',
 ): boolean {
+  if (!answer.engine.startsWith('chromium ')) return false
   const routed = answer.routed && answer.escapes === 0
   return need === 'routed' ? routed : routed && answer.decoded
 }
 
 /** The skip reason a real-element test names: the browser's answer. */
 export function mediaAnswerText(answer: MediaAnswer): string {
-  return `media answer: ${JSON.stringify(answer)}`
+  const rule = answer.engine.startsWith('chromium ')
+    ? ''
+    : ' (only Chromium runs a real element, design §23)'
+  return `media answer${rule}: ${JSON.stringify(answer)}`
 }

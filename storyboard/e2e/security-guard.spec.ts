@@ -21,8 +21,9 @@
 // catches (G3). And the audio forms: without the stub, a detached <audio> played in a click,
 // new Audio(url) with load(), and an <audio preload=auto><source> each fail the test (G4-G6). Each audio form first asks the engine's media answer (e2e/media-answer.ts
 // mediaAnswerFor: a loopback probe in a separate context) and skips, before any media URL is set,
-// where the engine's audio requests are not routed or escape (Windows WebKit, PR-3), so these probes
-// too stay on this machine.
+// where the engine's audio requests are not routed or escape (Windows WebKit, PR-3), and on every
+// WebKit (Linux WebKit answered routed, yet the guard saw clip requests the stub never answered, CI
+// run 44604741639; design §23), so these probes too stay on this machine.
 import { readdirSync, readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -581,7 +582,8 @@ test.describe('the media guard fails a test without the media stub that loads au
   for (const form of AUDIO_FORMS) {
     test(form.name, async ({ page, browser }) => {
       // Before any media URL is set: where the engine's audio requests are not routed or escape
-      // (Windows WebKit, PR-3), the probe would leave Playwright's network layer, so it skips.
+      // (Windows WebKit, PR-3), the probe would leave Playwright's network layer, so it skips; and on
+      // every WebKit (Linux WebKit, design §23).
       const answer = await mediaAnswerFor(browser)
       test.info().annotations.push({ type: 'media answer', description: JSON.stringify(answer) })
       test.skip(!mediaAllows(answer, 'routed'), mediaAnswerText(answer))

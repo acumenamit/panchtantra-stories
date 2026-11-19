@@ -15,10 +15,12 @@
 //   asks the page that the fake is installed after hydration with no page error (C7, unprobed on a
 //   hydrated page before the build), and after its first narration tap that exactly one fake was
 //   made. Play outcomes and media events are the test's: resolvePlay, rejectPlay(name), emit().
-// - SPY and NETWORK (13.4.3, 13.4.4): the real element, its calls logged. They run only where the
-//   engine's media answer (H2, asked once per worker before any media URL is set) shows its audio
-//   requests routed with no escape, NETWORK and S5 also decoded; elsewhere they skip before the
-//   first navigation, with the answer as the reason (S10; Windows WebKit expected). The media stub
+// - SPY and NETWORK (13.4.3, 13.4.4): the real element, its calls logged. They run on Chromium only,
+//   where the engine's media answer (H2, asked once per worker before any media URL is set) shows
+//   its audio requests routed with no escape, NETWORK and S5 also decoded; on every WebKit they skip
+//   before the first navigation, with the answer as the reason (S10: Windows WebKit, PR-3; Linux
+//   WebKit answered routed, yet the guard saw clip requests the stub never answered, CI run
+//   44604741639, design §23). The media stub
 //   serves the silent clip for the 15 clip URLs; a route of the test's own records each clip
 //   request and passes it on with route.fallback(), so the stub still answers it.
 // - The click bracket (H5): play() inside the trusted click and before the first write of the key
@@ -2633,7 +2635,7 @@ async function routeClips(
   return seen
 }
 
-/** Before the first navigation: skips unless the engine's media answer allows `need` (S10). */
+/** Before the first navigation: skips unless the engine's media answer allows `need` (S10; Chromium only, design §23). */
 async function askMediaFirst(
   browser: Parameters<typeof mediaAnswerFor>[0],
   need: 'routed' | 'decoded',
@@ -3129,6 +3131,8 @@ test.describe('narration in the player, Step 11: the harness', { tag: '@staging'
   test('T11-M1 the media answer is non-vacuous', async ({ browser, browserName }) => {
     const answer = await mediaAnswerFor(browser)
     test.info().annotations.push({ type: 'media answer', description: JSON.stringify(answer) })
+    // The CI list reporter prints no annotations, so the answer goes to stdout too (design §23, S9).
+    console.log(`[media-answer] ${test.info().project.name} ${JSON.stringify(answer)}`)
     if (browserName === 'chromium') {
       // PR-2 and PR-3 on Windows; unprobed on Linux (a red here on CI is routed under S9).
       expect
@@ -3138,19 +3142,54 @@ test.describe('narration in the player, Step 11: the harness', { tag: '@staging'
         )
         .toEqual({ routed: true, escapes: 0, decoded: true })
     }
+    const chromium = 'chromium 0.0'
     expect
       .soft(
         [
-          mediaAllows({ routed: true, escapes: 1, decoded: true }, 'routed'),
-          mediaAllows({ routed: false, escapes: 0, decoded: true }, 'routed'),
-          mediaAllows({ routed: true, escapes: 0, decoded: false }, 'decoded'),
-          mediaAllows({ routed: true, escapes: 0, decoded: true }, 'routed'),
-          mediaAllows({ routed: true, escapes: 0, decoded: true }, 'decoded'),
-          mediaAllows({ routed: true, escapes: 0, decoded: false }, 'routed'),
+          mediaAllows({ engine: chromium, routed: true, escapes: 1, decoded: true }, 'routed'),
+          mediaAllows({ engine: chromium, routed: false, escapes: 0, decoded: true }, 'routed'),
+          mediaAllows({ engine: chromium, routed: true, escapes: 0, decoded: false }, 'decoded'),
+          mediaAllows({ engine: chromium, routed: true, escapes: 0, decoded: true }, 'routed'),
+          mediaAllows({ engine: chromium, routed: true, escapes: 0, decoded: true }, 'decoded'),
+          mediaAllows({ engine: chromium, routed: true, escapes: 0, decoded: false }, 'routed'),
         ],
         '(g2) mediaAllows on literal answers',
       )
       .toEqual([false, false, false, true, true, true])
+    // CI run 44604741639 (Linux WebKit): the probe answered routed with no escape, yet for each clip
+    // load on the site page the guard saw a request the media stub never answered. WebKit never runs
+    // a real element, whatever its answer says (design §23).
+    expect
+      .soft(
+        [
+          mediaAllows({ engine: 'webkit 0.0', routed: true, escapes: 0, decoded: true }, 'routed'),
+          mediaAllows({ engine: 'webkit 0.0', routed: true, escapes: 0, decoded: true }, 'decoded'),
+          mediaAllows({ engine: 'WebKit 0.0', routed: true, escapes: 0, decoded: true }, 'routed'),
+          mediaAllows({ engine: 'firefox 0.0', routed: true, escapes: 0, decoded: true }, 'routed'),
+        ],
+        '(g3) WebKit (and any engine other than Chromium) never allows a real element',
+      )
+      .toEqual([false, false, false, false])
+    // This engine's own name with the best possible answer: WebKit is refused even so (g4), and
+    // Chromium's own answer lets the real element run (g5), so a changed engine string cannot
+    // silently skip every real-element test.
+    const best = { ...answer, routed: true, escapes: 0, decoded: true }
+    if (browserName === 'webkit') {
+      expect
+        .soft(
+          [mediaAllows(best, 'routed'), mediaAllows(best, 'decoded')],
+          `(g4) this WebKit (${answer.engine}) allows no real element, even routed and decoded`,
+        )
+        .toEqual([false, false])
+    }
+    if (browserName === 'chromium') {
+      expect
+        .soft(
+          [mediaAllows(answer, 'routed'), mediaAllows(answer, 'decoded')],
+          `(g5) this Chromium's own answer allows the real element (${JSON.stringify(answer)})`,
+        )
+        .toEqual([true, true])
+    }
   })
 
   test('T11-M2 the FAKE tripwire blocks and records each way to load a real media element', async ({
