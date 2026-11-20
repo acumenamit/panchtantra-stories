@@ -12,6 +12,12 @@
 // player rule's twin for <locale>/stories/<storyId>.html, the landing pattern among the open
 // build's required patterns, and the landing line every run prints after the player line. The
 // review sample output (withStories) now holds both story routes.
+// P1 Step 12, 12b (design p1-step12-design.md §3.21 N21, §4.13, B8; test plan T12-26): [social] and
+// the "site url" line every run prints after the landing line. Home and landing samples carry the
+// no-origin Open Graph head Next renders (T12-39 g2); the set-branch pages come from
+// nextSocialHead (scripts/testing/next-social-head.ts, Next's own resolver and renderer, stop S11;
+// T12-39 pins it), so the tag set [social] expects is the one Next emits. The site URL reaches runCheckBuild only
+// inside the explicit env object a test passes.
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,6 +25,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveLaunch, type Env, type LaunchDecision } from '../src/config/launch'
+import {
+  COMMITTED_PRODUCTION_ORIGIN,
+  SITE_URL_REFUSED,
+  type SiteUrlDecision,
+} from '../src/config/site-url'
 import type { BuildInfo } from '../src/core/content/build-info'
 import { GATE_MODES, type GateMode } from '../src/core/content/gates'
 import { jcsBytes } from '../src/core/hashing'
@@ -36,6 +47,7 @@ import {
   checkLandingPages,
   checkPackageTextLeak,
   checkPlayerPages,
+  checkSocial,
   checkStagingBanner,
   COMING_SOON_MAIN,
   contentModeLine,
@@ -63,6 +75,7 @@ import {
   type ContentOutputs,
 } from './check-build'
 import { STAGING_REFUSED_HERE, stagingPointerAllowed } from './load-content'
+import { nextSocialHead, type SocialPage } from './testing/next-social-head'
 
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CATALOGUE = readCatalogues(storyboard)
@@ -175,6 +188,56 @@ const localePage = (code: string, title: string) =>
     `<main id="main" tabindex="-1"><h1>x</h1></main>`,
   )
 
+// ---- Open Graph (P1 Step 12, 12b; design p1-step12-design.md §3.21, §4.13) ----
+
+/** React's attribute escaping (escapeTextForBrowser): & " ' < >. */
+const escapeAttribute = (text: string): string =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+/**
+ * The head Next renders for a page that sets openGraph with no site origin (T12-39 g2 pins this
+ * list from Next's own renderer), plus its flight copy for the tail of <body>.
+ */
+function socialHead(title: string, description: string): { head: string; flight: string } {
+  const tags: [string, string, string][] = [
+    ['property', 'og:title', title],
+    ['property', 'og:description', description],
+    ['property', 'og:site_name', 'Storyboard'],
+    ['property', 'og:type', 'website'],
+    ['name', 'twitter:card', 'summary'],
+    ['name', 'twitter:title', title],
+    ['name', 'twitter:description', description],
+  ]
+  const head = tags
+    .map(([attr, key, value]) => `<meta ${attr}="${key}" content="${escapeAttribute(value)}"/>`)
+    .join('')
+  const rows = tags
+    .map(
+      ([attr, key, value], i) =>
+        `[\\"$\\",\\"meta\\",\\"${i + 4}\\",{\\"${attr}\\":\\"${key}\\",\\"content\\":${JSON.stringify(JSON.stringify(value)).slice(1, -1)}}]`,
+    )
+    .join(',')
+  return { head, flight: `<script>self.__next_f.push([1,"9:[${rows}]\\n"])</script>` }
+}
+
+/** meta.description of a locale, from the real catalogues. */
+const metaDescription = (code: string): string =>
+  CATALOGUE.find((v) => v.locale === code && v.key === 'meta.description')?.value ?? 'x'
+
+/** Home, /{code}: the layout's title and robots, and the no-origin Open Graph head (12b). */
+const homePage = (code: string, head = socialHead('Storyboard', metaDescription(code))) =>
+  doc(
+    code,
+    `<title>Storyboard</title>${ROBOTS_META}${head.head}`,
+    `<main id="main" tabindex="-1"><h1>x</h1></main>`,
+    head.flight,
+  )
+
 /** The review output: the gate on "/", /en, /hi and both Grown-ups pages. */
 function openOutput(): BuildOutput {
   return {
@@ -189,9 +252,9 @@ function openOutput(): BuildOutput {
     html: new Map([
       ['_global-error.html', GLOBAL_ERROR],
       ['_not-found.html', NOT_FOUND],
-      ['en.html', localePage('en', 'Storyboard')],
+      ['en.html', homePage('en')],
       ['en/grown-ups.html', localePage('en', 'For grown-ups – Storyboard')],
-      ['hi.html', localePage('hi', 'Storyboard')],
+      ['hi.html', homePage('hi')],
       ['hi/grown-ups.html', localePage('hi', 'बड़ों के लिए – Storyboard')],
       [
         'index.html',
@@ -240,6 +303,12 @@ const UNREAD_PLAYER_LINES = [
   'player pages: unknown (expected 0); package text values scanned: unknown',
   'landing pages: unknown (expected 0)',
 ]
+/**
+ * The site url line every run prints after the landing line (12b; design §4.8, §4.13): ignored
+ * outside a Vercel Production build, unset in one without the variable.
+ */
+const SITE_URL_IGNORED = 'site url: ignored (not a Vercel Production build)'
+const SITE_URL_UNSET = 'site url: unset'
 
 const fixture = (storyId: string): StoryPackageV1 =>
   StoryPackageV1.parse(
@@ -342,16 +411,26 @@ function withPlayers(base: BuildOutput, packages: readonly StoryPackageV1[]): Bu
 
 // ---- the story landing (P1 Step 12, design p1-step12-design.md §3.16 N17) ----
 
-/** A landing page as Next writes it under the (site) layout: skip link, header, one main. */
-const landingPage = (code: string, main = '<main id="main" tabindex="-1" class="x_main">') =>
-  doc(
+/**
+ * A landing page as Next writes it under the (site) layout: skip link, header, one main; 12b adds
+ * the no-origin Open Graph head with the story's title (`title`, the package's as stored).
+ */
+const landingPage = (
+  code: string,
+  main = '<main id="main" tabindex="-1" class="x_main">',
+  title = 'Two Paths',
+) => {
+  const social = socialHead(title, 'A synthetic story used only by tests.')
+  return doc(
     code,
-    `<title>Two Paths – Storyboard</title>${ROBOTS_META}`,
+    `<title>${escapeAttribute(title)} – Storyboard</title>${ROBOTS_META}${social.head}`,
     '<a href="#main" class="x_skip">Skip</a><header><a href="/' +
       code +
       '" lang="en">Storyboard</a></header>' +
       `${main}<div data-landing=""><h1>x</h1></div><div role="status"></div></main>`,
+    social.flight,
   )
+}
 
 const landingPath = (code: string, storyId: string) => `${code}/stories/${storyId}.html`
 
@@ -363,7 +442,10 @@ function withLandings(base: BuildOutput, packages: readonly StoryPackageV1[]): B
     for (const pkg of packages) {
       for (const code of ENABLED_LOCALE_CODES.filter((c) => pkg.locales.includes(c))) {
         o.manifest.routes![`/${code}/stories/${pkg.storyId}`] = page(LANDING_PATTERN)
-        o.html.set(landingPath(code, pkg.storyId), landingPage(code))
+        o.html.set(
+          landingPath(code, pkg.storyId),
+          landingPage(code, undefined, pkg.text[code]?.title),
+        )
       }
     }
   })
@@ -1616,6 +1698,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
         'check-build: ok',
       ],
       err: [],
@@ -1632,6 +1715,7 @@ describe('runCheckBuild on files', () => {
       'reader launch: open (review); locale routes: 4',
       'content mode: fixtures; staging banner pages: 0 of 6',
       ...NO_PLAYER_LINES,
+      SITE_URL_IGNORED,
       'check-build: ok',
     ])
   })
@@ -1648,6 +1732,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
         'check-build: ok',
       ],
       err: [],
@@ -1696,6 +1781,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 0 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
         'check-build: ok',
       ],
       err: [],
@@ -1711,6 +1797,7 @@ describe('runCheckBuild on files', () => {
       'reader launch: gated (committed)',
       'content mode: none; staging banner pages: unknown',
       ...UNREAD_PLAYER_LINES,
+      SITE_URL_UNSET,
     ])
     expect(acrossResult.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
@@ -1732,9 +1819,13 @@ describe('runCheckBuild on files', () => {
       'reader launch: open (review); locale routes: 0',
       'content mode: fixtures; staging banner pages: 0 of 2',
       ...NO_PLAYER_LINES,
+      SITE_URL_IGNORED,
     ])
     expect(result.err).toEqual([
       expect.stringContaining(`check-build failed [state-agreement] ${DISAGREEMENT_HINT}`),
+      // 12b: [social] expects the open decision's Home pages (fail closed, design §4.13).
+      'check-build failed [social] missing en.html',
+      'check-build failed [social] missing hi.html',
     ])
   })
 
@@ -1747,6 +1838,7 @@ describe('runCheckBuild on files', () => {
       'reader launch: gated (committed); locale routes: unknown',
       'content mode: none; staging banner pages: 0 of 0',
       ...NO_PLAYER_LINES,
+      SITE_URL_IGNORED,
     ])
     expect(result.err).toEqual([
       'check-build failed [catalogue] messages/ is missing',
@@ -1774,6 +1866,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: fixtures; staging banner pages: 0 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
       ],
       err: [
         'check-build failed [content-outputs] .content/ exists, but CONTENT_SOURCE is none',
@@ -1809,6 +1902,7 @@ describe('runCheckBuild on files', () => {
       'reader launch: gated (committed)',
       'content mode: staging; staging banner pages: unknown',
       ...UNREAD_PLAYER_LINES,
+      SITE_URL_IGNORED,
     ])
     expect(result.err).toEqual([
       'check-build failed [read] two different prerendered files for index.html (server/route-cache)',
@@ -1859,6 +1953,7 @@ describe('runCheckBuild on files', () => {
           'reader launch: open (review); locale routes: 4',
           'content mode: staging; staging banner pages: 6 of 6',
           ...NO_PLAYER_LINES,
+          SITE_URL_IGNORED,
           'check-build: ok',
         ],
         err: [],
@@ -1875,6 +1970,7 @@ describe('runCheckBuild on files', () => {
             'reader launch: gated (committed); locale routes: 0',
             'content mode: staging; staging banner pages: 2 of 2',
             ...NO_PLAYER_LINES,
+            SITE_URL_IGNORED,
             'check-build: ok',
           ],
           err: [],
@@ -1896,6 +1992,7 @@ describe('runCheckBuild on files', () => {
           'reader launch: open (review); locale routes: 4',
           'content mode: staging; staging banner pages: 5 of 6',
           ...NO_PLAYER_LINES,
+          SITE_URL_IGNORED,
         ],
         err: [
           `check-build failed [staging-banner] hi/grown-ups.html: expected exactly one banner (found 0 ${STAGING_BANNER_MARKER})`,
@@ -1921,6 +2018,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: staging; staging banner pages: 2 of 2',
         ...NO_PLAYER_LINES,
+        env.VERCEL_ENV === 'production' ? SITE_URL_UNSET : SITE_URL_IGNORED,
       ])
       expect(result.err).toEqual([lock])
     }
@@ -1942,6 +2040,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: production; staging banner pages: 0 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
         'check-build: ok',
       ],
       err: [],
@@ -1959,6 +2058,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: open (review); locale routes: 4',
         'content mode: invalid; staging banner pages: 0 of 6',
         ...NO_PLAYER_LINES,
+        SITE_URL_IGNORED,
       ],
       err: ['check-build failed [content-outputs] .content/build-info.json failed strict parse'],
     })
@@ -1977,6 +2077,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: gated (committed); locale routes: 0',
         'content mode: none; staging banner pages: 1 of 2',
         ...NO_PLAYER_LINES,
+        SITE_URL_UNSET,
       ],
       err: [
         `check-build failed [staging-banner] _not-found.html: holds ${STAGING_BANNER_ATTRIBUTE} 2 time(s), but content mode is none (only a staging build has the banner)`,
@@ -1994,6 +2095,7 @@ describe('runCheckBuild on files', () => {
     'content mode: fixtures; staging banner pages: 0 of 18',
     'player pages: 6 (expected 6); package text values scanned: 110',
     'landing pages: 6 (expected 6)',
+    SITE_URL_IGNORED,
   ]
 
   it.each(['app', 'route-cache'] as const)(
@@ -2023,6 +2125,7 @@ describe('runCheckBuild on files', () => {
         'content mode: fixtures; staging banner pages: 0 of 2',
         'player pages: 0 (expected 0); package text values scanned: 110',
         'landing pages: 0 (expected 0)',
+        SITE_URL_IGNORED,
         'check-build: ok',
       ],
       err: [],
@@ -2072,6 +2175,7 @@ describe('runCheckBuild on files', () => {
         'content mode: fixtures; staging banner pages: unknown',
         'player pages: unknown (expected 6); package text values scanned: unknown',
         'landing pages: unknown (expected 6)',
+        SITE_URL_IGNORED,
       ],
       err: [
         `check-build failed [read] two different prerendered files for ${path} (server/route-cache)`,
@@ -2093,6 +2197,7 @@ describe('runCheckBuild on files', () => {
         'content mode: fixtures; staging banner pages: 0 of 10',
         'player pages: 2 (expected unknown); package text values scanned: 0',
         'landing pages: 2 (expected unknown)',
+        SITE_URL_IGNORED,
       ],
       err: [
         'check-build failed [player-pages] .content/packages/two-paths.json failed strict parse',
@@ -2209,18 +2314,514 @@ describe('[landing-pages] on files (T12-25 g5, g8)', () => {
         .toEqual([
           'player pages: 6 (expected 6); package text values scanned: 110',
           'landing pages: 6 (expected 6)',
+          SITE_URL_IGNORED,
         ])
-      expect
-        .soft(result.err, `(g5) ${layout}: the failures, files and ids only`)
-        .toEqual([
-          `check-build failed [html-lang] ${wrongLang} has no <html lang="hi"`,
-          `check-build failed [landing-pages] ${twoMains}: <main id="main" 2 time(s)`,
-          `check-build failed [landing-pages] unexpected ${extra} (build-info lists no story other-story)`,
-          `check-build failed [landing-pages] ${wrongLang}: <html lang> is not hi`,
-          `check-build failed [landing-pages] missing ${missing}`,
-        ])
+      expect.soft(result.err, `(g5) ${layout}: the failures, files and ids only`).toEqual([
+        `check-build failed [html-lang] ${wrongLang} has no <html lang="hi"`,
+        `check-build failed [landing-pages] ${twoMains}: <main id="main" 2 time(s)`,
+        `check-build failed [landing-pages] unexpected ${extra} (build-info lists no story other-story)`,
+        `check-build failed [landing-pages] ${wrongLang}: <html lang> is not hi`,
+        `check-build failed [landing-pages] missing ${missing}`,
+        // 12b: the en landing written at a hi path has the en title; the missing page too.
+        `check-build failed [social] ${wrongLang}: og:title is not the package title`,
+        `check-build failed [social] missing ${missing}`,
+      ])
     },
   )
+})
+
+describe('[social] (T12-26, P1 Step 12 12b; design p1-step12-design.md §4.13)', () => {
+  /** No site origin: every build but a Vercel Production one with the variable set. */
+  const IGNORED: SiteUrlDecision = { status: 'ignored', origin: null }
+  /** A sentinel host: the origin a set decision carries, which no failure may print (g8). */
+  const ORIGIN = 'https://sentinel-og.example'
+  const SET: SiteUrlDecision = { status: 'set', origin: ORIGIN }
+  const REVIEW = withStories(openOutput(), FIXTURES)
+  const CONTENT = contentOf(FIXTURES)
+  const social = (
+    output: BuildOutput,
+    siteUrl: SiteUrlDecision = IGNORED,
+    decision: LaunchDecision = OPEN,
+    content: BuiltContent = CONTENT,
+  ) => checkSocial(output, decision, content, siteUrl)
+  /** `output` with `extra` added at the end of <head> of `path`. */
+  const withHead = (output: BuildOutput, path: string, extra: string): BuildOutput =>
+    changed(output, (o) => {
+      o.html.set(path, (o.html.get(path) ?? '').replace('</head>', `${extra}</head>`))
+    })
+  const attrOf = (tag: string): string => (tag.startsWith('twitter:') ? 'name' : 'property')
+
+  it('(g1) passes the no-origin tag set on Home and every landing, attributes in either order', () => {
+    expect.soft(social(REVIEW), '(g1) the review output').toEqual([])
+    expect
+      .soft(social(withStories(gatedOutput(), FIXTURES), IGNORED, GATED), '(g1) gated')
+      .toEqual([])
+    // React writes property first; a reader must not depend on it.
+    const reversed = changed(REVIEW, (o) => {
+      o.html.set(
+        'en.html',
+        (o.html.get('en.html') ?? '').replace(
+          /<meta (property|name)="([^"]+)" content="([^"]*)"\/>/g,
+          '<meta content="$3" $1="$2"/>',
+        ),
+      )
+    })
+    expect(reversed.html.get('en.html'), 'precondition: reversed').toContain(
+      '<meta content="website" property="og:type"/>',
+    )
+    expect.soft(social(reversed), '(g1) reversed attributes').toEqual([])
+  })
+
+  const FORBIDDEN = [
+    'og:url',
+    'og:image',
+    'og:image:width',
+    'og:image:secure_url',
+    'twitter:image',
+    'twitter:image:alt',
+  ] as const
+
+  /** Each form a forbidden tag can take in a page (built-output classes 1-3). */
+  const forms = (tag: string): (readonly [form: string, text: string])[] => {
+    const attr = attrOf(tag)
+    const flight = (body: string) =>
+      `<script>self.__next_f.push([1,"9:[\\"$\\",\\"meta\\",\\"7\\",${body}]\\n"])</script>`
+    return [
+      ['html', `<meta ${attr}="${tag}" content="https://x.example/y.jpg"/>`],
+      ['reversed', `<meta content="https://x.example/y.jpg" ${attr}="${tag}"/>`],
+      ['flight', flight(`{\\"${attr}\\":\\"${tag}\\",\\"content\\":\\"x\\"}`)],
+      [
+        '\\u lower',
+        flight(`{\\u0022${attr}\\u0022:\\u0022${tag.replace(/:/g, '\\u003a')}\\u0022}`),
+      ],
+      [
+        '\\u upper',
+        flight(`{\\u0022${attr}\\u0022:\\u0022${tag.replace(/:/g, '\\u003A')}\\u0022}`),
+      ],
+    ]
+  }
+
+  it.each(FORBIDDEN)('(g2) %s anywhere with no site url fails, in every form', (tag) => {
+    for (const [form, text] of forms(tag)) {
+      const output = changed(REVIEW, (o) => {
+        o.html.set('en.html', (o.html.get('en.html') ?? '').replace('</body>', `${text}</body>`))
+      })
+      expect
+        .soft(social(output), `(g2) ${tag} ${form}`)
+        .toContain(`[social] en.html: ${tag} without a site url`)
+    }
+  })
+
+  it('(g3) canonical and hreflang links fail on any page, in any case and form', () => {
+    const LINKS: (readonly [form: string, text: string, problem: string])[] = [
+      ['canonical', '<link rel="canonical" href="https://x.example/en"/>', 'rel=canonical'],
+      ['canonical, href first', '<link href="/en" rel="canonical"/>', 'rel=canonical'],
+      ['canonical, upper case', '<LINK REL="CANONICAL" HREF="/en"/>', 'rel=canonical'],
+      [
+        'canonical, flight',
+        '<script>self.__next_f.push([1,"[\\"$\\",\\"link\\",\\"3\\",{\\"rel\\":\\"canonical\\",\\"href\\":\\"/en\\"}]"])</script>',
+        'rel=canonical',
+      ],
+      ['hreflang', '<link rel="alternate" hreflang="en" href="/en"/>', 'hreflang on a link'],
+      ['hreflang, upper', '<link rel="alternate" HREFLANG="hi" href="/hi"/>', 'hreflang on a link'],
+      [
+        'hrefLang, flight (React’s prop name)',
+        '<script>self.__next_f.push([1,"[\\"$\\",\\"link\\",\\"4\\",{\\"rel\\":\\"alternate\\",\\"hrefLang\\":\\"en\\",\\"href\\":\\"/en\\"}]"])</script>',
+        'hreflang on a link',
+      ],
+    ]
+    for (const path of ['index.html', 'en/grown-ups.html', 'en/stories/two-paths.html']) {
+      for (const [form, text, problem] of LINKS) {
+        expect
+          .soft(social(withHead(REVIEW, path, text)), `(g3) ${path} ${form}`)
+          .toContain(`[social] ${path}: ${problem}`)
+      }
+    }
+    // Near misses that must pass: the gate's and the header's language links carry hrefLang on
+    // <a>, raw and in flight; other link rels; the word in text.
+    const clean = [
+      '<a href="/hi?remember=1" hrefLang="hi" class="x_switch">हिन्दी</a>',
+      '<script>self.__next_f.push([1,"[\\"$\\",\\"a\\",null,{\\"href\\":\\"/en?remember=1\\",\\"hrefLang\\":\\"en\\",\\"children\\":\\"English\\"}]"])</script>',
+      '<link rel="manifest" href="/manifest.webmanifest"/>',
+      '<p>canonical and alternate are words</p>',
+    ]
+    for (const text of clean) {
+      expect.soft(social(withHead(REVIEW, 'index.html', text)), `(g3) passes ${text}`).toEqual([])
+    }
+  })
+
+  it('(g4) Home and landings carry exactly one of each og tag; missing, doubled or wrong fail', () => {
+    const REQUIRED = ['og:title', 'og:description', 'og:type', 'og:site_name'] as const
+    const tagOf = (html: string, tag: string): string =>
+      new RegExp(`<meta property="${tag}" content="[^"]*"/>`).exec(html)?.[0] ?? ''
+    for (const path of ['en.html', 'hi/stories/two-paths.html']) {
+      const html = REVIEW.html.get(path) ?? ''
+      for (const tag of REQUIRED) {
+        const element = tagOf(html, tag)
+        expect(element, `precondition: ${path} has ${tag}`).not.toBe('')
+        const without = changed(REVIEW, (o) => o.html.set(path, html.replace(element, '')))
+        const doubled = changed(REVIEW, (o) =>
+          o.html.set(path, html.replace(element, `${element}${element}`)),
+        )
+        expect
+          .soft(social(without), `(g4) ${path} ${tag} missing`)
+          .toContain(`[social] ${path}: ${tag} 0 time(s)`)
+        expect
+          .soft(social(doubled), `(g4) ${path} ${tag} doubled`)
+          .toContain(`[social] ${path}: ${tag} 2 time(s)`)
+      }
+      const wrong = (from: string, to: string) =>
+        changed(REVIEW, (o) => o.html.set(path, html.replace(from, to)))
+      expect
+        .soft(
+          social(
+            wrong(
+              '<meta property="og:type" content="website"/>',
+              '<meta property="og:type" content="article"/>',
+            ),
+          ),
+          `(g4) ${path} og:type`,
+        )
+        .toContain(`[social] ${path}: og:type is not website`)
+      expect
+        .soft(
+          social(
+            wrong(
+              '<meta property="og:site_name" content="Storyboard"/>',
+              '<meta property="og:site_name" content="Story"/>',
+            ),
+          ),
+          `(g4) ${path} og:site_name`,
+        )
+        .toContain(`[social] ${path}: og:site_name is not Storyboard`)
+    }
+    const landing = 'en/stories/two-paths.html'
+    const retitled = changed(REVIEW, (o) =>
+      o.html.set(landing, landingPage('en', undefined, 'The Wrong Title')),
+    )
+    expect
+      .soft(social(retitled), '(g4) a landing og:title that is not the package title')
+      .toEqual([`[social] ${landing}: og:title is not the package title`])
+  })
+
+  it('(g4) the landing og:title is compared after HTML-entity decoding', async () => {
+    const title = 'A & B "C" <D>'
+    const pkg = variant(TWO_PATHS, (d) => {
+      d.text.en!.title = title
+    })
+    const page: SocialPage = {
+      kind: 'landing',
+      locale: 'en',
+      storyId: 'two-paths',
+      title,
+      description: pkg.text.en!.description,
+    }
+    const head = await nextSocialHead({ origin: null, page })
+    expect(head, 'precondition: Next escaped the title').toContain(
+      'content="A &amp; B &quot;C&quot; &lt;D&gt;"',
+    )
+    const output = changed(withStories(openOutput(), [pkg]), (o) => {
+      const path = landingPath('en', 'two-paths')
+      o.html.set(
+        path,
+        (o.html.get(path) ?? '')
+          .replace(/<meta (?:property|name)="(?:og|twitter):[^>]*>/g, '')
+          .replace('</head>', `${head}</head>`),
+      )
+    })
+    expect(social(output, IGNORED, OPEN, contentOf([pkg])), '(g4) entities decoded').toEqual([])
+  })
+
+  it('(g5) og:* on "/", the 404, Grown-ups or a player page fails; _global-error.html is not read', () => {
+    const tag = '<meta property="og:title" content="Storyboard"/>'
+    for (const path of [
+      'index.html',
+      '_not-found.html',
+      'en/grown-ups.html',
+      'hi/grown-ups.html',
+      'en/stories/two-paths/read.html',
+    ]) {
+      expect
+        .soft(social(withHead(REVIEW, path, tag)), `(g5) ${path}`)
+        .toEqual([`[social] ${path}: og:title on a page without Open Graph`])
+    }
+    expect
+      .soft(
+        social(withHead(REVIEW, '_global-error.html', `${tag}<link rel="canonical" href="/"/>`)),
+        '(g5) _global-error.html',
+      )
+      .toEqual([])
+  })
+
+  /** The review output with every Home and landing head from Next's own renderer (T12-39). */
+  async function nextOutput(origin: string | null): Promise<BuildOutput> {
+    const pages: [string, SocialPage][] = [
+      ...ENABLED_LOCALE_CODES.map((code): [string, SocialPage] => [
+        `${code}.html`,
+        { kind: 'home', locale: code, description: metaDescription(code) },
+      ]),
+      ...FIXTURES.flatMap((pkg) =>
+        ENABLED_LOCALE_CODES.filter((code) => pkg.locales.includes(code)).map(
+          (code): [string, SocialPage] => [
+            landingPath(code, pkg.storyId),
+            {
+              kind: 'landing',
+              locale: code,
+              storyId: pkg.storyId,
+              title: pkg.text[code]?.title ?? '',
+              description: pkg.text[code]?.description ?? '',
+            },
+          ],
+        ),
+      ),
+    ]
+    const heads = new Map<string, string>()
+    for (const [path, page] of pages) heads.set(path, await nextSocialHead({ origin, page }))
+    return changed(REVIEW, (o) => {
+      for (const [path, head] of heads) {
+        const html = (o.html.get(path) ?? '').replace(
+          /<meta (?:property|name)="(?:og|twitter):[^>]*>/g,
+          '',
+        )
+        o.html.set(path, html.replace('</head>', `${head}</head>`))
+      }
+    })
+  }
+
+  it('(g6) with an origin: Next’s own head passes; a wrong, relative or missing URL fails', async () => {
+    const output = await nextOutput(ORIGIN)
+    const home = output.html.get('en.html') ?? ''
+    expect(home, 'precondition: Next rendered the og:url').toContain(
+      `<meta property="og:url" content="${ORIGIN}/en"/>`,
+    )
+    expect.soft(social(output, SET), '(g6) Next’s set-branch head').toEqual([])
+    const edit = (path: string, from: string, to: string) =>
+      changed(output, (o) => o.html.set(path, (o.html.get(path) ?? '').replace(from, to)))
+    const landing = landingPath('hi', 'two-paths')
+    const CASES: (readonly [name: string, out: BuildOutput, failure: string])[] = [
+      [
+        'og:url without the locale',
+        edit('en.html', `content="${ORIGIN}/en"`, `content="${ORIGIN}/"`),
+        '[social] en.html: og:url is not the site origin + /en',
+      ],
+      [
+        'a relative og:url',
+        edit(
+          landing,
+          `content="${ORIGIN}/hi/stories/two-paths"`,
+          'content="/hi/stories/two-paths"',
+        ),
+        `[social] ${landing}: og:url is not the site origin + /hi/stories/two-paths`,
+      ],
+      [
+        'a relative og:image',
+        edit(
+          'en.html',
+          `<meta property="og:image" content="${ORIGIN}/og/storyboard-1200x630.jpg"/>`,
+          '<meta property="og:image" content="/og/storyboard-1200x630.jpg"/>',
+        ),
+        '[social] en.html: og:image is not the site origin + /og/storyboard-1200x630.jpg',
+      ],
+      [
+        'og:image:width',
+        edit(
+          'en.html',
+          '<meta property="og:image:width" content="1200"/>',
+          '<meta property="og:image:width" content="600"/>',
+        ),
+        '[social] en.html: og:image:width is not 1200',
+      ],
+      [
+        'no og:image:alt',
+        edit('en.html', '<meta property="og:image:alt" content="Storyboard"/>', ''),
+        '[social] en.html: og:image:alt 0 time(s)',
+      ],
+      [
+        'twitter:image doubled',
+        edit(
+          'hi.html',
+          `<meta name="twitter:image" content="${ORIGIN}/og/storyboard-1200x630.jpg"/>`,
+          `<meta name="twitter:image" content="${ORIGIN}/og/storyboard-1200x630.jpg"/>`.repeat(2),
+        ),
+        '[social] hi.html: twitter:image 2 time(s)',
+      ],
+    ]
+    for (const [name, out, failure] of CASES) {
+      expect.soft(social(out, SET), `(g6) ${name}`).toContain(failure)
+    }
+    // The no-origin head in a build that has an origin: every absolute tag is missing.
+    expect
+      .soft(social(REVIEW, SET), '(g6) no og:url where the build has an origin')
+      .toContain('[social] en.html: og:url 0 time(s)')
+    // g8 rides along: no failure names the origin.
+    expect
+      .soft(JSON.stringify(CASES.map(([, out]) => social(out, SET))))
+      .not.toContain('sentinel-og')
+  })
+
+  it('(g7) a missing Home or landing page is a failure, never a skip', () => {
+    const output = changed(REVIEW, (o) => {
+      o.html.delete('hi.html')
+      o.html.delete(landingPath('en', 'lantern-walk'))
+    })
+    expect(social(output)).toEqual([
+      '[social] missing hi.html',
+      `[social] missing ${landingPath('en', 'lantern-walk')}`,
+    ])
+  })
+
+  describe('on files (g7, g8)', () => {
+    const dirs: string[] = []
+    afterEach(() => {
+      for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+    })
+
+    /** `output` as files under a temporary storyboard folder, in `layout`, with its content. */
+    function writeOutput(
+      output: BuildOutput,
+      layout: 'app' | 'route-cache',
+      packages: readonly StoryPackageV1[],
+    ): string {
+      const dir = mkdtempSync(join(tmpdir(), 'check-build-social-'))
+      dirs.push(dir)
+      const write = (path: string, text: string | Uint8Array) => {
+        mkdirSync(dirname(path), { recursive: true })
+        writeFileSync(path, text)
+      }
+      const stories = packages.map((pkg) => {
+        const bytes = jcsBytes(pkg)
+        write(join(dir, '.content', 'packages', `${pkg.storyId}.json`), bytes)
+        return {
+          storyId: pkg.storyId,
+          version: pkg.version,
+          packageSha256: createHash('sha256').update(bytes).digest('hex'),
+        }
+      })
+      const info = jcsBytes(buildInfo('fixtures', stories))
+      write(join(dir, '.content', 'build-info.json'), info)
+      write(join(dir, 'public', 'build-info.json'), info)
+      write(join(dir, '.next', 'prerender-manifest.json'), output.manifest ?? '')
+      for (const [path, html] of output.html) {
+        const source = `source-${path.replace(/\.html$/, '').replace(/\//g, '-')}`
+        write(
+          layout === 'app'
+            ? join(dir, '.next', 'server', 'app', path)
+            : join(dir, '.next', 'server', 'route-cache', 'APP_PAGE', source, '$', path),
+          html,
+        )
+      }
+      for (const [path, js] of output.staticJs) write(join(dir, '.next', 'static', path), js)
+      for (const locale of ['en', 'hi']) {
+        const values = Object.fromEntries(
+          CATALOGUE.filter((v) => v.locale === locale).map((v) => [v.key, v.value]),
+        )
+        write(join(dir, 'messages', `${locale}.json`), JSON.stringify(values))
+      }
+      return dir
+    }
+
+    function run(dir: string, env: Env) {
+      const out: string[] = []
+      const err: string[] = []
+      const code = runCheckBuild({
+        root: dir,
+        env,
+        log: (l) => out.push(l),
+        logError: (l) => err.push(l),
+      })
+      return { code, out, err }
+    }
+
+    const REVIEW_ENV: Env = { CONTENT_SOURCE: 'fixtures', READER_LAUNCH: 'review' }
+
+    it.each(['app', 'route-cache'] as const)(
+      '(g7) %s: a [social] failure is found in either layout, and the site url line still prints',
+      (layout) => {
+        const output = withHead(
+          REVIEW,
+          'en/grown-ups.html',
+          '<meta property="og:url" content="/x"/>',
+        )
+        const result = run(writeOutput(output, layout, FIXTURES), REVIEW_ENV)
+        expect.soft(result.code, `(g7) ${layout}: exit 1`).toBe(1)
+        expect.soft(result.out.at(-1), `(g7) ${layout}: the site url line`).toBe(SITE_URL_IGNORED)
+        expect
+          .soft(result.err, `(g7) ${layout}: the failures`)
+          .toEqual([
+            'check-build failed [social] en/grown-ups.html: og:url without a site url',
+            'check-build failed [social] en/grown-ups.html: og:url on a page without Open Graph',
+          ])
+      },
+    )
+
+    it('(g8) prints each site url line after the landing line on every run, and never the value', () => {
+      const SENTINEL = 'sentinel-q7z.example'
+      const GATED_PRODUCTION: Env = { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' }
+      const gatedRoot = (): string => {
+        const dir = mkdtempSync(join(tmpdir(), 'check-build-social-gated-'))
+        dirs.push(dir)
+        const output = gatedOutput()
+        mkdirSync(join(dir, '.next', 'server', 'app'), { recursive: true })
+        writeFileSync(join(dir, '.next', 'prerender-manifest.json'), output.manifest ?? '')
+        for (const [path, html] of output.html) {
+          writeFileSync(join(dir, '.next', 'server', 'app', path), html)
+        }
+        for (const [path, js] of output.staticJs) {
+          mkdirSync(dirname(join(dir, '.next', 'static', path)), { recursive: true })
+          writeFileSync(join(dir, '.next', 'static', path), js)
+        }
+        mkdirSync(join(dir, 'messages'), { recursive: true })
+        for (const locale of ['en', 'hi']) {
+          const values = Object.fromEntries(
+            CATALOGUE.filter((v) => v.locale === locale).map((v) => [v.key, v.value]),
+          )
+          writeFileSync(join(dir, 'messages', `${locale}.json`), JSON.stringify(values))
+        }
+        return dir
+      }
+      const CASES: (readonly [env: Env, line: string, code: number])[] = [
+        [{ CONTENT_SOURCE: 'none' }, SITE_URL_IGNORED, 0],
+        [GATED_PRODUCTION, SITE_URL_UNSET, 0],
+        [
+          { ...GATED_PRODUCTION, NEXT_PUBLIC_SITE_URL: COMMITTED_PRODUCTION_ORIGIN },
+          'site url: set (the committed production origin)',
+          0,
+        ],
+        [
+          { ...GATED_PRODUCTION, NEXT_PUBLIC_SITE_URL: `https://${SENTINEL}` },
+          'site url: set (not the committed production origin)',
+          0,
+        ],
+        [
+          { ...GATED_PRODUCTION, NEXT_PUBLIC_SITE_URL: `https://${SENTINEL}/path` },
+          'site url: refused',
+          1,
+        ],
+      ]
+      for (const [env, line, code] of CASES) {
+        const result = run(gatedRoot(), env)
+        expect.soft(result.code, `(g8) ${line}: exit`).toBe(code)
+        const landingAt = result.out.findIndex((l) => l.startsWith('landing pages: '))
+        expect.soft(result.out[landingAt + 1], `(g8) ${line}: after the landing line`).toBe(line)
+        expect.soft(JSON.stringify(result), `(g8) ${line}: value-free`).not.toContain(SENTINEL)
+      }
+      const refused = run(gatedRoot(), {
+        ...GATED_PRODUCTION,
+        NEXT_PUBLIC_SITE_URL: `https://${SENTINEL}/path`,
+      })
+      expect
+        .soft(refused.err, '(g8) the refusal')
+        .toEqual([
+          `check-build failed [social] ${SITE_URL_REFUSED}; next build should have stopped first`,
+        ])
+      // A failing run prints the line too (the [read] case: no build output at all).
+      const empty = mkdtempSync(join(tmpdir(), 'check-build-social-empty-'))
+      dirs.push(empty)
+      const failing = run(empty, GATED_PRODUCTION)
+      expect.soft(failing.code, '(g8) a failing run').toBe(1)
+      expect.soft(failing.out.at(-1), '(g8) a failing run prints the line').toBe(SITE_URL_UNSET)
+    })
+  })
 })
 
 describe('[staging-banner] (P1-2c): checkStagingBanner', () => {

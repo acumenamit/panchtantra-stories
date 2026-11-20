@@ -9,15 +9,20 @@
 // - A listed story that was not built, or whose package lacks the locale, stops the build with ids
 //   only.
 // - The title is the story's title in the URL locale (the layout's template adds " – Storyboard");
-//   the description is the story's description.
+//   the description is the story's description. 12b (design §3.21 N21, B5): openGraph from
+//   landingOpenGraph (og:title the bare story title, the same description, type and site name; the
+//   absolute url and image only with the build's site origin, src/config/site-url.ts). No robots,
+//   alternates or base URL here (src/ui/root/metadata.ts keeps robots).
 // - Body, in DOM and visual order, inside [data-landing]: the book label, h1 (the title), the
 //   description, the meta list ("Age 6+", the duration), "Theme: …", then StoryActions (the action
 //   row, How this story was made, the Share row and its manual field). Package text renders as
 //   stored (SPEC:441). Strings are resolved here; the island gets finished strings as props.
 import type { Metadata } from 'next'
 import { buildLaunch } from '@/config/launch'
+import { buildSiteOrigin } from '@/config/site-url'
 import { getStory, listStoriesForLocale, type BuiltStory } from '@/content'
 import { parseEnabledLocale, type LocaleCode } from '@/core/locales'
+import { landingOpenGraph } from '@/ui/root/social'
 import { StoryActions } from '@/ui/story/story-actions'
 import styles from '@/ui/story/story.module.css'
 import { storyStrings } from '@/ui/story/strings'
@@ -56,7 +61,17 @@ async function landingPage(params: LandingPageProps['params']): Promise<LandingP
 export async function generateMetadata({ params }: LandingPageProps): Promise<Metadata> {
   const { code, story } = await landingPage(params)
   const { title, description } = storyStrings(code, story.pkg)
-  return { title, description }
+  return {
+    title,
+    description,
+    openGraph: landingOpenGraph({
+      origin: buildSiteOrigin(),
+      locale: code,
+      storyId: story.pkg.storyId,
+      title,
+      description,
+    }),
+  }
 }
 
 export default async function LandingPage({ params }: LandingPageProps) {

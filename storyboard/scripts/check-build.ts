@@ -65,6 +65,20 @@
 //   by [player-pages]. Right after the player line, every run prints "landing pages: <n> (expected
 //   <m>)" ("unknown" where the build output or a package could not be read); failures take the
 //   [player-pages] forms with [landing-pages].
+// - [social] (P1 Step 12, 12b; design p1-step12-design.md §3.21 N21, §4.13, B8): the site URL
+//   decision is src/config/site-url.ts's, on this process's environment. On every prerendered page
+//   but _global-error.html: no rel=canonical and no hreflang on a link (raw or flight, any case;
+//   hrefLang on the gate's and header's <a> is fine); with no site origin, no og:url, og:image (any
+//   suffix) or twitter:image (any suffix) in any form (raw, either attribute order, the flight
+//   row, \u-escaped in either hex case); no og: or twitter: tag on a page other than Home
+//   (<code>.html) and the landings. Open builds: every Home page and listed landing exists and
+//   holds exactly one og:title, og:description, og:type "website" and og:site_name "Storyboard";
+//   a landing's og:title is its package title after HTML-entity decoding. With an origin, also
+//   exactly one og:url (the origin plus the page path), og:image (the origin plus the fallback
+//   JPEG's path) with :type, :width, :height and :alt, and the twitter:image tags Next fills from
+//   it. A refused decision fails (next build should have stopped first). Failures name files and
+//   tags only, never the origin or a title. After the landing line, every run prints the
+//   value-free "site url: ..." line.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -75,6 +89,12 @@ import {
   type Env,
   type LaunchDecision,
 } from '../src/config/launch'
+import {
+  resolveSiteUrl,
+  SITE_URL_REFUSED,
+  siteUrlLine,
+  type SiteUrlDecision,
+} from '../src/config/site-url'
 import { APP_NAME } from '../src/core/app-info'
 import { BuildInfo } from '../src/core/content/build-info'
 import { parseStrictJson, type GateMode } from '../src/core/content/gates'
@@ -95,6 +115,7 @@ import {
 import { StoryPackageV1 } from '../src/core/package/v1'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { gateOptions } from '../src/reader/routing'
+import { OG_IMAGE } from '../src/ui/root/social'
 import {
   STAGING_BANNER_ATTRIBUTE,
   STAGING_BANNER_MARKER,
@@ -995,6 +1016,190 @@ function nodeAndField(field: string): readonly [node: string, field: string] {
   return match === null ? ['-', field] : [match[1] ?? '-', match[2] ?? field]
 }
 
+// ---- [social] (P1 Step 12, 12b; design p1-step12-design.md §3.21 N21, §4.13) ----
+
+/**
+ * A page's text with every \uXXXX escape decoded (either hex case) and every flight-escaped quote
+ * (\") unescaped, so a tag in the RSC flight rows reads like its HTML form.
+ */
+function decodedText(html: string): string {
+  return html
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\"/g, '"')
+}
+
+/** Every og: or twitter: tag key a page names, raw or in a flight row: property="k" or "property":"k". */
+const SOCIAL_KEY = /\b(?:property|name)"?\s*[=:]\s*"((?:og|twitter):[^"]*)"/gi
+
+/** The keys that need a site origin: og:url, og:image and twitter:image, with any suffix. */
+const ABSOLUTE_KEY = /^(?:og:url|og:image(?::.*)?|twitter:image(?::.*)?)$/i
+
+/** rel="canonical" or "rel":"canonical", any case. */
+const CANONICAL = /\brel"?\s*[=:]\s*"canonical"/i
+/** A <link> element, and a link element's props in a flight row. */
+const LINK_ELEMENT = /<link\b[^>]*>/gi
+const LINK_ROW = /\["\$","link",(?:"[^"]*"|null),\{([^{}]*)\}/gi
+const HREFLANG = /\bhreflang"?\s*[=:]/i
+
+/** The attribute values of an element's start tag, by lower-case name, entities decoded. */
+function attributesOf(element: string): Map<string, string> {
+  const attributes = new Map<string, string>()
+  for (const [, name = '', value = ''] of element.matchAll(/([a-zA-Z:-]+)\s*=\s*"([^"]*)"/g)) {
+    attributes.set(name.toLowerCase(), decodeEntities(value))
+  }
+  return attributes
+}
+
+/** React's attribute escapes, and numeric character references, decoded. */
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+/** The <meta> elements of a page's HTML (not its flight copies): key (property or name) → contents. */
+function metaContents(html: string): Map<string, string[]> {
+  const metas = new Map<string, string[]>()
+  for (const [element] of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attributes = attributesOf(element)
+    const key = attributes.get('property') ?? attributes.get('name')
+    if (key === undefined) continue
+    metas.set(key, [...(metas.get(key) ?? []), attributes.get('content') ?? ''])
+  }
+  return metas
+}
+
+/** One tag a Home or landing page must carry exactly once, and the content it must hold. */
+interface RequiredTag {
+  readonly key: string
+  /** null: any content. */
+  readonly content: string | null
+  /** How a wrong content is named: value-free. */
+  readonly expected: string
+}
+
+/** Rule [social] (design p1-step12-design.md §4.13). Failures name files and tags, never a value. */
+export function checkSocial(
+  output: BuildOutput,
+  decision: LaunchDecision,
+  content: BuiltContent,
+  siteUrl: SiteUrlDecision,
+): string[] {
+  const failures: string[] = []
+  const fail = (message: string): void => {
+    failures.push(`[social] ${message}`)
+  }
+  if (siteUrl.status === 'refused') {
+    fail(`${SITE_URL_REFUSED}; next build should have stopped first`)
+  }
+  const origin = siteUrl.origin
+  const packages = new Map(content.packages.map((pkg) => [pkg.storyId, pkg]))
+  /** The page path (/en, /en/stories/x) of a Home or landing page file; undefined for others. */
+  const socialPath = (path: string): string | undefined => {
+    const home = /^([^/]+)\.html$/.exec(path)?.[1]
+    if (home !== undefined && isEnabledLocale(home)) return `/${home}`
+    const landing = LANDING_PAGE.exec(path)
+    return landing === null ? undefined : `/${landing[1] ?? ''}/stories/${landing[2] ?? ''}`
+  }
+
+  for (const [path, html] of output.html) {
+    if (path === GLOBAL_ERROR_HTML) continue
+    const text = decodedText(html)
+    if (CANONICAL.test(text)) fail(`${path}: rel=canonical`)
+    const links = [...text.matchAll(LINK_ELEMENT)].map(([element]) => element)
+    const rows = [...text.matchAll(LINK_ROW)].map(([, props = '']) => props)
+    if ([...links, ...rows].some((element) => HREFLANG.test(element))) {
+      fail(`${path}: hreflang on a link`)
+    }
+    const keys = new Set([...text.matchAll(SOCIAL_KEY)].map(([, key = '']) => key.toLowerCase()))
+    if (origin === null) {
+      for (const key of keys) if (ABSOLUTE_KEY.test(key)) fail(`${path}: ${key} without a site url`)
+    }
+    const pagePath = socialPath(path)
+    if (pagePath === undefined) {
+      for (const key of keys) fail(`${path}: ${key} on a page without Open Graph`)
+      continue
+    }
+    const landing = LANDING_PAGE.exec(path)
+    const title =
+      landing === null
+        ? null
+        : (packages.get(landing[2] ?? '')?.text[(landing[1] ?? '') as keyof StoryPackageV1['text']]
+            ?.title ?? null)
+    const image = origin === null ? null : `${origin}${OG_IMAGE.path}`
+    const required: RequiredTag[] = [
+      title === null
+        ? { key: 'og:title', content: null, expected: '' }
+        : { key: 'og:title', content: title, expected: 'the package title' },
+      { key: 'og:description', content: null, expected: '' },
+      { key: 'og:type', content: 'website', expected: 'website' },
+      { key: 'og:site_name', content: APP_NAME, expected: APP_NAME },
+      ...(origin === null || image === null
+        ? []
+        : [
+            {
+              key: 'og:url',
+              content: `${origin}${pagePath}`,
+              expected: `the site origin + ${pagePath}`,
+            },
+            { key: 'og:image', content: image, expected: `the site origin + ${OG_IMAGE.path}` },
+            { key: 'og:image:type', content: OG_IMAGE.type, expected: OG_IMAGE.type },
+            {
+              key: 'og:image:width',
+              content: String(OG_IMAGE.width),
+              expected: String(OG_IMAGE.width),
+            },
+            {
+              key: 'og:image:height',
+              content: String(OG_IMAGE.height),
+              expected: String(OG_IMAGE.height),
+            },
+            { key: 'og:image:alt', content: APP_NAME, expected: APP_NAME },
+            {
+              key: 'twitter:image',
+              content: image,
+              expected: `the site origin + ${OG_IMAGE.path}`,
+            },
+            { key: 'twitter:image:type', content: OG_IMAGE.type, expected: OG_IMAGE.type },
+            {
+              key: 'twitter:image:width',
+              content: String(OG_IMAGE.width),
+              expected: String(OG_IMAGE.width),
+            },
+            {
+              key: 'twitter:image:height',
+              content: String(OG_IMAGE.height),
+              expected: String(OG_IMAGE.height),
+            },
+            { key: 'twitter:image:alt', content: APP_NAME, expected: APP_NAME },
+          ]),
+    ]
+    const metas = metaContents(html)
+    for (const tag of required) {
+      const contents = metas.get(tag.key) ?? []
+      if (contents.length !== 1) fail(`${path}: ${tag.key} ${contents.length} time(s)`)
+      else if (tag.content !== null && contents[0] !== tag.content) {
+        fail(`${path}: ${tag.key} is not ${tag.expected}`)
+      }
+    }
+  }
+
+  // Fail closed: a Home or landing page the build must have is never skipped (class 5).
+  if (decision.readerRoutes) {
+    for (const code of ENABLED_LOCALE_CODES) {
+      if (!output.html.has(`${code}.html`)) fail(`missing ${code}.html`)
+    }
+  }
+  for (const path of expectedStoryPages(LANDING_PAGES, decision, content)?.keys() ?? []) {
+    if (!output.html.has(path)) fail(`missing ${path}`)
+  }
+  return failures
+}
+
 /** The one value-free landing line every run prints after the player line (P1 Step 12, §3.16). */
 export function landingLine(pages: number | null, expected: number | null): string {
   return `landing pages: ${pages ?? 'unknown'} (expected ${expected ?? 'unknown'})`
@@ -1030,6 +1235,7 @@ export function runCheckBuild(options: CheckBuildOptions): number {
   const logError = options.logError ?? ((line: string) => console.error(line))
   const platform = options.platform ?? process.platform
   const decision = resolveLaunch(options.env)
+  const siteUrl = resolveSiteUrl(options.env)
   // C-2 runs whatever the build output gives, so a gated build always proves its content outputs.
   // It reads first: the player rules need the packages build-info names (P1-4b).
   let contentFailures: string[]
@@ -1071,6 +1277,11 @@ export function runCheckBuild(options: CheckBuildOptions): number {
   const player = output === undefined ? undefined : checkPlayerPages(output, decision, content)
   const landing = output === undefined ? undefined : checkLandingPages(output, decision, content)
   const leak = output === undefined ? undefined : checkPackageTextLeak(output, content)
+  // [social] (P1 Step 12, 12b) reads the pages too; without them only a refused decision is added.
+  const social =
+    output === undefined
+      ? checkSocial(NO_OUTPUT, { ...decision, readerRoutes: false }, NO_CONTENT, siteUrl)
+      : checkSocial(output, decision, content, siteUrl)
   result = {
     ...result,
     failures: [
@@ -1080,6 +1291,7 @@ export function runCheckBuild(options: CheckBuildOptions): number {
       ...(player?.failures ?? content.problems.map((problem) => `[player-pages] ${problem}`)),
       ...(landing?.failures ?? []),
       ...(leak?.failures ?? []),
+      ...social,
     ],
   }
   log(result.launchLine)
@@ -1101,6 +1313,7 @@ export function runCheckBuild(options: CheckBuildOptions): number {
         : landing.expected,
     ),
   )
+  log(siteUrlLine(siteUrl))
   if (result.failures.length === 0) {
     log('check-build: ok')
     return 0

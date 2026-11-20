@@ -7,20 +7,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import config from '../../next.config'
 import { resolveLaunch } from './launch'
 import { MEDIA_ORIGIN, securityHeaders } from './security-headers'
+import { COMMITTED_PRODUCTION_ORIGIN, SITE_URL_REFUSED } from './site-url'
 
 // How next.config.ts wires in the security headers and the D3 check (P1-1a), the experimental
 // global not-found page and the launch-flag refusal (P1-1c, design p1-step7-design.md §8.1 item
 // 7). The values themselves are tested in security-headers.test.ts and launch.test.ts.
+// P1 Step 12, 12b (design p1-step12-design.md §3.20 N20, B2; test plan T12-31, S12-CRIT-6): the
+// site URL refusal stops `next build` only, after the CONTENT_BASE_URL check and before the launch
+// check; the variable is stubbed unset beside the launch inputs, and the set branch is reached only
+// through resolveSiteUrl with an explicit env object (site-url.test.ts, and a wrapped resolver
+// below), never by setting the variable in this process.
 
 const OTHER_BASE = 'https://abcdefghijklmnopqrst.supabase.co/storage/v1/object/public/content'
 
 /** The four launch-decision inputs (design §5.1). */
 const LAUNCH_INPUTS = ['READER_LAUNCH', 'VERCEL', 'VERCEL_ENV', 'CONTENT_SOURCE'] as const
 
-// The config reads the launch inputs from the real environment: a shell that still holds, say,
-// READER_LAUNCH=review from a local review build must not change what these tests see.
+/** A value the site URL check refuses (an http origin). */
+const REFUSED_SITE_URL = 'http://storyboard-one-eta.vercel.app'
+
+// The config reads the launch inputs and the site URL from the real environment: a shell that
+// still holds, say, READER_LAUNCH=review from a local review build must not change what these tests
+// see (S12-CRIT-6: nor a NEXT_PUBLIC_SITE_URL, in the VERCEL_ENV=production rows).
 beforeEach(() => {
   for (const name of LAUNCH_INPUTS) vi.stubEnv(name, undefined)
+  vi.stubEnv('NEXT_PUBLIC_SITE_URL', undefined)
 })
 
 afterEach(() => {
@@ -166,6 +177,98 @@ describe('next.config: global not-found and the launch flag (P1-1c)', () => {
       vi.stubEnv('CONTENT_SOURCE', 'storage')
       expect(() => launched(PHASE_PRODUCTION_BUILD)).not.toThrow()
       expect(() => launched(PHASE_DEVELOPMENT_SERVER)).not.toThrow()
+    })
+  })
+})
+
+describe('next.config: the site URL refusal (T12-31, P1 Step 12)', () => {
+  it('(g1) stops `next build` in a Vercel Production build on a refused value', () => {
+    vi.stubEnv('CONTENT_BASE_URL', '')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', REFUSED_SITE_URL)
+    expect(() => config(PHASE_PRODUCTION_BUILD), '(g1)').toThrow(new Error(SITE_URL_REFUSED))
+  })
+
+  it('(g2) never stops another build, `next dev` or `next start` on it', () => {
+    vi.stubEnv('CONTENT_BASE_URL', '')
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', REFUSED_SITE_URL)
+    for (const vercelEnv of ['preview', undefined]) {
+      vi.stubEnv('VERCEL_ENV', vercelEnv)
+      expect(
+        () => config(PHASE_PRODUCTION_BUILD),
+        `(g2) build, VERCEL_ENV ${String(vercelEnv)}`,
+      ).not.toThrow()
+    }
+    vi.stubEnv('VERCEL_ENV', 'production')
+    for (const phase of [PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_SERVER]) {
+      expect(() => config(phase), `(g2) ${phase}, Production`).not.toThrow()
+    }
+  })
+
+  it('(g3) runs after the CONTENT_BASE_URL check and before the launch check', () => {
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', REFUSED_SITE_URL)
+    vi.stubEnv('CONTENT_BASE_URL', OTHER_BASE)
+    expect(() => config(PHASE_PRODUCTION_BUILD), '(g3) CONTENT_BASE_URL first').toThrow(
+      `CONTENT_BASE_URL origin https://abcdefghijklmnopqrst.supabase.co is not the CSP media origin ${MEDIA_ORIGIN}`,
+    )
+    vi.stubEnv('CONTENT_BASE_URL', '')
+    vi.stubEnv('READER_LAUNCH', 'malformed')
+    expect(
+      () => config(PHASE_PRODUCTION_BUILD),
+      '(g3) the site URL before the launch flag',
+    ).toThrow(new Error(SITE_URL_REFUSED))
+  })
+
+  describe('(g4) the Production rows with the committed origin set', () => {
+    afterEach(() => {
+      vi.doUnmock('./launch')
+      vi.doUnmock('./site-url')
+      vi.resetModules()
+    })
+
+    /**
+     * next.config with `committed` as the launch state and the site URL decided as if the
+     * committed production origin were set: the wrapped resolver gets an explicit env object, so
+     * this process's environment never holds the variable.
+     */
+    async function configWithOrigin(committed: 'gated' | 'launched'): Promise<typeof config> {
+      vi.resetModules()
+      vi.doMock('./launch', async (importOriginal) => ({
+        ...(await importOriginal<Record<string, unknown>>()),
+        buildLaunch: () => resolveLaunch(process.env, committed),
+      }))
+      vi.doMock('./site-url', async (importOriginal) => {
+        const original = await importOriginal<typeof import('./site-url')>()
+        return {
+          ...original,
+          resolveSiteUrl: (env: Readonly<Record<string, string | undefined>>) =>
+            original.resolveSiteUrl({ ...env, NEXT_PUBLIC_SITE_URL: COMMITTED_PRODUCTION_ORIGIN }),
+        }
+      })
+      return (await import('../../next.config')).default
+    }
+
+    it('(g4) the gated legs run, and launched Production still needs storage content', async () => {
+      vi.stubEnv('CONTENT_BASE_URL', '')
+      const gated = await configWithOrigin('gated')
+      for (const env of [
+        { VERCEL_ENV: 'production', CONTENT_SOURCE: 'none' },
+        { VERCEL: '1', VERCEL_ENV: 'production', READER_LAUNCH: 'gated' },
+      ]) {
+        for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+        expect(() => gated(PHASE_PRODUCTION_BUILD), `(g4) ${JSON.stringify(env)}`).not.toThrow()
+      }
+      const launched = await configWithOrigin('launched')
+      vi.stubEnv('READER_LAUNCH', undefined)
+      vi.stubEnv('VERCEL', '1')
+      vi.stubEnv('VERCEL_ENV', 'production')
+      vi.stubEnv('CONTENT_SOURCE', 'none')
+      expect(() => launched(PHASE_PRODUCTION_BUILD), '(g4) launched, no storage').toThrow(
+        new Error('reader launch refused: launched-without-storage'),
+      )
+      vi.stubEnv('CONTENT_SOURCE', 'storage')
+      expect(() => launched(PHASE_PRODUCTION_BUILD), '(g4) launched, storage').not.toThrow()
     })
   })
 })

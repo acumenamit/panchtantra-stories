@@ -6,16 +6,26 @@
 // - gated: "/" 200 with the Coming-soon body, today's title, description, viewport, theme-color,
 //   color-scheme, manifest and icon tags, exactly one robots meta (noindex, nofollow), no locale
 //   link and no redirect script; /en, /hi, both Grown-ups
-//   pages, /ar, /no-such-page and /en/stories/two-paths/read 404 with the bilingual h1 and
-//   noindex; /build-info.json 404 until EXPECT_BUILD_INFO is flipped at Step 25a.
+//   pages, /ar, /no-such-page, /en/stories/two-paths/read and /en/stories/two-paths 404 with the
+//   bilingual h1 and noindex; /build-info.json 404 until EXPECT_BUILD_INFO is flipped at Step 25a.
 // - launched (after Step 25b): "/" 200 with both gate links; /en and /hi 200 with <html lang>;
-//   unmatched URLs 404, /en/stories/two-paths/read among them.
+//   unmatched URLs 404, /en/stories/two-paths/read and /en/stories/two-paths among them.
 // - /en/stories/two-paths/read (C18; design p1-step10-design.md §2.1, P1-4b) is a player URL for a
 //   fixture story id, which Production never builds, so each Production deployment proves on Vercel
 //   itself that it is the bilingual 404: gated, through the [locale] segment's empty params;
-//   launched, through the player route's dynamicParams 404 (dynamicParams = false).
-// - always: the exact spec CSP and the 3 other security headers on every response, and no
-//   Set-Cookie anywhere (spec §9).
+//   launched, through the player route's dynamicParams 404 (dynamicParams = false). P1 Step 12
+//   (design p1-step12-design.md §3.22 N22, B12, S12-CRIT-16): /en/stories/two-paths, the story
+//   landing of the same fixture id, is probed the same way (launched: the landing route's
+//   dynamicParams 404).
+// - always: the exact spec CSP and the 3 other security headers on the response of every probe
+//   above (/build-info.json included), and no Set-Cookie on any of them (spec §9). The og image
+//   probe below is the one exception: it checks status, content type, length and sha256 only
+//   (design §4.14; lead decision in design §21).
+// - the og fallback image (P1 Step 12, design §3.22 N22, §4.14, B9): once per round, after the
+//   probes above, GET /og/storyboard-1200x630.jpg with no redirect followed: 200, content-type
+//   exactly image/jpeg, and the body's length and sha256 equal to the committed
+//   public/og/storyboard-1200x630.jpg, read once at start (missing: the run fails before any
+//   request). It proves the og file is deployed while the reader is gated.
 // - no staging banner (design p1-step9-design.md §4.5; P1-2c): on "/" in both states, on /en and
 //   /hi when launched, and on every 404 probe, the body holds neither the banner attribute (in any
 //   form) nor the banner text (raw or \u-escaped); /build-info.json has no body rule.
@@ -24,25 +34,38 @@
 // previous deployment (owner D2, the publisher's verify). Reaching the deadline first fails.
 // Log lines hold only paths, status codes, header names and pass/fail: never a header value or
 // body text, so nothing the site sends back reaches the public run log.
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PRODUCTION_LAUNCH, type ProductionLaunch } from '../src/config/launch'
 import { securityHeaders } from '../src/config/security-headers'
+import { COMMITTED_PRODUCTION_ORIGIN } from '../src/config/site-url'
 import { APP_NAME } from '../src/core/app-info'
 import { ENABLED_LOCALE_CODES, LOCALE_CODES } from '../src/core/locales'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { gateOptions } from '../src/reader/routing'
 import { THEME_COLOR } from '../src/ui/brand'
 import { ROOT_METADATA } from '../src/ui/root/metadata'
+import { OG_IMAGE } from '../src/ui/root/social'
 import { STAGING_BANNER_ATTRIBUTE, STAGING_BANNER_TEXT } from '../src/ui/root/staging'
 import { ROOT_VIEWPORT } from '../src/ui/viewport'
 import { checkServiceUrl, readCapped } from '../tools/publisher/http'
 import { COMING_SOON_MAIN, leakForms, ROBOTS_META } from './check-build'
 import { isEntryPoint } from './load-content'
 
-/** The production domain (a committed constant until Step 12's NEXT_PUBLIC_SITE_URL). */
-export const PRODUCTION_ORIGIN = 'https://storyboard-one-eta.vercel.app'
+/**
+ * The production domain: the committed origin the build's "site url" line compares the site URL
+ * with (src/config/site-url.ts), so the build and this check name one origin (design §3.22).
+ */
+export const PRODUCTION_ORIGIN = COMMITTED_PRODUCTION_ORIGIN
+
+/** The og fallback image's path on the site (src/ui/root/social.ts OG_IMAGE). */
+export const OG_IMAGE_PATH = OG_IMAGE.path
+/** The committed file the deployed image must equal, relative to the storyboard folder. */
+export const OG_IMAGE_FILE = `public${OG_IMAGE.path}`
+/** The one content-type the og image may carry. */
+const OG_IMAGE_TYPE = 'image/jpeg'
 
 /** /build-info.json is 404 while CONTENT_SOURCE=none; flipped to true at Step 25a. */
 export const EXPECT_BUILD_INFO: boolean = false
@@ -55,11 +78,16 @@ export const REQUEST_TIMEOUT_MS = 15_000
 const MAX_BODY_BYTES = 1024 * 1024
 
 /**
- * Unmatched URLs probed in both states. The player path names a fixture story id that Production
- * never builds (C18, P1-4b): gated, the [locale] segment's empty params make it a 404; launched,
- * the player route's dynamicParams 404 does.
+ * Unmatched URLs probed in both states. The player and landing paths name a fixture story id that
+ * Production never builds (C18, P1-4b; P1 Step 12, S12-CRIT-16): gated, the [locale] segment's
+ * empty params make them 404s; launched, the player and landing routes' dynamicParams 404 does.
  */
-const UNMATCHED = ['/ar', '/no-such-page', '/en/stories/two-paths/read'] as const
+const UNMATCHED = [
+  '/ar',
+  '/no-such-page',
+  '/en/stories/two-paths/read',
+  '/en/stories/two-paths',
+] as const
 
 /** The redirect script's first call; the RSC payload repeats the script escaped. */
 const REDIRECT_MARKER = 'getEntriesByType('
@@ -270,6 +298,57 @@ export async function record(response: Response): Promise<Recorded> {
   }
 }
 
+/** What the deployed og image must be: the committed file's byte length and sha256 (hex). */
+export interface OgImageExpectation {
+  readonly length: number
+  readonly sha256: string
+}
+
+/** One response as the og probe sees it: its body as bytes. */
+export interface RecordedBytes {
+  readonly status: number | null
+  /** Lower-case names; a header sent twice appears twice. */
+  readonly headers: readonly (readonly [name: string, value: string])[]
+  /** null: unreadable or larger than 1 MiB. */
+  readonly bytes: Uint8Array | null
+}
+
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+
+/** The committed og image under `root`; throws naming the file (never a value) when it is missing. */
+export function readOgImage(root: string): OgImageExpectation {
+  const path = join(root, OG_IMAGE_FILE)
+  if (!existsSync(path)) throw new Error(`${OG_IMAGE_FILE} is missing`)
+  const bytes = new Uint8Array(readFileSync(path))
+  return { length: bytes.length, sha256: sha256Hex(bytes) }
+}
+
+/** A fetch Response as the og probe sees it. */
+export async function recordBytes(response: Response): Promise<RecordedBytes> {
+  const headers = [...response.headers].map(([name, value]) => [name.toLowerCase(), value] as const)
+  const bytes = await readCapped(response, MAX_BODY_BYTES).catch(() => null)
+  return { status: response.status, headers, bytes }
+}
+
+/**
+ * What is wrong with the og image response (design §4.14): short phrases naming a rule or a header,
+ * never a header value, a length or a hash.
+ */
+export function checkOgImage(expected: OgImageExpectation, response: RecordedBytes): string[] {
+  if (response.status === null) return ['no response']
+  if (response.status !== 200) return ['status (expected 200)']
+  const problems: string[] = []
+  const types = response.headers.filter(([name]) => name === 'content-type').map(([, v]) => v)
+  if (types.length === 0) problems.push('missing header content-type')
+  else if (types.length > 1 || types[0] !== OG_IMAGE_TYPE) {
+    problems.push('header content-type differs')
+  }
+  if (response.bytes === null) problems.push('body unreadable or larger than 1 MiB')
+  else if (response.bytes.length !== expected.length) problems.push('body length differs')
+  else if (sha256Hex(response.bytes) !== expected.sha256) problems.push('body sha256 differs')
+  return problems
+}
+
 /** The 404 h1 strings from the committed catalogues, read as text. */
 export function readNotFoundTitles(root: string): NotFoundTitles {
   const title = (locale: string): string => {
@@ -288,8 +367,13 @@ export function readNotFoundTitles(root: string): NotFoundTitles {
   return { en: title('en'), hi: title('hi') }
 }
 
+/** The storyboard folder, which holds the committed public/og file. */
+const STORYBOARD_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
 export interface LiveCheckOptions {
   readonly titles: NotFoundTitles
+  /** The storyboard folder the committed og image is read from (the repository's by default). */
+  readonly root?: string
   readonly origin?: string
   readonly launch?: ProductionLaunch
   readonly expectBuildInfo?: boolean
@@ -317,6 +401,20 @@ export async function runLiveCheck(options: LiveCheckOptions): Promise<number> {
   const deadlineMs = options.deadlineMs ?? DEADLINE_MS
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
   const probeList = probes(launch, expectBuildInfo, options.titles)
+  // The committed og image, read once before any request (design §4.14).
+  let ogImage: OgImageExpectation
+  try {
+    ogImage = readOgImage(options.root ?? STORYBOARD_ROOT)
+  } catch {
+    log(`live-check: FAIL (${OG_IMAGE_FILE} is missing)`)
+    return 1
+  }
+  const request = (path: string): Promise<Response> =>
+    fetchImpl(new URL(path, origin), {
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
 
   log(
     `live-check: ${origin.origin} expecting ${launch} (PRODUCTION_LAUNCH), /build-info.json ` +
@@ -329,17 +427,23 @@ export async function runLiveCheck(options: LiveCheckOptions): Promise<number> {
     const responses = new Map<string, Recorded>()
     for (const probe of probeList) {
       try {
-        const response = await fetchImpl(new URL(probe.path, origin), {
-          cache: 'no-store',
-          redirect: 'manual',
-          signal: AbortSignal.timeout(timeoutMs),
-        })
-        responses.set(probe.path, await record(response))
+        responses.set(probe.path, await record(await request(probe.path)))
       } catch {
         responses.set(probe.path, { status: null, headers: [], body: null })
       }
     }
-    const problems = checkRound(probeList, responses)
+    let og: RecordedBytes
+    try {
+      og = await recordBytes(await request(OG_IMAGE_PATH))
+    } catch {
+      og = { status: null, headers: [], bytes: null }
+    }
+    const problems = [
+      ...checkRound(probeList, responses),
+      ...checkOgImage(ogImage, og).map(
+        (problem) => `${OG_IMAGE_PATH} ${og.status ?? 'none'}: ${problem}`,
+      ),
+    ]
     if (problems.length === 0) {
       inARow++
       log(`live-check: round ${round}: pass (${inARow}/${ROUNDS_IN_A_ROW})`)
@@ -364,8 +468,7 @@ export async function runLiveCheck(options: LiveCheckOptions): Promise<number> {
 }
 
 if (isEntryPoint(import.meta.url, process.argv[1])) {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  void runLiveCheck({ titles: readNotFoundTitles(root) }).then(
+  void runLiveCheck({ titles: readNotFoundTitles(STORYBOARD_ROOT) }).then(
     (code) => process.exit(code),
     (error: unknown) => {
       console.error(`live-check: FAIL (${error instanceof Error ? error.name : 'error'})`)

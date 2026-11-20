@@ -11,6 +11,10 @@
 // the page list with the player's rules: the child-form generateStaticParams, [] while gated, no
 // notFound() (unknown ids are the global bilingual 404), no localized not-found, and a listed story
 // that was not built or lacks the locale stops the build with ids only (it never returns null).
+// P1 Step 12, 12b (design p1-step12-design.md §3.19 N19, §3.21 N21, B5, B7; test plan T12-23,
+// T12-24): public/ allows exactly one more file, the og fallback JPEG, by exact name (file guard
+// bypass classes 2-5 as negatives); no metadataBase, alternates or canonical anywhere under app/ or
+// src/ (tests aside), read from code with comments removed.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -319,6 +323,14 @@ describe('robots and packages (design §3.12 #20, §8.1 item 6)', () => {
     expect(read('src/ui/root/metadata.ts')).toMatch(/\brobots: ROOT_ROBOTS/)
   })
 
+  it('(T12-24 g3) the robots key stays in metadata.ts only, with the landing’s Open Graph in place', () => {
+    // The test above is the guard; this names the 12b pages it now covers.
+    for (const page of ['app/(reader)/[locale]/(site)/page.tsx', LANDING_PAGE]) {
+      expect.soft(read(page), `(g3) ${page} sets openGraph`).toMatch(/\bopenGraph: /)
+      expect.soft(read(page), `(g3) ${page} sets no robots`).not.toMatch(/\brobots\s*:/)
+    }
+  })
+
   it('no next-intl in package.json', () => {
     const pkg = read('package.json')
     expect(pkg).not.toContain('next-intl')
@@ -330,10 +342,144 @@ describe('robots and packages (design §3.12 #20, §8.1 item 6)', () => {
   })
 })
 
+/**
+ * A source file's code without its comments: `//` and `/* *\/` comments outside string and
+ * template literals are removed; the strings themselves are kept.
+ */
+function codeOf(source: string): string {
+  let out = ''
+  let i = 0
+  while (i < source.length) {
+    const c = source[i] ?? ''
+    const next = source[i + 1] ?? ''
+    if (c === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') i++
+    } else if (c === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2)
+      i = end === -1 ? source.length : end + 2
+      out += ' '
+    } else if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1
+      while (j < source.length && source[j] !== c) j += source[j] === '\\' ? 2 : 1
+      out += source.slice(i, j + 1)
+      i = j + 1
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
+}
+
+/** Metadata keys no page may set while every page is noindex (P1 D10; design §3.21 N21). */
+const OPEN_GRAPH_OFFENDERS: readonly (readonly [name: string, pattern: RegExp])[] = [
+  ['metadataBase', /\bmetadataBase\b/],
+  ['alternates', /\balternates\b/],
+  ['canonical', /\bcanonical\s*:|(['"`])canonical\1/],
+]
+
+/** The names `source` sets, of OPEN_GRAPH_OFFENDERS, read from its code (comments removed). */
+const openGraphOffences = (source: string): string[] =>
+  OPEN_GRAPH_OFFENDERS.filter(([, pattern]) => pattern.test(codeOf(source))).map(([name]) => name)
+
+describe('no metadataBase, alternates or canonical (T12-24, P1 Step 12)', () => {
+  it('the scan catches every form of each key, and passes comments and other words', () => {
+    const caught: [string, string][] = [
+      ['metadataBase: new URL(origin)', 'metadataBase'],
+      ["'metadataBase': base", 'metadataBase'],
+      ['return { metadataBase }', 'metadataBase'],
+      ['metadata.metadataBase = base', 'metadataBase'],
+      ["const base = metadata['metadataBase']", 'metadataBase'],
+      ["alternates: { languages: { en: '/en' } }", 'alternates'],
+      ['"alternates": {}', 'alternates'],
+      ['return { title, alternates }', 'alternates'],
+      ["canonical: '/en'", 'canonical'],
+      ['<link rel="canonical" href="/en" />', 'canonical'],
+      ["const link = { rel: 'canonical' }", 'canonical'],
+      ['const rel = `canonical`', 'canonical'],
+      ["const x = 'https://a.example/' ; const y = { metadataBase }", 'metadataBase'],
+    ]
+    for (const [code, name] of caught) {
+      expect.soft(openGraphOffences(code), code).toEqual([name])
+    }
+    const clean = [
+      '// no metadataBase, alternates or canonical here',
+      '/* metadataBase alternates canonical */ export const x = 1',
+      "throw new TypeError('Value cannot be represented as canonical JSON')",
+      'export function isCanonicalJcs() {}',
+      "const url = 'https://example.test/x' // canonical: no",
+      'const altText = 1; const baseMetadata = 2',
+    ]
+    for (const code of clean) expect.soft(openGraphOffences(code), code).toEqual([])
+  })
+
+  it('(g1, g2) no file under app/ or src/ (tests aside) sets one', () => {
+    const scanned = [...sources('app'), ...sources('src')].filter(
+      (file) => !file.endsWith('.test.ts'),
+    )
+    expect(scanned, 'precondition: the landing and social.ts are scanned').toEqual(
+      expect.arrayContaining([LANDING_PAGE, 'src/ui/root/social.ts', 'src/ui/root/metadata.ts']),
+    )
+    const offences = scanned
+      .map((file): [string, string[]] => [
+        file,
+        openGraphOffences(readFileSync(join(storyboard, file), 'utf8')),
+      ])
+      .filter(([, names]) => names.length > 0)
+    expect
+      .soft(offences, '(g1, g2) files that set metadataBase, alternates or canonical')
+      .toEqual([])
+  })
+})
+
 describe('robots files and public/ (P1 D10-B; design p1-step9-design.md §3.6 rows 19-20, §5.2; P1-2c)', () => {
-  /** public/ holds only these; the loader writes the git-ignored build-info.json in content builds. */
+  /**
+   * public/ holds only these; the loader writes the git-ignored build-info.json in content builds.
+   * P1 Step 12, 12b (design §3.19 N19, B7): plus exactly the og fallback JPEG, by its exact name.
+   */
   const PUBLIC_FILE =
-    /^public\/(?:favicon\.ico|icons\/[^/]+\.png|licenses\/fonts\/[^/]+\.txt|build-info\.json)$/
+    /^public\/(?:favicon\.ico|icons\/[^/]+\.png|licenses\/fonts\/[^/]+\.txt|build-info\.json|og\/storyboard-1200x630\.jpg)$/
+  /** The committed og:image fallback (scripts/og/write-og-image.ts). */
+  const OG_FALLBACK = 'public/og/storyboard-1200x630.jpg'
+  /** The public/ guard, on posix paths relative to the storyboard folder (as files() gives them). */
+  const isPublicFile = (path: string): boolean => PUBLIC_FILE.test(path)
+
+  it('(T12-23 g2) allows the og file by its exact name only (file guard classes 2-5)', () => {
+    // Class 1 (route groups) cannot apply: public/ has no groups.
+    for (const path of [
+      'public/og/storyboard-1200x630.JPG',
+      'public/OG/storyboard-1200x630.jpg',
+      'public/og/Storyboard-1200x630.jpg',
+      'public/og/storyboard-1200x630.jpeg',
+      'public/og/storyboard-1200x630.jpg.txt',
+      'public/og/storyboard-1200x630.jpgx',
+      'public/og/storyboard-1200x630xjpg',
+      'public/og/other.jpg',
+      'public/og/x/storyboard-1200x630.jpg',
+      'public/og/storyboard-1200x630.jpg/x.png',
+      'public/og//storyboard-1200x630.jpg',
+      'public/og/./storyboard-1200x630.jpg',
+      'public/og/../og/storyboard-1200x630.jpg',
+      'public\\og\\storyboard-1200x630.jpg',
+      'public/storyboard-1200x630.jpg',
+      'public/og/storyboard-1200x630.png',
+    ]) {
+      expect.soft(isPublicFile(path), `(g2) ${path}`).toBe(false)
+    }
+  })
+
+  it('(T12-23 g3) the earlier forms still pass, and the og file itself', () => {
+    for (const path of [
+      'public/favicon.ico',
+      'public/icons/icon-192.png',
+      'public/icons/icon-512.png',
+      'public/licenses/fonts/OFL-x.txt',
+      'public/build-info.json',
+      OG_FALLBACK,
+    ]) {
+      expect.soft(isPublicFile(path), `(g3) ${path}`).toBe(true)
+    }
+  })
 
   /**
    * A robots or sitemap file, or a Route Handler in a folder of that name (app/robots.txt/route.ts
@@ -367,10 +513,16 @@ describe('robots files and public/ (P1 D10-B; design p1-step9-design.md §3.6 ro
     expect(existsSync(join(storyboard, 'public/robots.txt'))).toBe(false)
   })
 
-  it('public/ holds only favicon.ico, icons/*.png, licenses/fonts/*.txt and build-info.json', () => {
+  it('public/ holds only favicon.ico, icons/*.png, licenses/fonts/*.txt, build-info.json and the og file (T12-23 g1)', () => {
     const publicFiles = files('public')
     expect(publicFiles).toContain('public/favicon.ico')
-    expect(publicFiles.filter((file) => !PUBLIC_FILE.test(file))).toEqual([])
+    expect.soft(publicFiles, '(g1) the og fallback JPEG is committed').toContain(OG_FALLBACK)
+    expect
+      .soft(
+        publicFiles.filter((file) => !isPublicFile(file)),
+        '(g1) no other file',
+      )
+      .toEqual([])
   })
 })
 

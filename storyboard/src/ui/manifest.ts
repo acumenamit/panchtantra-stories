@@ -1,6 +1,6 @@
 // Web manifest (spec §6.8; P1-1b), served by app/manifest.ts as /manifest.webmanifest. Installable
 // from the browser menu with no service worker. No description or categories until launch copy is
-// approved; no maskable icon until Step 12.
+// approved; no maskable icon until P1-11 (Step 24; design p1-step12-design.md §3.23 N23).
 import type { MetadataRoute } from 'next'
 import { APP_NAME } from '../core/app-info'
 import { BACKGROUND_COLOR, THEME_COLOR } from './brand'

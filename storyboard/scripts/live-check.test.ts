@@ -4,9 +4,18 @@
 // the headers next.config sends plus the ones Vercel adds. Nothing here touches the network.
 // P1-2c (design p1-step9-design.md §4.5, §10.1): the "no staging banner" rule on every probe that
 // reads a body; the banner's marker, attribute and text come from src/ui/root/staging.ts.
+// P1 Step 12, 12b (design p1-step12-design.md §3.22 N22, §4.14, B9, B12; test plan T12-36):
+// PRODUCTION_ORIGIN is the committed constant of src/config/site-url.ts; '/en/stories/two-paths', the
+// landing of a fixture id, is a 404 in both states; and each round fetches the og fallback image
+// once, against the committed file read at start (recorded bytes and a temporary root here: the
+// real file is read only where the default root is named).
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { COMMITTED_PRODUCTION_ORIGIN } from '../src/config/site-url'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import {
   STAGING_BANNER_ATTRIBUTE,
@@ -15,24 +24,52 @@ import {
 } from '../src/ui/root/staging'
 import { escapeNonAscii } from './check-build'
 import {
+  checkOgImage,
   checkResponse,
   checkRound,
   DEADLINE_MS,
   EXPECT_BUILD_INFO,
   EXPECTED_HEADERS,
+  OG_IMAGE_FILE,
+  OG_IMAGE_PATH,
   PRODUCTION_ORIGIN,
   probes,
   readNotFoundTitles,
+  readOgImage,
   record,
+  recordBytes,
   ROUND_INTERVAL_MS,
   ROUNDS_IN_A_ROW,
   runLiveCheck,
+  type OgImageExpectation,
   type Probe,
   type Recorded,
+  type RecordedBytes,
 } from './live-check'
 
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '..')
 const TITLES = readNotFoundTitles(storyboard)
+
+/** Stand-in og image bytes (a JPEG's SOI and EOI around a 0xFF run), never the committed file. */
+const OG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0xff, 0xff, 0xd9])
+const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+const OG_EXPECTED: OgImageExpectation = { length: OG_BYTES.length, sha256: sha256(OG_BYTES) }
+
+const tempDirs: string[] = []
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+/** A storyboard-shaped temporary root holding `bytes` as the committed og image (none: missing). */
+function ogRoot(bytes: Uint8Array | null = OG_BYTES): string {
+  const root = mkdtempSync(join(tmpdir(), 'live-check-og-'))
+  tempDirs.push(root)
+  if (bytes !== null) {
+    mkdirSync(dirname(join(root, OG_IMAGE_FILE)), { recursive: true })
+    writeFileSync(join(root, OG_IMAGE_FILE), bytes)
+  }
+  return root
+}
 
 // The spec §9 CSP, copied byte for byte (as e2e/security-headers.ts does).
 const SPEC_CSP =
@@ -136,6 +173,7 @@ function gatedSite(): Map<string, Recorded> {
       '/ar',
       '/no-such-page',
       '/en/stories/two-paths/read',
+      '/en/stories/two-paths',
     ].map((path): [string, Recorded] => [path, notFound()]),
     ['/build-info.json', notFound()],
   ])
@@ -150,6 +188,7 @@ function launchedSite(): Map<string, Recorded> {
     ['/ar', notFound()],
     ['/no-such-page', notFound()],
     ['/en/stories/two-paths/read', notFound()],
+    ['/en/stories/two-paths', notFound()],
     [
       '/build-info.json',
       ok('{"schemaVersion":"1.0"}', 200, [...SECURITY, ['content-type', 'application/json']]),
@@ -174,11 +213,22 @@ describe('the committed expectation', () => {
     expect(DEADLINE_MS).toBe(600_000)
   })
 
+  it('(T12-36 g1) PRODUCTION_ORIGIN is the committed constant of src/config/site-url.ts', () => {
+    expect.soft(PRODUCTION_ORIGIN, '(g1) the value').toBe(COMMITTED_PRODUCTION_ORIGIN)
+    const source = readFileSync(join(storyboard, 'scripts', 'live-check.ts'), 'utf8')
+    expect
+      .soft(source, '(g1) taken from the constant')
+      .toContain('export const PRODUCTION_ORIGIN = COMMITTED_PRODUCTION_ORIGIN')
+    expect
+      .soft(source, '(g1) no origin literal of its own')
+      .not.toContain('storyboard-one-eta.vercel.app')
+  })
+
   it('expects exactly the spec CSP and the 3 other security headers', () => {
     expect(EXPECTED_HEADERS).toEqual(SECURITY)
   })
 
-  it('names the gated probes and statuses', () => {
+  it('names the gated probes and statuses (T12-36 g4: the fixture landing is a 404)', () => {
     expect(GATED_PROBES.map((p) => [p.path, p.status])).toEqual([
       ['/', 200],
       ['/en', 404],
@@ -188,11 +238,17 @@ describe('the committed expectation', () => {
       ['/ar', 404],
       ['/no-such-page', 404],
       ['/en/stories/two-paths/read', 404],
+      ['/en/stories/two-paths', 404],
       ['/build-info.json', 404],
     ])
+    const landing = probe(GATED_PROBES, '/en/stories/two-paths')
+    expect(
+      landing.rules.map((r) => r.name),
+      '(g4) the 404 rules',
+    ).toEqual(['bilingual h1', 'robots meta (noindex)', 'no staging banner'])
   })
 
-  it('names the launched probes and statuses', () => {
+  it('names the launched probes and statuses (T12-36 g4: the fixture landing is a 404)', () => {
     expect(LAUNCHED_PROBES.map((p) => [p.path, p.status])).toEqual([
       ['/', 200],
       ['/en', 200],
@@ -200,8 +256,13 @@ describe('the committed expectation', () => {
       ['/ar', 404],
       ['/no-such-page', 404],
       ['/en/stories/two-paths/read', 404],
+      ['/en/stories/two-paths', 404],
       ['/build-info.json', 200],
     ])
+    expect(
+      probe(LAUNCHED_PROBES, '/en/stories/two-paths').rules.map((r) => r.name),
+      '(g4) the 404 rules',
+    ).toEqual(['bilingual h1', 'robots meta (noindex)', 'no staging banner'])
     expect(probes('gated', true, TITLES).at(-1)).toMatchObject({
       path: '/build-info.json',
       status: 200,
@@ -392,6 +453,7 @@ describe('the response checker on recorded responses', () => {
         '/ar',
         '/no-such-page',
         '/en/stories/two-paths/read',
+        '/en/stories/two-paths',
       ]) {
         const recorded = site.get(path)
         if (!recorded?.body) throw new Error(`no body for ${path}`)
@@ -406,6 +468,7 @@ describe('the response checker on recorded responses', () => {
         '/ar 404: no staging banner',
         '/no-such-page 404: no staging banner',
         '/en/stories/two-paths/read 404: no staging banner',
+        '/en/stories/two-paths 404: no staging banner',
       ])
     })
 
@@ -418,6 +481,7 @@ describe('the response checker on recorded responses', () => {
         '/ar',
         '/no-such-page',
         '/en/stories/two-paths/read',
+        '/en/stories/two-paths',
       ]) {
         const recorded = site.get(path)
         if (!recorded?.body) throw new Error(`no body for ${path}`)
@@ -430,6 +494,7 @@ describe('the response checker on recorded responses', () => {
         '/ar 404: no staging banner',
         '/no-such-page 404: no staging banner',
         '/en/stories/two-paths/read 404: no staging banner',
+        '/en/stories/two-paths 404: no staging banner',
       ])
     })
 
@@ -492,6 +557,79 @@ describe('record', () => {
   })
 })
 
+/** The og image as production serves it: 200, image/jpeg, the bytes. */
+const OG_OK: RecordedBytes = {
+  status: 200,
+  headers: [...SECURITY, ['content-type', 'image/jpeg']],
+  bytes: OG_BYTES,
+}
+
+describe('the og image probe (T12-36 g2, g3, g5; design §4.14)', () => {
+  const changedByte = Uint8Array.from(OG_BYTES, (byte, i) => (i === 6 ? byte ^ 0x01 : byte))
+  const withType = (type: string): RecordedBytes => ({
+    ...OG_OK,
+    headers: [...SECURITY, ['content-type', type]],
+  })
+
+  it('(g2) passes the committed bytes, served as exactly image/jpeg with 200', () => {
+    expect(OG_IMAGE_PATH).toBe('/og/storyboard-1200x630.jpg')
+    expect(OG_IMAGE_FILE).toBe('public/og/storyboard-1200x630.jpg')
+    expect(checkOgImage(OG_EXPECTED, OG_OK)).toEqual([])
+  })
+
+  it.each<[string, RecordedBytes, string[]]>([
+    ['a 404', { ...OG_OK, status: 404 }, ['status (expected 200)']],
+    [
+      'a 301 (fetched with redirect manual)',
+      { ...OG_OK, status: 301, bytes: new Uint8Array(0) },
+      ['status (expected 200)'],
+    ],
+    [
+      'image/jpeg; charset=binary',
+      withType('image/jpeg; charset=binary'),
+      ['header content-type differs'],
+    ],
+    ['image/png', withType('image/png'), ['header content-type differs']],
+    ['no content-type', { ...OG_OK, headers: SECURITY }, ['missing header content-type']],
+    [
+      'two content-types',
+      { ...OG_OK, headers: [...OG_OK.headers, ['content-type', 'image/jpeg']] },
+      ['header content-type differs'],
+    ],
+    ['a body one byte short', { ...OG_OK, bytes: OG_BYTES.slice(0, -1) }, ['body length differs']],
+    [
+      'the same length, one byte changed',
+      { ...OG_OK, bytes: changedByte },
+      ['body sha256 differs'],
+    ],
+    ['an unreadable body', { ...OG_OK, bytes: null }, ['body unreadable or larger than 1 MiB']],
+    ['no response', { status: null, headers: [], bytes: null }, ['no response']],
+  ])('(g2) fails %s', (_name, response, problems) => {
+    expect(checkOgImage(OG_EXPECTED, response)).toEqual(problems)
+  })
+
+  it('(g3) reads the committed file: its length and sha256; a missing file throws naming it', () => {
+    expect(readOgImage(ogRoot())).toEqual(OG_EXPECTED)
+    expect(() => readOgImage(ogRoot(null))).toThrow(`${OG_IMAGE_FILE} is missing`)
+    // The real committed file (scripts/og/write-og-image.ts writes it), as live:check reads it.
+    const committed = new Uint8Array(readFileSync(join(storyboard, OG_IMAGE_FILE)))
+    expect(readOgImage(storyboard)).toEqual({
+      length: committed.length,
+      sha256: sha256(committed),
+    })
+  })
+
+  it('records the body as bytes, every header with a lower-case name', async () => {
+    const recorded = await recordBytes(
+      new Response(OG_BYTES, { status: 200, headers: [['Content-Type', 'image/jpeg']] }),
+    )
+    expect(recorded.status).toBe(200)
+    expect(recorded.headers).toContainEqual(['content-type', 'image/jpeg'])
+    expect(recorded.bytes).toEqual(OG_BYTES)
+    expect((await recordBytes(new Response(new Uint8Array(1024 * 1024 + 1)))).bytes).toBeNull()
+  })
+})
+
 describe('runLiveCheck', () => {
   interface Fake {
     readonly fetchImpl: typeof fetch
@@ -502,22 +640,53 @@ describe('runLiveCheck', () => {
     readonly sleep: (ms: number) => Promise<void>
   }
 
-  /** A site that answers round `n` (1-based) from `siteFor(n)`; each round takes 1 s. */
-  function fake(siteFor: (round: number) => ReadonlyMap<string, Recorded>, paths: number): Fake {
+  /** Where a 301 for the og image points; the fake serves the good image there. */
+  const OG_ELSEWHERE = '/og/elsewhere.jpg'
+
+  /**
+   * A site that answers round `n` (1-based) from `siteFor(n)`, and the og image from `ogFor(n)`;
+   * each round takes 1 s. A redirect is followed only when the request does not say 'manual'.
+   */
+  function fake(
+    siteFor: (round: number) => ReadonlyMap<string, Recorded>,
+    paths: number,
+    ogFor: (round: number) => RecordedBytes = () => OG_OK,
+  ): Fake {
     let clock = 1_763_186_400_000
     const requests: Fake['requests'] = []
     const sleeps: number[] = []
-    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input))
-      requests.push({ url: url.href, init })
-      const round = Math.floor((requests.length - 1) / paths) + 1
-      if (requests.length % paths === 0) clock += 1_000
-      const recorded = siteFor(round).get(url.pathname)
+    const answer = (pathname: string, round: number): Response => {
+      if (pathname === OG_IMAGE_PATH || pathname === OG_ELSEWHERE) {
+        const og = pathname === OG_IMAGE_PATH ? ogFor(round) : OG_OK
+        if (og.status === null) throw new TypeError('fetch failed')
+        return new Response(og.bytes === null ? null : new Uint8Array(og.bytes), {
+          status: og.status,
+          headers: og.headers.map(([name, value]): [string, string] => [name, value]),
+        })
+      }
+      const recorded = siteFor(round).get(pathname)
       if (!recorded || recorded.status === null) throw new TypeError('fetch failed')
       return new Response(recorded.body, {
         status: recorded.status,
         headers: recorded.headers.map(([name, value]): [string, string] => [name, value]),
       })
+    }
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      requests.push({ url: url.href, init })
+      const round = Math.floor((requests.length - 1) / paths) + 1
+      if (requests.length % paths === 0) clock += 1_000
+      const response = answer(url.pathname, round)
+      const location = response.headers.get('location')
+      if (
+        init?.redirect !== 'manual' &&
+        response.status >= 300 &&
+        response.status < 400 &&
+        location
+      ) {
+        return answer(new URL(location, url).pathname, round)
+      }
+      return response
     }) as typeof fetch
     return {
       fetchImpl,
@@ -532,8 +701,10 @@ describe('runLiveCheck', () => {
     }
   }
 
-  const paths = GATED_PROBES.length
+  /** Requests per round: every probe, then the og image once (design §4.14). */
+  const paths = GATED_PROBES.length + 1
 
+  /** A run against the fake, with a temporary root whose committed og image is OG_BYTES. */
   function run(f: Fake, extra: Partial<Parameters<typeof runLiveCheck>[0]> = {}) {
     return runLiveCheck({
       titles: TITLES,
@@ -543,6 +714,7 @@ describe('runLiveCheck', () => {
       now: f.now,
       sleep: f.sleep,
       log: (line) => f.log.push(line),
+      root: ogRoot(),
       ...extra,
     })
   }
@@ -551,6 +723,11 @@ describe('runLiveCheck', () => {
     const f = fake(() => gatedSite(), paths)
     expect(await run(f)).toBe(0)
     expect(f.requests).toHaveLength(6 * paths)
+    // T12-36 g2: the og image once per round, after the other probes.
+    const og = f.requests.flatMap((r, i) => (new URL(r.url).pathname === OG_IMAGE_PATH ? [i] : []))
+    expect(og, '(g2) the og image is the last request of each round').toEqual(
+      [1, 2, 3, 4, 5, 6].map((n) => n * paths - 1),
+    )
     expect(f.sleeps).toEqual([5_000, 5_000, 5_000, 5_000, 5_000])
     for (const { url, init } of f.requests) {
       expect(new URL(url).origin).toBe(PRODUCTION_ORIGIN)
@@ -633,5 +810,64 @@ describe('runLiveCheck', () => {
       TypeError,
     )
     expect(f.requests).toEqual([])
+  })
+
+  it('(T12-36 g2) a round whose og image differs fails and resets the count', async () => {
+    const changed = Uint8Array.from(OG_BYTES, (byte, i) => (i === 6 ? byte ^ 0x01 : byte))
+    const f = fake(
+      () => gatedSite(),
+      paths,
+      (round) => (round === 2 ? { ...OG_OK, bytes: changed } : OG_OK),
+    )
+    expect(await run(f)).toBe(0)
+    expect(f.log).toContain('live-check: round 2: FAIL, count reset from 1')
+    expect(f.log).toContain(`live-check:   ${OG_IMAGE_PATH} 200: body sha256 differs`)
+    expect(f.log.at(-2)).toBe('live-check: round 8: pass (6/6)')
+  })
+
+  it('(T12-36 g2) a redirect of the og image fails: it is never followed', async () => {
+    const moved: RecordedBytes = {
+      status: 301,
+      headers: [...SECURITY, ['location', '/og/elsewhere.jpg']],
+      bytes: new Uint8Array(0),
+    }
+    const f = fake(
+      () => gatedSite(),
+      paths,
+      () => moved,
+    )
+    expect(await run(f, { deadlineMs: 10_000 })).toBe(1)
+    expect(f.log).toContain(`live-check:   ${OG_IMAGE_PATH} 301: status (expected 200)`)
+    expect(
+      f.requests.filter((r) => new URL(r.url).pathname === '/og/elsewhere.jpg'),
+      '(g2) the redirect target was never fetched',
+    ).toEqual([])
+  })
+
+  it('(T12-36 g3) a missing committed og image fails the run before any request, naming it', async () => {
+    const f = fake(() => gatedSite(), paths)
+    expect(await run(f, { root: ogRoot(null) })).toBe(1)
+    expect(f.requests).toEqual([])
+    expect(f.log).toEqual([`live-check: FAIL (${OG_IMAGE_FILE} is missing)`])
+  })
+
+  it('(T12-36 g5) the og probe prints only its path, status, header names and pass/fail', async () => {
+    const changed = Uint8Array.from(OG_BYTES, (byte, i) => (i === 6 ? byte ^ 0x01 : byte))
+    const f = fake(
+      () => gatedSite(),
+      paths,
+      () => ({
+        status: 200,
+        headers: [...SECURITY, ['content-type', 'image/png; x-secret=og-header-value']],
+        bytes: changed,
+      }),
+    )
+    expect(await run(f, { deadlineMs: 10_000 })).toBe(1)
+    expect(f.log).toContain(`live-check:   ${OG_IMAGE_PATH} 200: header content-type differs`)
+    expect(f.log).toContain(`live-check:   ${OG_IMAGE_PATH} 200: body sha256 differs`)
+    const text = f.log.join('\n')
+    for (const secret of [OG_EXPECTED.sha256, sha256(changed), 'image/png', 'og-header-value']) {
+      expect.soft(text, `(g5) ${secret}`).not.toContain(secret)
+    }
   })
 })

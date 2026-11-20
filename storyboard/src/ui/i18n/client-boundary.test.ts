@@ -20,6 +20,17 @@
 //   held-link are scanned; Home's and the landing's strings.ts and the story card stay server
 //   files. The islands import the shelf rules (src/reader/shelf/shelf.ts), which take structural
 //   types only, so no island reaches src/content, even through a type-only import (S12-CRIT-5).
+// - P1 Step 12, 12b (design p1-step12-design.md §3.20 N20, B3; test plan T12-20 g4, T12-21):
+//   src/config/site-url.ts is server-only too, and under app/, src/, scripts/ and e2e/, and in the
+//   storyboard root's own files (next.config.ts, playwright.config.ts, vitest.config.mts; 12b
+//   review round 1, R1-FS-2), the string NEXT_PUBLIC_SITE_URL appears only in site-url.ts (its one
+//   reader) and *.test.ts files. That walk reads every script extension (.ts .tsx .mts .cts .js .jsx
+//   .mjs .cjs) plus .json and .css (lead decision L14; the READER_LAUNCH walk below still misses
+//   .cts, .cjs and .jsx, a known gap carried to P1-11); a backup copy (.bak) and the root's .env*
+//   files are never read. Documented limits (guard-bypass catalogue, env class 1): a name assembled
+//   at run time or written with escapes is not found; the other folders are not walked, tools/
+//   among them, where the publisher reads the variable by design (tools/publisher/env.ts and
+//   verify.ts; site-url.test.ts holds env.ts and site-url.ts to one verdict).
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
 //   which turns zod's eval probe off before any schema is built (spec §9 CSP: no 'unsafe-eval';
 //   the stores and zod reach every reader page, design §11 R10). Type-only imports are fine.
@@ -31,8 +42,8 @@ import { describe, expect, it } from 'vitest'
 const storyboard = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const toPosix = (path: string): string => path.split(sep).join('/')
 
-/** The files a client component must never reach. */
-const SERVER_ONLY = ['src/ui/i18n/messages.ts', 'src/config/launch.ts']
+/** The files a client component must never reach (12b: the site URL reader, design §3.20). */
+const SERVER_ONLY = ['src/ui/i18n/messages.ts', 'src/config/launch.ts', 'src/config/site-url.ts']
 /** Folders whose every file is server-only: the content reader (P1-2b, design §8). */
 const SERVER_ONLY_DIRS = ['src/content/']
 const isServerOnly = (path: string): boolean =>
@@ -53,6 +64,14 @@ function walk(dir: string, keep: (name: string) => boolean): string[] {
   }
   visit(join(storyboard, dir))
   return found.sort()
+}
+
+/** The storyboard root's own files (its folders are not entered) whose name passes `keep`. */
+function rootFiles(keep: (name: string) => boolean): string[] {
+  return readdirSync(storyboard, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && keep(entry.name))
+    .map((entry) => entry.name)
+    .sort()
 }
 
 /** True when the first statement (after comments and blank lines) is the 'use client' directive. */
@@ -327,8 +346,36 @@ ${shelf ?? ''}`,
     expect.soft(clientViolations(graph), '(g3) the real graph is clean').toEqual([])
   })
 
+  it('12b: the site URL reader is server-only; a client that reaches it is caught (T12-20 g4)', () => {
+    expect
+      .soft(isServerOnly('src/config/site-url.ts'), '(g4) site-url.ts is server-only')
+      .toBe(true)
+    const badge = graph.get('src/ui/home/badge-cell.tsx')
+    expect(graph.has('src/config/site-url.ts'), 'precondition: site-url.ts is scanned').toBe(true)
+    expect(badge, 'precondition: badge-cell.tsx is scanned').toBeDefined()
+    const seeded = new Map(graph)
+    seeded.set(
+      'src/ui/home/badge-cell.tsx',
+      `${badge ?? ''}\nimport { buildSiteOrigin } from '../../config/site-url'\n`,
+    )
+    expect
+      .soft(
+        clientViolations(seeded).find((v) => v.client === 'src/ui/home/badge-cell.tsx'),
+        '(g4) badge-cell > site-url',
+      )
+      .toEqual({
+        client: 'src/ui/home/badge-cell.tsx',
+        chain: ['src/ui/home/badge-cell.tsx', 'src/config/site-url.ts'],
+      })
+    expect.soft(clientViolations(graph), '(g4) the real graph is clean').toEqual([])
+  })
+
   it('the server components that do use them are not client files', () => {
-    for (const path of ['src/ui/i18n/messages.ts', 'src/config/launch.ts']) {
+    for (const path of [
+      'src/ui/i18n/messages.ts',
+      'src/config/launch.ts',
+      'src/config/site-url.ts',
+    ]) {
       expect(isClientFile(graph.get(path) ?? ''), path).toBe(false)
     }
   })
@@ -498,6 +545,101 @@ describe('READER_LAUNCH', () => {
       expect(READER_LAUNCH_READ.test(source), path).toBe(false)
       expect(readerLaunchElsewhere(source), path).toBe(false)
     }
+  })
+})
+
+/** The one reader of NEXT_PUBLIC_SITE_URL (resolveSiteUrl, buildSiteOrigin; P1 Step 12, 12b). */
+const SITE_URL_READER = 'src/config/site-url.ts'
+const SITE_URL_NAME = 'NEXT_PUBLIC_SITE_URL'
+/** The walk reads every script extension, plus .json and .css (lead decision L14). */
+const SITE_URL_SCANNED = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|json|css)$/
+
+/**
+ * The files, of these (path, text) pairs, that break the rule: any file other than site-url.ts and
+ * *.test.ts files that holds the name, in any form a reader could take (a property, a computed key,
+ * destructuring, Reflect.get) or in a comment. No other exception, and none by suffix.
+ */
+function siteUrlOffenders(files: Iterable<readonly [string, string]>): string[] {
+  const offenders: string[] = []
+  for (const [path, text] of files) {
+    if (path === SITE_URL_READER || path.endsWith('.test.ts')) continue
+    if (text.includes(SITE_URL_NAME)) offenders.push(path)
+  }
+  return offenders
+}
+
+describe('NEXT_PUBLIC_SITE_URL (T12-21, P1 Step 12)', () => {
+  it('(g1) the guard passes the reader and tests', () => {
+    expect(
+      siteUrlOffenders([
+        [SITE_URL_READER, "const raw = env.NEXT_PUBLIC_SITE_URL ?? ''"],
+        ['src/config/site-url.test.ts', "NEXT_PUBLIC_SITE_URL: 'https://x.vercel.app'"],
+        ['scripts/check-build.test.ts', "vi.stubEnv('NEXT_PUBLIC_SITE_URL', undefined)"],
+        ['e2e/social.spec.ts', 'no such name here'],
+      ]),
+    ).toEqual([])
+  })
+
+  it('(g2) fails every other holder, every read form and every near-miss of the reader’s path', () => {
+    const offenders: [string, string][] = [
+      ['src/ui/x.tsx', 'const origin = process.env.NEXT_PUBLIC_SITE_URL'],
+      ['app/x.tsx', "const origin = process.env['NEXT_PUBLIC_SITE_URL']"],
+      ['scripts/check-build.ts', 'const { NEXT_PUBLIC_SITE_URL } = process.env'],
+      ['scripts/live-check.ts', "const origin = Reflect.get(process.env, 'NEXT_PUBLIC_SITE_URL')"],
+      ['e2e/social.spec.ts', '// review builds leave NEXT_PUBLIC_SITE_URL unset'],
+      ['scripts/x.cjs', 'module.exports = process.env.NEXT_PUBLIC_SITE_URL'],
+      ['src/x.cts', 'export = process.env.NEXT_PUBLIC_SITE_URL'],
+      ['src/config/site-url.tsx', 'const raw = env.NEXT_PUBLIC_SITE_URL'],
+      ['scripts/site-url.ts', 'const raw = env.NEXT_PUBLIC_SITE_URL'],
+      ['e2e/x.spec.ts.bak', 'const raw = process.env.NEXT_PUBLIC_SITE_URL'],
+      ['next.config.ts', 'env: { SITE: process.env.NEXT_PUBLIC_SITE_URL }'],
+    ]
+    expect
+      .soft(siteUrlOffenders(offenders), '(g2) every holder')
+      .toEqual(offenders.map(([path]) => path))
+    // The walk reads every script extension, .json and .css (catalogue lint class 11).
+    for (const ext of ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'json', 'css']) {
+      expect.soft(SITE_URL_SCANNED.test(`x.${ext}`), `(g2) the walk reads .${ext}`).toBe(true)
+    }
+    expect.soft(SITE_URL_SCANNED.test('x.ts.bak'), '(g2) a backup copy is not code').toBe(false)
+    for (const name of ['.env', '.env.local', '.env.production']) {
+      expect.soft(SITE_URL_SCANNED.test(name), `(g2) ${name} is never read`).toBe(false)
+    }
+  })
+
+  it('documented limit: a name assembled at run time, or written with escapes, is not found', () => {
+    expect(
+      siteUrlOffenders([
+        ['src/ui/x.ts', "const v = process.env[['NEXT', 'PUBLIC', 'SITE', 'URL'].join('_')]"],
+        ['src/ui/y.ts', "const v = process.env['NEXT\\u005fPUBLIC_SITE_URL']"],
+      ]),
+    ).toEqual([])
+  })
+
+  it('(g3) appears under app/, src/, scripts/, e2e/ and the root’s own files only in site-url.ts and tests', () => {
+    const folders = ['app', 'src', 'scripts', 'e2e'] as const
+    const paths = folders.flatMap((dir) => walk(dir, (name) => SITE_URL_SCANNED.test(name)))
+    for (const dir of folders) {
+      expect(
+        paths.filter((path) => path.startsWith(`${dir}/`)).length,
+        `precondition: the walk reads ${dir}/`,
+      ).toBeGreaterThan(0)
+    }
+    const root = rootFiles((name) => SITE_URL_SCANNED.test(name))
+    expect(root, 'precondition: the walk reads the storyboard root’s own files').toEqual(
+      expect.arrayContaining(['next.config.ts', 'playwright.config.ts', 'vitest.config.mts']),
+    )
+    const files = [...paths, ...root].map((path): [string, string] => [
+      path,
+      readFileSync(join(storyboard, path), 'utf8'),
+    ])
+    expect(siteUrlOffenders(files), '(g3) the real tree').toEqual([])
+  })
+
+  it('(g4) the reader exists and reads the variable itself', () => {
+    const source = readFileSync(join(storyboard, SITE_URL_READER), 'utf8')
+    expect.soft(source, '(g4) the name').toContain(SITE_URL_NAME)
+    expect.soft(source, '(g4) the read').toContain(`env.${SITE_URL_NAME}`)
   })
 })
 

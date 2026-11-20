@@ -6,6 +6,7 @@ import {
   checkContentBaseUrl,
   securityHeaders,
 } from './src/config/security-headers'
+import { assertSiteUrlAllowed, resolveSiteUrl } from './src/config/site-url'
 
 const nextConfig: NextConfig = {
   // Spec §10.2: Cache Components stays off; pages are rebuilt on publish.
@@ -27,6 +28,9 @@ const nextConfig: NextConfig = {
  *   feeds the content loader, which runs with the build.
  * - NODE_ENV=development, which would put the dev-only 'unsafe-eval' into the production CSP
  *   (owner, 2026-11-14).
+ * - P1 Step 12 (design p1-step12-design.md §3.20 N20, §4.8): in a Vercel Production build, a site
+ *   URL that is not an https origin (src/config/site-url.ts, value-free message). Every other
+ *   build, `next dev` and `next start` ignore it.
  * `next build` and `next dev` also stop on a refused launch decision (P1 D4, design §3.2 M1,
  * §5.3): a malformed READER_LAUNCH, 'review' outside a Preview or local fixtures build, or a
  * committed 'launched' in Production without storage content. `next start` serves pages already
@@ -36,6 +40,7 @@ export default function config(phase: string): NextConfig {
   if (phase === PHASE_PRODUCTION_BUILD) {
     checkBuildNodeEnv(process.env)
     checkContentBaseUrl(process.env)
+    assertSiteUrlAllowed(resolveSiteUrl(process.env))
   }
   if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_DEVELOPMENT_SERVER) {
     assertLaunchAllowed(buildLaunch())
