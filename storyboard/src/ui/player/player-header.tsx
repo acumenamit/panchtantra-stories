@@ -6,9 +6,13 @@
 // story-language switch before Grown-ups (languageSwitch, absent for a one-language story).
 // Strings arrive finished from the server; the island scrolls this header to the top after each
 // step (D11-P8).
+// P1 Step 12 (design p1-step12-design.md §3.12 N13, §3.13 N14; S12-CRIT-3): the exit renders through
+// HeldLink (same href and markup), so a tap on it starts the navigation hold and the second tap of
+// a double tap lands on nothing on Home. Grown-ups stays plain next/link (the same header place).
 import Link from 'next/link'
 import type { ReactNode, Ref } from 'react'
 import type { LocaleCode } from '../../core/locales'
+import { HeldLink } from '../shell/held-link'
 import shell from '../shell/shell.module.css'
 
 export interface PlayerHeaderProps {
@@ -34,9 +38,9 @@ export function PlayerHeader({
 }: PlayerHeaderProps) {
   return (
     <header ref={ref} className={shell.header}>
-      <Link href={`/${locale}`} data-exit="" className={shell.link}>
+      <HeldLink href={`/${locale}`} data-exit="" className={shell.link}>
         <span className={shell.label}>{allStories}</span>
-      </Link>
+      </HeldLink>
       <nav aria-label={navLabel} className={shell.nav}>
         {languageSwitch}
         <Link href={`/${locale}/grown-ups`} className={shell.link}>

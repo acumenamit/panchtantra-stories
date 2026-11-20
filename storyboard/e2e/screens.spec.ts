@@ -23,6 +23,16 @@
 //   Screen 18 is shot at the screen's size instead (review P14-RV-STRESS-1): the dialog's backdrop
 //   is fixed to the viewport, so a full-page shot of a page taller than the screen shows the part
 //   below the screen undimmed, which the reader never sees.
+// The owner's P1-3 exit screens (design p1-step12-design.md §0.5, §13.4.6 SC-36 to SC-42; Step
+// 12a), the last two describes, skipped unless SCREENS=1 and written to storyboard/migration-input/
+// step12-screens/ (git-ignored, W9) as <nn>-<screen>-<code>-<project>-<scale>.png:
+// - The 3 Chromium viewports at 100% text, and chromium-phone at 150% where the screen lists it; en
+//   and hi. One test per screen, locale and text size. The review describe skips WebKit and the
+//   staging leg, as the player screens do; screen 38 (the Featured hero) needs the staging build.
+// - Each shot fixes the clock at 2026-11-18T12:00:00Z (W12), so New is reproducible, asserts its
+//   state with the matching E12 test's checks, then settles (settleForScreenshot) and shoots the
+//   full page. Screen 38's caption lists the card ids in DOM order, read at run time (four staging
+//   cards share one title, CRIT-15); screen 40's caption carries owner question Q3 (CRIT-11).
 import path from 'node:path'
 import type { BrowserContext, Page } from '@playwright/test'
 import type { LocaleCode } from '../src/core/locales'
@@ -32,7 +42,10 @@ import { launchLeg } from './launch-leg'
 import {
   DIALOG,
   endingsOf,
+  expectFixedClock,
+  expectShareSetup,
   FIRST_PARAGRAPH,
+  fixedClock,
   fixtureGraph,
   focusByKeyboard,
   injectSpecimen,
@@ -45,6 +58,8 @@ import {
   settleFonts,
   settleForScreenshot,
   step10ScreenPath,
+  step12ScreenPath,
+  stubShare,
   walk,
 } from './page-helpers'
 import {
@@ -52,8 +67,10 @@ import {
   failStorageWrites,
   focusLinkForWebKit,
   formatted,
+  landingPath,
   message,
   playerPath,
+  uiLang,
   waitForHydration,
 } from './routes'
 
@@ -565,6 +582,284 @@ test.describe('the P1-4 owner screens: the story player', { tag: '@review' }, ()
         path: step10ScreenPath(screen.nn, screen.name, info.project.name, screen.scale),
         fullPage: screen.viewportOnly !== true,
       })
+    })
+  }
+})
+
+// ---------------------------------------------------------------------------------------------
+// The owner's P1-3 exit screens (design p1-step12-design.md §0.5, §13.4.6 SC-36 to SC-42)
+
+/** Every P1-3 screen is shot at this clock (W12): the two 2026-11-13 fixtures are New. */
+const STEP12_CLOCK = '2026-11-18T12:00:00Z'
+
+interface Step12Screen {
+  readonly nn: string
+  readonly name: string
+  readonly state: string
+  readonly codes: readonly LocaleCode[]
+  readonly scales: readonly TextScale[]
+  /** Opens the page and asserts the state the screenshot shows (the matching E12 test's checks). */
+  readonly show: (page: Page, code: LocaleCode) => Promise<void>
+}
+
+const shownVisibility = async (page: Page, selector: string): Promise<string[]> =>
+  page
+    .locator(selector)
+    .evaluateAll((elements) =>
+      elements.map((element) =>
+        getComputedStyle(element).visibility === 'visible' && !element.hasAttribute('aria-hidden')
+          ? 'shown'
+          : 'hidden',
+      ),
+    )
+
+async function openShelf(page: Page, code: LocaleCode): Promise<void> {
+  const response = await page.goto(`/${code}`)
+  expect(response?.status(), `/${code}`).toBe(200)
+  await expectFixedClock(page, STEP12_CLOCK)
+  await expect(page.locator('[data-home-progress]')).toHaveAttribute('data-phase', 'ready')
+  await expect(page.locator('[data-badge-cell][data-shown="pending"]')).toHaveCount(0)
+}
+
+async function openStoryLanding(page: Page, code: LocaleCode): Promise<void> {
+  const response = await page.goto(landingPath(code, 'two-paths'))
+  expect(response?.status(), landingPath(code, 'two-paths')).toBe(200)
+  await expect(page.locator('[data-actions]')).not.toHaveAttribute('data-shown', 'pending')
+}
+
+/** The badge a list card shows: its data-shown and the texts of its shown variants. */
+async function badgeOf(page: Page, id: string): Promise<{ shown: string | null; texts: string[] }> {
+  return page
+    .locator(`[data-home-list] [data-story-card="${id}"] [data-badge-cell]`)
+    .evaluate((cell) => ({
+      shown: cell.getAttribute('data-shown'),
+      texts: [...cell.querySelectorAll('[data-badge]')]
+        .filter(
+          (v) => getComputedStyle(v).visibility === 'visible' && !v.hasAttribute('aria-hidden'),
+        )
+        .map((v) => (v.textContent ?? '').trim()),
+    }))
+}
+
+const STEP12_REVIEW_SCREENS: readonly Step12Screen[] = [
+  {
+    nn: '36',
+    name: 'home-new',
+    state: 'Home for a new reader: the empty Continue line, New on the 2026-11-13 fixtures',
+    codes: ['en', 'hi'],
+    scales: [100, 150],
+    show: async (page, code) => {
+      await openShelf(page, code)
+      const lang = uiLang(code)
+      await expect(page.locator('[data-continue-cell]')).toHaveAttribute('data-shown', 'empty')
+      await expect(page.locator('[data-continue-empty]')).toHaveText(
+        message(lang, 'home.continueEmpty'),
+      )
+      for (const id of ['lantern-walk', 'river-stones']) {
+        expect(await badgeOf(page, id), `${id}: New`).toEqual({
+          shown: 'new',
+          texts: [message(lang, 'home.new')],
+        })
+      }
+      expect(await badgeOf(page, 'two-paths'), 'two-paths: no badge').toEqual({
+        shown: 'none',
+        texts: [],
+      })
+    },
+  },
+  {
+    nn: '37',
+    name: 'home-returning',
+    state: 'Home for a returning reader: Continue river-stones; Reading, Finished 1 of 2, New',
+    codes: ['en', 'hi'],
+    scales: [100, 150],
+    show: async (page, code) => {
+      await seedProgressOnce(page, {
+        'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: code } },
+        'two-paths': { activeRun: null, endingsFound: ['ending_wise'] },
+      })
+      await openShelf(page, code)
+      const lang = uiLang(code)
+      await expect(page.locator('[data-continue-cell]')).toHaveAttribute(
+        'data-shown',
+        'river-stones',
+      )
+      expect(await badgeOf(page, 'river-stones'), 'river-stones: Reading').toEqual({
+        shown: 'reading',
+        texts: [message(lang, 'home.reading')],
+      })
+      expect(await badgeOf(page, 'two-paths'), 'two-paths: Finished 1 of 2').toEqual({
+        shown: 'finished',
+        texts: [formatted(lang, 'home.finished', { found: 1, total: 2 })],
+      })
+      expect(await badgeOf(page, 'lantern-walk'), 'lantern-walk: New').toEqual({
+        shown: 'new',
+        texts: [message(lang, 'home.new')],
+      })
+    },
+  },
+  {
+    nn: '39',
+    name: 'landing-start',
+    state: 'the landing of two-paths with nothing saved: Start',
+    codes: ['en', 'hi'],
+    scales: [100, 150],
+    show: async (page, code) => {
+      await openStoryLanding(page, code)
+      await expect(page.locator('[data-actions]')).toHaveAttribute('data-shown', 'start')
+      expect(
+        [
+          ...(await shownVisibility(page, '[data-actions] [data-story-action="start"]')),
+          ...(await shownVisibility(page, '[data-actions] [data-story-action="continue"]')),
+          ...(await shownVisibility(page, '[data-actions] [data-start-again]')),
+        ],
+        'Start shown; Continue and Start again hidden',
+      ).toEqual(['shown', 'hidden', 'hidden'])
+    },
+  },
+  {
+    nn: '40',
+    name: 'landing-continue',
+    state: 'the landing of two-paths with a saved run: Continue and Start again',
+    codes: ['en', 'hi'],
+    scales: [100],
+    show: async (page, code) => {
+      await seedProgressOnce(page, {
+        'two-paths': { activeRun: { path: ['start', 'wise_path'], locale: code } },
+      })
+      await openStoryLanding(page, code)
+      await expect(page.locator('[data-actions]')).toHaveAttribute('data-shown', 'continue')
+      expect(
+        [
+          ...(await shownVisibility(page, '[data-actions] [data-story-action="start"]')),
+          ...(await shownVisibility(page, '[data-actions] [data-story-action="continue"]')),
+          ...(await shownVisibility(page, '[data-actions] [data-start-again]')),
+        ],
+        'Continue and Start again shown; Start hidden',
+      ).toEqual(['hidden', 'shown', 'shown'])
+      const question =
+        'Owner question Q3 (design §0.3, S12-CRIT-11): on the landing one tap on Start again clears the unfinished run (endings kept) with no question; the player asks "Start again from the beginning?" first. (a) Recommended: keep the one-tap reset. (b) Reuse the restart dialog here.'
+      test.info().annotations.push({ type: 'screen 40 (Q3)', description: question })
+      console.log(`[screens] 40 ${test.info().project.name} ${code}: ${question}`)
+    },
+  },
+  {
+    nn: '41',
+    name: 'landing-copied',
+    state: 'the landing after a copy: "Link copied."',
+    codes: ['en'],
+    scales: [100],
+    show: async (page, code) => {
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+      const setup = { share: 'undefined', clipboard: 'real' } as const
+      await stubShare(page, setup)
+      await openStoryLanding(page, code)
+      await expectShareSetup(page, setup)
+      await page.locator('[data-share-row] button[data-share]').click()
+      await expect(page.locator('[data-share-row] [data-share-status]')).toHaveText(
+        message(uiLang(code), 'player.linkCopied'),
+      )
+    },
+  },
+  {
+    nn: '42',
+    name: 'landing-manual',
+    state: 'the landing with the manual share field',
+    codes: ['en', 'hi'],
+    scales: [100, 150],
+    show: async (page, code) => {
+      const setup = { share: 'undefined', clipboard: 'reject' } as const
+      await stubShare(page, setup)
+      await openStoryLanding(page, code)
+      await expectShareSetup(page, setup)
+      await page.locator('[data-share-row] button[data-share]').click()
+      const field = page.locator('input[data-share-url]')
+      await expect(field).toBeVisible()
+      await expect(field).toHaveValue(
+        `${new URL(page.url()).origin}${landingPath(code, 'two-paths')}`,
+      )
+    },
+  },
+]
+
+/** One P1-3 shot: the clock, the text size, the state, then a settled full-page screenshot. */
+async function shootStep12(
+  page: Page,
+  screen: Step12Screen,
+  code: LocaleCode,
+  scale: TextScale,
+): Promise<void> {
+  await fixedClock(page, STEP12_CLOCK)
+  if (scale !== 100) await seedPrefs(page, prefsText(scale))
+  await screen.show(page, code)
+  expect(await page.locator('html').getAttribute('data-text-scale'), 'the text size').toBe(
+    scale === 100 ? null : String(scale),
+  )
+  await settleForScreenshot(page)
+  await page.screenshot({
+    path: step12ScreenPath(screen.nn, `${screen.name}-${code}`, test.info().project.name, scale),
+    fullPage: true,
+  })
+}
+
+test.describe('the P1-3 owner screens: Home and the landing', { tag: '@review' }, () => {
+  test.skip(
+    ({ browserName }) => browserName === 'webkit',
+    'the P1-3 owner set is the 3 Chromium viewports (design §0.5)',
+  )
+  test.skip(
+    launchLeg(process.env['E2E_LAUNCH']) === 'staging',
+    'shot on the review build: on the staging build every page carries the staging banner',
+  )
+
+  for (const screen of STEP12_REVIEW_SCREENS) {
+    for (const code of screen.codes) {
+      for (const scale of screen.scales) {
+        test(`screen ${screen.nn} /${code} ${scale}%: ${screen.state}`, async ({ page }, info) => {
+          test.skip(
+            scale !== 100 && info.project.name !== 'chromium-phone',
+            '150% text: chromium-phone',
+          )
+          test.setTimeout(90_000)
+          await shootStep12(page, screen, code, scale)
+        })
+      }
+    }
+  }
+})
+
+test.describe('the P1-3 owner screens: the Featured hero', { tag: '@staging' }, () => {
+  test.skip(
+    ({ browserName }) => browserName === 'webkit',
+    'the P1-3 owner set is the 3 Chromium viewports (design §0.5)',
+  )
+
+  for (const code of ['en', 'hi'] as const) {
+    test(`screen 38 /${code} 100%: Home with the Featured hero`, async ({ page }, info) => {
+      test.setTimeout(90_000)
+      const hero: Step12Screen = {
+        nn: '38',
+        name: 'home-featured',
+        state: 'Home with the Featured hero',
+        codes: [code],
+        scales: [100],
+        show: async (shown) => {
+          await openShelf(shown, code)
+          await expect(shown.locator('[data-featured] [data-story-card]')).toHaveCount(1)
+          const ids = await shown
+            .locator('[data-story-card]')
+            .evaluateAll((cards) =>
+              cards.map(
+                (card) =>
+                  `${card.closest('[data-featured]') === null ? '' : 'hero '}${card.getAttribute('data-story-card') ?? ''}`,
+              ),
+            )
+          const caption = ids.join(', ')
+          info.annotations.push({ type: 'screen 38 cards in DOM order', description: caption })
+          console.log(`[screens] 38 ${info.project.name} ${code}: ${caption}`)
+        },
+      }
+      await shootStep12(page, hero, code, 100)
     })
   }
 })

@@ -5,7 +5,10 @@
 // read-only field; a tap while pending is ignored. share() runs before any await (inside the tap's
 // user activation) and as a method of the navigator. A chain that ends after its control left the
 // page shows nothing and never reaches the clipboard (review R10c-STRESS-3). shareUrlOf: the
-// content locale, built from the origin only (no query, no hash), the player path.
+// content locale, built from the origin only (no query, no hash).
+// P1 Step 12 (design p1-step12-design.md §3.11 N12, A7; test plan T12-18): the shared URL is the
+// story's landing, /{locale}/stories/{storyId} (it carries the Open Graph tags), for the ending
+// card and the landing alike; the player path is never shared.
 import { describe, expect, it } from 'vitest'
 import lanternWalk from '../../../fixtures/packages/lantern-walk.json'
 import riverStones from '../../../fixtures/packages/river-stones.json'
@@ -23,7 +26,7 @@ import {
 
 const TARGET: ShareTarget = {
   title: 'The Lantern Walk',
-  url: 'http://127.0.0.1:3005/hi/stories/lantern-walk/read',
+  url: 'http://127.0.0.1:3005/hi/stories/lantern-walk',
 }
 
 /** A fake env: every status shown, in order; leave() takes the control off the page. */
@@ -281,7 +284,7 @@ describe('runShare (D11-P14)', () => {
   })
 })
 
-describe('shareUrlOf (D11-P14)', () => {
+describe('shareUrlOf (D11-P14; P1 Step 12 T12-18)', () => {
   const stories = [twoPaths, riverStones, lanternWalk].map((raw) => StoryPackageV1.parse(raw))
   // The page the reader is on: the route locale is en, with a query and a hash.
   const where = {
@@ -292,26 +295,30 @@ describe('shareUrlOf (D11-P14)', () => {
     hash: '#main',
   }
 
-  it('is the player URL in the content locale, from the origin only (no query, no hash)', () => {
+  it('(g1) is the landing URL in the content locale, from the origin only (no query, no hash)', () => {
     const cases = stories.flatMap((pkg) =>
       pkg.locales.map((locale) => [pkg.storyId, locale] as const),
     )
     expect(cases).toHaveLength(6)
     for (const [storyId, locale] of cases) {
       const url = shareUrlOf(where, storyId, locale)
-      expect(url).toBe(`http://127.0.0.1:3005/${locale}/stories/${storyId}/read`)
-      expect(url).not.toMatch(/[?#]/)
-      expect(new URL(url).pathname).toBe(`/${locale}/stories/${storyId}/read`)
+      expect
+        .soft(url, `(g1) ${storyId} ${locale}`)
+        .toBe(`http://127.0.0.1:3005/${locale}/stories/${storyId}`)
+      expect.soft(url, `(g1) ${storyId} ${locale}: no query or hash`).not.toMatch(/[?#]/)
+      expect
+        .soft(new URL(url).pathname, `(g1) ${storyId} ${locale}: the landing path`)
+        .toBe(`/${locale}/stories/${storyId}`)
     }
   })
 
-  it('takes the content locale, never the page route locale', () => {
+  it('(g2) takes the content locale, never the page route locale', () => {
     const content: LocaleCode = 'hi'
-    expect(shareUrlOf(where, 'two-paths', content)).toBe(
-      'http://127.0.0.1:3005/hi/stories/two-paths/read',
-    )
-    expect(shareUrlOf({ origin: 'https://example.test' }, 'lantern-walk', 'en')).toBe(
-      'https://example.test/en/stories/lantern-walk/read',
-    )
+    expect
+      .soft(shareUrlOf(where, 'two-paths', content), '(g2) the content locale')
+      .toBe('http://127.0.0.1:3005/hi/stories/two-paths')
+    expect
+      .soft(shareUrlOf({ origin: 'https://example.test' }, 'lantern-walk', 'en'), '(g2) https')
+      .toBe('https://example.test/en/stories/lantern-walk')
   })
 })

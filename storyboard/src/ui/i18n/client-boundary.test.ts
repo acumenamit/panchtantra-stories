@@ -15,6 +15,11 @@
 //   from 10a, four from 10b, two from 10c, one from 10d, one from 10e) are scanned, and its server half
 //   (src/ui/player/strings.ts, which calls t()) is never a client file. Step 11 (design
 //   p1-step11-design.md §2.1, A31) adds narration-controls.tsx; strings.ts stays server-only.
+// - P1 Step 12 (design p1-step12-design.md §2.1, A22; test plan T12-20): Home's three islands
+//   (home-progress, badge-cell, continue-reading), the landing's story-actions and the shell's
+//   held-link are scanned; Home's and the landing's strings.ts and the story card stay server
+//   files. The islands import the shelf rules (src/reader/shelf/shelf.ts), which take structural
+//   types only, so no island reaches src/content, even through a type-only import (S12-CRIT-5).
 // - Every source file under app/ and src/ that loads zod imports src/core/zod-jitless.ts first,
 //   which turns zod's eval probe off before any schema is built (spec §9 CSP: no 'unsafe-eval';
 //   the stores and zod reach every reader page, design §11 R10). Type-only imports are fine.
@@ -264,6 +269,12 @@ describe('the client boundary in the repo', () => {
         'src/ui/player/scene-image.tsx',
         // Step 11 (design p1-step11-design.md §2.1): the run footer's narration group.
         'src/ui/player/narration-controls.tsx',
+        // Step 12 (design p1-step12-design.md §2.1, T12-20 g1): Home, the landing, HeldLink.
+        'src/ui/home/home-progress.tsx',
+        'src/ui/home/badge-cell.tsx',
+        'src/ui/home/continue-reading.tsx',
+        'src/ui/story/story-actions.tsx',
+        'src/ui/shell/held-link.tsx',
       ]),
     )
     // The player's server half builds its strings with t(); it is never a client file.
@@ -274,6 +285,46 @@ describe('the client boundary in the repo', () => {
 
   it('no client component reaches the catalogues or the launch flag', () => {
     expect(clientViolations(graph)).toEqual([])
+  })
+
+  it('Step 12: the strings files and the story card are server files (T12-20 g2)', () => {
+    for (const path of [
+      'src/ui/home/strings.ts',
+      'src/ui/story/strings.ts',
+      'src/ui/home/story-card.tsx',
+      'src/ui/home/home-shelf.tsx',
+    ]) {
+      expect.soft(graph.has(path), `(g2) ${path} is scanned`).toBe(true)
+      expect.soft(isClientFile(graph.get(path) ?? "'use client'"), `(g2) ${path}`).toBe(false)
+    }
+  })
+
+  it('Step 12: an island that reaches src/content through the shelf rules is caught (T12-20 g3)', () => {
+    // A non-vacuous sample of S12-CRIT-5: the real islands and the real shelf.ts, with a type-only
+    // import of the content reader planted in shelf.ts.
+    const shelf = graph.get('src/reader/shelf/shelf.ts')
+    expect(shelf, 'precondition: shelf.ts is scanned').toBeDefined()
+    expect(
+      specifiers(graph.get('src/ui/home/badge-cell.tsx') ?? ''),
+      'precondition: the badge cell imports the shelf rules',
+    ).toContain('../../reader/shelf/shelf')
+    const seeded = new Map(graph)
+    seeded.set(
+      'src/reader/shelf/shelf.ts',
+      `import type { StorySummary } from '../../content/reader'
+${shelf ?? ''}`,
+    )
+    const violations = clientViolations(seeded)
+    expect
+      .soft(
+        violations.find((v) => v.client === 'src/ui/home/badge-cell.tsx'),
+        '(g3) badge-cell > shelf > content/reader',
+      )
+      .toEqual({
+        client: 'src/ui/home/badge-cell.tsx',
+        chain: ['src/ui/home/badge-cell.tsx', 'src/reader/shelf/shelf.ts', 'src/content/reader.ts'],
+      })
+    expect.soft(clientViolations(graph), '(g3) the real graph is clean').toEqual([])
   })
 
   it('the server components that do use them are not client files', () => {

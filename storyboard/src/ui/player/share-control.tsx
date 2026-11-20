@@ -3,8 +3,9 @@
 // player "Share", §6.5, §6.6 4.1.3). A native button that runs the share chain of
 // src/reader/player/share.ts with the browser's navigator: the system share sheet when there is
 // one, else the clipboard, else a read-only field holding the URL.
-// - The URL is the player URL in the content locale (the language the reader is reading), built
-//   on tap from location.origin; the title is the story title in that locale (package text).
+// - The URL is the story's landing URL in the content locale (the language the reader is reading;
+//   P1 Step 12, design p1-step12-design.md §3.11 N12), built on tap from location.origin; the title
+//   is the story title in that locale (package text). The landing reuses this control too.
 // - The status is held in a ref as well as in state, so a second tap in the same tick sees
 //   'pending' and is ignored (a second share() would reject). The guard holds per control
 //   instance: the card keys this control by the content locale (Step 10d), so after a story-language

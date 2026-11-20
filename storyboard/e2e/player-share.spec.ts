@@ -34,40 +34,64 @@
 //   next to Share) and T8c (the 10d hand-off manual case: after a switch the row keeps its order and
 //   Try another path restarts). T8 and T9 also run under the wide Devanagari fallback with the
 //   self-hosted font files aborted (Chromium logs each abort; WebKit logs none).
+// P1-3 Step 12a (design p1-step12-design.md §3.11 N12, §13.4.3 E12-P1, §13.5 item 2, CRIT-3):
+// - The shared URL is the story's landing URL in the content locale (shareUrl; SPEC:436 amended,
+//   E2), so every T-c2, T-c4, T-c8 and 10d hand-off check that compares a URL follows it.
+// - The share stubs (ShareSetup, stubShare, shareCalls, settleLater, expectShareSetup) moved to
+//   page-helpers.ts unchanged (W7), so the landing's Share tests use the same ones.
+// - All stories renders through HeldLink, so a tap holds pointer taps for 500 ms on the ending
+//   and on Home (E12-P1, V1, V3 and V4: a second tap on a Home card within the hold is refused).
+//   T-c3 and T-c4 tap All stories with locator.click(), which waits out a hold (builder hazard).
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, type LocaleCode } from '../src/core/locales'
 import { expect, test as base } from './fixtures'
 import {
   announcements,
+  attemptPage,
   boxOf,
   centreInViewport,
   choice,
   consoleErrors,
   endingsOf,
+  expectHoldWatch,
+  expectShareSetup,
+  expectStep12Variant,
   expectWideFallback,
   FIRST_PARAGRAPH,
   fixtureGraph,
   frames,
+  heldTapIntoHome,
   LATE_TAP_MS,
   openPlayer,
   pageValue,
   PART,
   PLAYER,
+  prepareStep12Variant,
   prepareVariant,
   recordAnnouncements,
   ROW_PHONES,
   RUN,
+  scrollToBottom,
   seedProgressOnce,
   settleFonts,
+  settleLater,
+  shareCalls,
   sharedPoint,
+  STEP12_VARIANTS,
   storedStory,
+  stubShare,
   tabReachesLinks,
+  variantSkip,
+  variantTitle,
   walk,
   watchDialogOpen,
+  watchNavHold,
+  withHoldRetry,
   type ConsoleErrors,
   type RowVariant,
+  type ShareSetup,
 } from './page-helpers'
-import { formatted, message, playerFixture, playerPath, uiLang } from './routes'
+import { formatted, landingPath, message, playerFixture, playerPath, uiLang } from './routes'
 
 const test = base.extend<{ errors: ConsoleErrors }>({
   errors: [
@@ -243,131 +267,12 @@ async function watchControlTaps(page: Page, seq: number): Promise<void> {
   }, seq)
 }
 
-/** How a share test sets the browser's share and clipboard (C5). */
-interface ShareSetup {
-  /**
-   * undefined: navigator.share and canShare are both undefined. Otherwise canShare says yes and
-   * share resolves, rejects with an AbortError, never settles, or (deferred) rejects with a
-   * NotAllowedError when the test calls settleLater().
-   */
-  readonly share: 'undefined' | 'resolve' | 'abort' | 'never' | 'deferred'
-  /**
-   * real: the browser's own clipboard (Chromium, permissions granted); else a writeText stub that
-   * resolves, rejects, or (deferred) resolves when the test calls settleLater().
-   */
-  readonly clipboard: 'real' | 'resolve' | 'reject' | 'deferred'
-}
-
-interface ShareCalls {
-  readonly share: readonly { title: unknown; url: unknown; onNavigator: boolean }[]
-  readonly canShare: number
-  readonly writeText: readonly string[]
-  /** Clicks whose target lies in a Share button. */
-  readonly shareClicks: number
-}
-
-/** Before any page script: the share and clipboard of `setup`, recording every call. */
-async function stubShare(page: Page, setup: ShareSetup): Promise<void> {
-  await page.addInitScript((wanted) => {
-    const calls = {
-      share: [] as { title: unknown; url: unknown; onNavigator: boolean }[],
-      canShare: 0,
-      writeText: [] as string[],
-      shareClicks: 0,
-    }
-    const w = window as unknown as Record<string, unknown>
-    w['__e2eShare'] = calls
-    // A deferred share or copy hands its settle function to settleLater().
-    const later = (settle: () => void): void => {
-      w['__e2eSettleLater'] = settle
-    }
-    const define = (name: string, value: unknown): void => {
-      Object.defineProperty(Navigator.prototype, name, {
-        configurable: true,
-        enumerable: true,
-        writable: true,
-        value,
-      })
-    }
-    if (wanted.share === 'undefined') {
-      define('share', undefined)
-      define('canShare', undefined)
-    } else {
-      define('canShare', function canShare() {
-        calls.canShare++
-        return true
-      })
-      define('share', function share(this: unknown, data?: { title?: unknown; url?: unknown }) {
-        calls.share.push({ title: data?.title, url: data?.url, onNavigator: this === navigator })
-        if (wanted.share === 'resolve') return Promise.resolve()
-        if (wanted.share === 'abort') {
-          return Promise.reject(new DOMException('e2e: share sheet closed', 'AbortError'))
-        }
-        if (wanted.share === 'deferred') {
-          return new Promise<void>((_, reject) => {
-            later(() => reject(new DOMException('e2e: share failed', 'NotAllowedError')))
-          })
-        }
-        return new Promise<void>(() => undefined)
-      })
-    }
-    if (wanted.clipboard !== 'real') {
-      const clipboard = {
-        writeText(text: unknown): Promise<void> {
-          calls.writeText.push(String(text))
-          if (wanted.clipboard === 'deferred') {
-            return new Promise<void>((resolve) => {
-              later(() => resolve())
-            })
-          }
-          return wanted.clipboard === 'resolve'
-            ? Promise.resolve()
-            : Promise.reject(new DOMException('e2e: copy refused', 'NotAllowedError'))
-        },
-      }
-      Object.defineProperty(Navigator.prototype, 'clipboard', {
-        configurable: true,
-        enumerable: true,
-        get: () => clipboard,
-      })
-    }
-    document.addEventListener(
-      'click',
-      (event) => {
-        if (event.target instanceof Element && event.target.closest('button[data-share]')) {
-          calls.shareClicks++
-        }
-      },
-      { capture: true },
-    )
-  }, setup)
-}
-
-async function shareCalls(page: Page): Promise<ShareCalls> {
-  return pageValue<ShareCalls>(page, '__e2eShare')
-}
-
-/** Settles the deferred share (rejects with a NotAllowedError) or copy (resolves). */
-async function settleLater(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const settle = (window as unknown as Record<string, unknown>)['__e2eSettleLater']
-    if (typeof settle !== 'function') throw new Error('nothing deferred to settle')
-    ;(settle as () => void)()
-  })
-}
-
-/** C5: the page sees the share and canShare the setup asked for, whatever the browser exposes. */
-async function expectShareSetup(page: Page, setup: ShareSetup): Promise<void> {
-  const kind = setup.share === 'undefined' ? 'undefined' : 'function'
-  expect(
-    await page.evaluate(() => [typeof navigator.share, typeof navigator.canShare]),
-    'navigator.share and canShare as stubbed (C5)',
-  ).toEqual([kind, kind])
-}
-
-/** The shared URL: the player URL in the content locale on this origin (D11-P14). */
+/**
+ * The shared URL: the story's landing URL in the content locale on this origin (D11-P14; Step 12
+ * N12, E2: the landing carries the Open Graph tags).
+ */
 function shareUrl(page: Page, contentLocale: LocaleCode): string {
-  return `${new URL(page.url()).origin}${playerPath(contentLocale, STORY)}`
+  return `${new URL(page.url()).origin}${landingPath(contentLocale, STORY)}`
 }
 
 /** A fixture ending node's card data (fixtures/packages/lantern-walk.json, read only). */
@@ -1436,3 +1341,43 @@ test.describe(
     }
   },
 )
+
+// P1-3 Step 12a (design p1-step12-design.md §13.4.3 E12-P1, CRIT-3, 4.12): All stories at the
+// bottom of a long ending holds. The second tap of a double tap would land on Home, whose first
+// screen now holds full-card links and the Continue card; the hold refuses it there. V1 (/en,
+// fonts as shipped), V3 (/hi 150%, the wide fallback, the font files aborted) and V4 (V3 at 320 px);
+// V3 and V4 run on the phones, where the ending page scrolls (hard). Each attempt is a fresh page
+// (13.9): a second tap 450 ms or more after the hold began retries, up to 3 times.
+test.describe('the story player, Step 12: All stories holds', { tag: '@review' }, () => {
+  for (const variant of [STEP12_VARIANTS.V1, STEP12_VARIANTS.V3, STEP12_VARIANTS.V4]) {
+    test(`E12-P1 ${variantTitle(variant)}: All stories at the bottom of an ending holds, so a tap on Home within it does nothing`, async ({
+      page,
+      errors,
+    }) => {
+      const skip = variantSkip(variant, test.info().project.name)
+      test.skip(skip !== null, skip ?? '')
+      const { code } = variant
+      await withHoldRetry(test.info(), async (n) => {
+        const p = await attemptPage(page, errors, n)
+        const aborted = await prepareStep12Variant(p, variant, errors)
+        await watchNavHold(p)
+        await reachEnding(p, code)
+        await expectStep12Variant(p, variant, aborted)
+        await expectHoldWatch(p)
+        const bottom = await scrollToBottom(p)
+        console.log(
+          `[player-share] E12-P1 ${variantTitle(variant)} (${test.info().project.name}): page ${bottom.ratio.toFixed(2)} viewports, scrollY ${bottom.scrollY}`,
+        )
+        if (variant.name !== 'V1') {
+          expect(
+            bottom.scrollHeight,
+            `precondition: the ending page scrolls (${bottom.ratio.toFixed(2)} viewports)`,
+          ).toBeGreaterThan(bottom.innerHeight)
+        }
+        const tap = await heldTapIntoHome(p, code, ALL_STORIES)
+        if (tap.gap === null || tap.gap < LATE_TAP_MS) await tap.verify()
+        return tap
+      })
+    })
+  }
+})

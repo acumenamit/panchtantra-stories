@@ -34,7 +34,18 @@
 // P1-4 owner screens (design p1-4-polish-design.md §5): T2 and T2c (the run area is a framed panel,
 // the last describe but one), T2b (in T-a22: the fallback's main keeps its 48 px) and T11 (next to
 // T-b8: the restart dialog dims the page behind it, read from screenshot pixels too).
-import type { ElementHandle, Page, Request } from '@playwright/test'
+// P1-3 Step 12a (design p1-step12-design.md §13.4.3, §13.4.5 E12-R2, §13.5 item 16, CRIT-3,
+// H-12c): trackRequests moved to page-helpers.ts as quietRequests (W5), unchanged. T-a21 loops
+// playerNotFoundPaths(leg): the story URL without /read is the landing now and leaves; three
+// landing-shaped 404s and the staging-only featured story's read URL join (review 11, staging 8).
+// The last describe: the header's Exit and the error fallback's All stories render through
+// HeldLink, so a tap on Home within 500 ms of them is refused (E12-P2, E12-P3); H-12c, Continue on
+// the landing and Home's Continue card open a resumed player that never paints the start node
+// (E12-P4, E12-P5, T-a14's method); since round 1b (design §16 F1) both Continue links set the
+// saved-run hint in the tap, so g3's mutant is MU12-211 (the hint removed), not M-a14b. Round 2b
+// (§19): the landing's Start sets it in every state, so a run another tab saved after the landing's
+// read also opens without painting the start node (E12-P6; g3's mutant MU12-211s).
+import type { ElementHandle, Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { PROGRESS_KEY, type TextScale } from '../src/core/progress/records'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
@@ -60,9 +71,16 @@ import {
   pathTo,
   PLAYER,
   prefsText,
+  progressRecordBytes,
   progressSpy,
+  quietRequests,
   recordAnnouncements,
   RUN,
+  attemptPage,
+  expectHoldWatch,
+  heldTapIntoHome,
+  watchNavHold,
+  withHoldRetry,
   scaleSeen,
   seedPrefs,
   seedProgressOnce,
@@ -139,33 +157,6 @@ async function waitSettled(page: Page): Promise<void> {
 /** The stored run's path of one story, or null. */
 async function storedPath(page: Page, storyId: string): Promise<readonly string[] | null> {
   return (await storedStory(page, storyId))?.activeRun?.path ?? null
-}
-
-/**
- * Starts counting the page's requests in flight. The returned function waits until none has been
- * in flight for `quietMs` (load states are sticky, so waitForLoadState('networkidle') can return
- * while a later router prefetch is in flight).
- * Precondition (review R2-FLK-4): start it after the test's last reload or cross-document
- * navigation, and use it only to guard the next one. Chromium can drop a request that a reload
- * cancels (an _rsc prefetch, a chunk) with neither requestfinished nor requestfailed, so it would
- * stay in flight here forever. Clearing the set on framenavigated is no fix: same-document
- * navigations fire it too.
- */
-function trackRequests(page: Page): (quietMs?: number) => Promise<void> {
-  const inFlight = new Set<Request>()
-  page.on('request', (request) => inFlight.add(request))
-  page.on('requestfinished', (request) => inFlight.delete(request))
-  page.on('requestfailed', (request) => inFlight.delete(request))
-  return async (quietMs = 500) => {
-    const deadline = Date.now() + 10_000
-    let quietSince = Date.now()
-    while (Date.now() < deadline) {
-      if (inFlight.size > 0) quietSince = Date.now()
-      else if (Date.now() - quietSince >= quietMs) return
-      await sleep(50)
-    }
-    throw new Error(`requests still in flight: ${[...inFlight].map((r) => r.url()).join(', ')}`)
-  }
 }
 
 /**
@@ -469,7 +460,7 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     const url = playerPath('en', 'river-stones')
     const startC1 = choice('c1', 'start')
     const nextC1 = choice('c1', 'flat_stones')
-    const quiet = trackRequests(page)
+    const quiet = quietRequests(page)
     await openPlayer(page, url)
     await settleFonts(page)
     await waitSettled(page)
@@ -1460,7 +1451,7 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     errors,
   }) => {
     errors.allow({ chromium: [PLANTED_LINE], webkit: [PLANTED_LINE] })
-    const quiet = trackRequests(page)
+    const quiet = quietRequests(page)
     await seedProgressOnce(page, {
       'two-paths': { activeRun: null, endingsFound: ['ending_wise'] },
     })
@@ -2478,7 +2469,7 @@ test.describe('the story player, Step 10b', { tag: '@review' }, () => {
     const html = page.locator('html')
     await seedPrefs(page, null)
     await openPlayer(page, url)
-    const quiet = trackRequests(page)
+    const quiet = quietRequests(page)
     await expect(html, 'nothing stored').not.toHaveAttribute(TEXT_SCALE_ATTRIBUTE)
     await page.locator(MENU).click()
     await expect(page.locator(`${PANEL} label`)).toHaveText(
@@ -3739,7 +3730,7 @@ test.describe('the story player, Step 10d', { tag: '@review' }, () => {
   }) => {
     const graph = fixtureGraph('river-stones')
     await openPlayer(page, playerPath('en', 'river-stones'))
-    const quiet = trackRequests(page)
+    const quiet = quietRequests(page)
     await walk(page, 'river-stones', ['c1'])
     await expect
       .poll(() => storedStory(page, 'river-stones'), { message: 'the run saved in English' })
@@ -4241,6 +4232,162 @@ test.describe('the story player, P1-4 owner screens: the framed panel', { tag: '
     }
   }
 })
+
+// ---------------------------------------------------------------------------------------------
+// P1-3 Step 12a (design p1-step12-design.md §13.4.3 E12-P2 to P5, CRIT-3, H-12c)
+
+test.describe(
+  'the story player, Step 12: the links to Home hold; H-12c',
+  { tag: '@review' },
+  () => {
+    test('E12-P2 /en: the header Exit holds, so a tap on Home within it does nothing', async ({
+      page,
+      errors,
+    }) => {
+      await withHoldRetry(test.info(), async (n) => {
+        const p = await attemptPage(page, errors, n)
+        await watchNavHold(p)
+        await openPlayer(p, playerPath('en', 'two-paths'))
+        await expectHoldWatch(p)
+        const tap = await heldTapIntoHome(p, 'en', 'header a[data-exit]')
+        if (tap.gap === null || tap.gap < LATE_TAP_MS) await tap.verify()
+        return tap
+      })
+    })
+
+    test("E12-P3 /en: the error fallback's All stories holds, so a tap on Home within it does nothing", async ({
+      page,
+      errors,
+    }) => {
+      errors.allow({ chromium: [PLANTED_LINE], webkit: [PLANTED_LINE] })
+      await withHoldRetry(test.info(), async (n) => {
+        const p = await attemptPage(page, errors, n)
+        await watchNavHold(p)
+        // T-a22's plant: scrollIntoView throws once, so the first step's layout effect fails.
+        await p.addInitScript((planted) => {
+          const original = Element.prototype.scrollIntoView
+          Element.prototype.scrollIntoView = function (
+            this: Element,
+            ...args: Parameters<Element['scrollIntoView']>
+          ) {
+            if (window.sessionStorage.getItem('e2e-planted-throw') === null) {
+              window.sessionStorage.setItem('e2e-planted-throw', '1')
+              throw new Error(planted)
+            }
+            return original.apply(this, args)
+          }
+        }, PLANTED_MESSAGE)
+        await openPlayer(p, playerPath('en', 'two-paths'))
+        await expect(p.locator(CHOICES)).not.toHaveAttribute('inert')
+        await p.locator(choice('c1', 'start')).click()
+        const fallbackLink = 'main[data-player-error] a[href="/en"]'
+        await expect(p.locator(fallbackLink), 'precondition: the fallback is visible').toBeVisible()
+        await expectHoldWatch(p)
+        const tap = await heldTapIntoHome(p, 'en', fallbackLink)
+        if (tap.gap === null || tap.gap < LATE_TAP_MS) await tap.verify()
+        return tap
+      })
+    })
+
+    // H-12c (T-a14's method): a client navigation into a resumed player never paints the start node
+    // first. The sampler records every frame of this document; it is emptied just before the tap.
+    for (const from of ['landing', 'home'] as const) {
+      const id = from === 'landing' ? 'E12-P4' : 'E12-P5'
+      test(`${id} /en: H-12c, ${from === 'landing' ? 'Continue on the landing' : "Home's Continue card"} into a resumed player never paints the start node`, async ({
+        page,
+      }) => {
+        await seedProgressOnce(page, {
+          'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: 'en' } },
+        })
+        await sampleOpeningFrames(page)
+        const link =
+          from === 'landing'
+            ? '[data-actions] a[data-story-action="continue"]'
+            : '[data-continue-story="river-stones"] a'
+        const response = await page.goto(from === 'landing' ? '/en/stories/river-stones' : '/en')
+        expect(response?.status(), `precondition: the ${from} page`).toBe(200)
+        await expect(page.locator(link), `precondition: ${link} is shown`).toBeVisible()
+        await page.evaluate(() => {
+          const w = window as unknown as Record<string, unknown>
+          w['__e2eSameDocument'] = true
+          ;(w['__e2eFrames'] as unknown[]).length = 0
+        })
+        await page.locator(link).click()
+        await expect
+          .soft(page.locator(PLAYER), '(g1) the player opens')
+          .toHaveAttribute('data-run-phase', 'open')
+        await expect
+          .soft(page.locator(PART), '(g1) the resumed node')
+          .toHaveAttribute('data-node', 'flat_stones')
+        await frames(page)
+        expect
+          .soft(await pageValue(page, '__e2eSameDocument'), '(g2) a client navigation only')
+          .toBe(true)
+        const seen = await openingFrames(page)
+        const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted`
+        test.info().annotations.push({ type: id, description })
+        console.log(`[player] ${id} (${test.info().project.name}): ${description}`)
+        expect(seen.frames, 'precondition: frames sampled after the tap').toBeGreaterThan(0)
+        expect.soft(seen.painted, '(g3) opening frames that painted the start passage').toBe(0)
+      })
+    }
+
+    // E12-P6 (round 2b, design §19; R2-FS-1, R2-TPP-6): the landing read nothing, so it shows
+    // Start; then a run for the story is saved behind its back (the test writes the bytes another
+    // tab's save leaves, which the landing does not follow, N8). Start sets the hint in every state,
+    // so the resumed player never paints the start passage first. The sampler records every frame of
+    // this document; it is emptied just before the tap.
+    test('E12-P6 /en: H-12c, Start after another tab saved a run opens the resumed player without painting the start node', async ({
+      page,
+    }) => {
+      await sampleOpeningFrames(page)
+      const response = await page.goto('/en/stories/river-stones')
+      expect(response?.status(), 'precondition: the landing').toBe(200)
+      await expect(
+        page.locator('[data-actions]'),
+        'precondition: nothing stored, so the actions show Start',
+      ).toHaveAttribute('data-shown', 'start')
+      const raw = progressRecordBytes({
+        'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: 'en' } },
+      })
+      const before = await page.evaluate(
+        ([key, value]) => {
+          window.localStorage.setItem(key, value)
+          const w = window as unknown as Record<string, unknown>
+          w['__e2eSameDocument'] = true
+          ;(w['__e2eFrames'] as unknown[]).length = 0
+          return {
+            stored: window.localStorage.getItem(key) === value,
+            shown: document.querySelector('[data-actions]')?.getAttribute('data-shown') ?? null,
+            hint: document.documentElement.hasAttribute('data-saved-run'),
+          }
+        },
+        [PROGRESS_KEY, raw] as const,
+      )
+      expect(
+        before,
+        'precondition: the run is stored, the landing still shows Start, no hint before the tap',
+      ).toEqual({ stored: true, shown: 'start', hint: false })
+      await page.locator('[data-actions] a[data-story-action="start"]').click()
+      await expect
+        .soft(page.locator(PLAYER), '(g1) the player opens')
+        .toHaveAttribute('data-run-phase', 'open')
+      await expect
+        .soft(page.locator(PART), '(g1) the player resumes the saved run')
+        .toHaveAttribute('data-node', 'flat_stones')
+      await frames(page)
+      expect
+        .soft(await pageValue(page, '__e2eSameDocument'), '(g2) a client navigation only')
+        .toBe(true)
+      const seen = await openingFrames(page)
+      const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted, ${seen.saved} with the hint`
+      test.info().annotations.push({ type: 'E12-P6', description })
+      console.log(`[player] E12-P6 (${test.info().project.name}): ${description}`)
+      expect(seen.opening, 'precondition: opening frames sampled after the tap').toBeGreaterThan(0)
+      expect.soft(seen.painted, '(g3) opening frames that painted the start passage').toBe(0)
+    })
+  },
+)
 
 // The collector's own negative tests (design §9.3 C4, F5): each must fail in the auto fixture's
 // check, so each is marked test.fail(); one passing here means the collector lets that form by.

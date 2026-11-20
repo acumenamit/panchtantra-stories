@@ -375,8 +375,9 @@ describe('glyph coverage', () => {
   it('covers every messages/hi.json value with the shipped Devanagari and Latin-subset faces', () => {
     const devanagariRanges = rangesOf('devanagari')
     const latinRanges = rangesOf('devanagariLatin')
-    // 37 until P1 Step 11, which added the 9 narration keys (player.readToMe ... narrationUnavailable).
-    expect(MESSAGES_HI).toHaveLength(46)
+    // 37 until P1 Step 11, which added the 9 narration keys (player.readToMe ... narrationUnavailable);
+    // 46 until P1 Step 12, which added the 11 shelf and landing keys (home.continueEmpty ... story.theme).
+    expect(MESSAGES_HI).toHaveLength(57)
     const codePoints = [...codePointsOf(MESSAGES_HI)]
     // Inside a unicode-range, so the browser downloads the face that has the glyph.
     expect(

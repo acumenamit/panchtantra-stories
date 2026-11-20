@@ -25,12 +25,28 @@
 //   from the leaf module scripts/testing/narration-story-id.ts; this file names it only in its
 //   import and in the function, and the same Vitest scan holds that for it (T11-24).
 // - formatted(): a UI string that takes arguments, formatted by the app's own ICU subset.
+// P1-3 Step 12a (design p1-step12-design.md §13.2 W4, §13.5 item 6, §3.17, A20, CRIT-4): the story
+// landing at /{code}/stories/{storyId}.
+// - landingPath(), landingPaths() (every fixture in every enabled locale its package has; the
+//   gated build serves none) and LANDING_DOC_PATHS: two-paths in each enabled locale, kind
+//   'landing', which legRoutes adds on the open legs beside the player pages, titled with the
+//   story's title through the [locale] layout's template.
+// - storyFields(): a fixture's landing and card fields as stored (book, title, description, theme,
+//   duration, age, colour, emoji, addedOn).
+// - PLAYER_NOT_FOUND_PATHS: the story URL without /read leaves (the landing serves it now); an
+//   unknown story's landing, an upper-case id's landing and a locale that is not enabled join.
+// - playerNotFoundPaths(leg) also adds the staging-only featured story's read URL, after the
+//   narrated story's, on every leg but staging. Its id comes from the leaf module
+//   scripts/testing/featured-story-id.ts; this file names it only in its import and in the function,
+//   and the same Vitest scan holds that for it (T12-28). No landing of a staging-only story is
+//   listed here: the tests read those ids at run time, from the page and /build-info.json.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { APP_NAME } from '../src/core/app-info'
 import { formatMessage, parseMessage, type MessageValues } from '../src/core/i18n/message-format'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
+import { FEATURED_STORY_ID } from '../scripts/testing/featured-story-id'
 import { NARRATION_STORY_ID } from '../scripts/testing/narration-story-id'
 import { PICTURE_STORY_ID } from '../scripts/testing/picture-story-id'
 import { launchLeg, legOpen, type LaunchLeg } from './launch-leg'
@@ -84,7 +100,8 @@ export function uiLang(code: LocaleCode): UiLang {
 // ---------------------------------------------------------------------------------------------
 // Routes
 
-export type RouteKind = 'coming-soon' | 'gate' | 'home' | 'grown-ups' | 'player' | 'not-found'
+export type RouteKind =
+  'coming-soon' | 'gate' | 'home' | 'grown-ups' | 'player' | 'landing' | 'not-found'
 
 export interface LegRoute {
   readonly path: string
@@ -133,7 +150,8 @@ export function readerPaths(): { path: string; code: LocaleCode; kind: 'home' | 
 
 /**
  * "/" and every reader route, as the leg's build serves them. The open legs add the two player
- * pages of PLAYER_DOC_PATHS (kind 'player'); the gated leg's player check is its own test.
+ * pages of PLAYER_DOC_PATHS (kind 'player') and the two landings of LANDING_DOC_PATHS (kind
+ * 'landing', Step 12); the gated leg's player and landing check is its own test.
  */
 export function legRoutes(leg: LaunchLeg): LegRoute[] {
   const start: LegRoute = {
@@ -161,7 +179,18 @@ export function legRoutes(leg: LaunchLeg): LegRoute[] {
         title: `${playerFixture(storyId).text[code]?.title ?? ''} – ${APP_NAME}`,
       }))
     : []
-  return [start, ...reader, ...player]
+  const landing = legOpen(leg)
+    ? LANDING_DOC_PATHS.map(({ path: routePath, code, storyId }): LegRoute => ({
+        path: routePath,
+        status: 200,
+        kind: 'landing',
+        lang: code,
+        dir: getLocaleDef(code).dir,
+        // The landing's metadata title is the story title through the layout's template too.
+        title: `${storyFields(storyId, code).title} – ${APP_NAME}`,
+      }))
+    : []
+  return [start, ...reader, ...player, ...landing]
 }
 
 /** The leg's routes plus one unmatched URL: the document checks cover the 404 page too. */
@@ -193,11 +222,23 @@ export interface PlayerFixture {
   readonly version: number
   readonly locales: readonly string[]
   readonly startNodeId: string
+  /** Step 12 (the card and landing fields): as stored. */
+  readonly age: string
+  readonly addedOn: string
+  readonly emoji: string
+  readonly color: string
   readonly nodes: readonly PlayerFixtureNode[]
   readonly text: Readonly<
     Record<
       string,
-      { readonly title: string; readonly nodes: Readonly<Record<string, PlayerFixtureNodeText>> }
+      {
+        readonly title: string
+        readonly description: string
+        readonly theme: string
+        readonly duration: string
+        readonly book: string
+        readonly nodes: Readonly<Record<string, PlayerFixtureNodeText>>
+      }
     >
   >
 }
@@ -261,19 +302,92 @@ export const PLAYER_DOC_PATHS: readonly PlayerPage[] = playerPaths().filter(
   (page) => page.storyId === 'two-paths',
 )
 
+// ---------------------------------------------------------------------------------------------
+// The story landing (P1-3 Step 12a; design p1-step12-design.md §13.2 W4)
+
+/** The landing URL of one story in one locale. */
+export function landingPath(code: LocaleCode, storyId: string): string {
+  return `/${code}/stories/${storyId}`
+}
+
 /**
- * Player-shaped URLs that no build serves (T-a21; design C20): an unknown story, an unknown last
- * segment, the story URL without /read (until Step 12), /en/stories, a locale that is not enabled
- * and an upper-case story id. Each is the bilingual 404 on every leg. The trailing-slash form is
- * not here: Next answers it with a 308 to the real page.
+ * Every landing a review or staging build serves for the fixtures: each catalogue story in each
+ * enabled locale its package has, in registry order (3 fixtures × en, hi). The gated build serves
+ * none. The staging-only stories' landings are not listed: no test opens them by name.
+ */
+export function landingPaths(): PlayerPage[] {
+  return playerPaths().map(({ code, storyId }) => ({
+    path: landingPath(code, storyId),
+    code,
+    storyId,
+  }))
+}
+
+/** The landings the shared document, shell and staging-banner loops visit: two-paths. */
+export const LANDING_DOC_PATHS: readonly PlayerPage[] = landingPaths().filter(
+  (page) => page.storyId === 'two-paths',
+)
+
+/** A fixture's card and landing fields as stored, in one locale (design §3.3, §3.8). */
+export interface StoryFields {
+  readonly storyId: string
+  readonly title: string
+  readonly description: string
+  readonly theme: string
+  readonly duration: string
+  readonly book: string
+  readonly age: string
+  readonly color: string
+  readonly emoji: string
+  readonly addedOn: string
+}
+
+export function storyFields(storyId: string, code: LocaleCode): StoryFields {
+  const fixture = playerFixture(storyId)
+  const text = fixture.text[code]
+  if (!text) throw new Error(`${storyId} has no ${code} text`)
+  for (const [name, value] of Object.entries({
+    age: fixture.age,
+    addedOn: fixture.addedOn,
+    emoji: fixture.emoji,
+    color: fixture.color,
+    description: text.description,
+    theme: text.theme,
+    duration: text.duration,
+    book: text.book,
+  })) {
+    if (typeof value !== 'string' || value === '') throw new Error(`${storyId}: no ${code} ${name}`)
+  }
+  return {
+    storyId,
+    title: text.title,
+    description: text.description,
+    theme: text.theme,
+    duration: text.duration,
+    book: text.book,
+    age: fixture.age,
+    color: fixture.color,
+    emoji: fixture.emoji,
+    addedOn: fixture.addedOn,
+  }
+}
+
+/**
+ * Story-shaped URLs that no build serves (T-a21; design C20; Step 12 §13.5 item 6): an unknown
+ * story, an unknown last segment, /en/stories, a locale that is not enabled and an upper-case story
+ * id, each as a player URL; and since Step 12 the same three as landing URLs (dynamicParams false,
+ * the case rule and disabled locales on the landing route). Each is the bilingual 404 on every leg.
+ * The trailing-slash form is not here: Next answers it with a 308 to the real page.
  */
 export const PLAYER_NOT_FOUND_PATHS = [
   '/en/stories/nope/read',
   '/hi/stories/two-paths/nope',
-  '/en/stories/two-paths',
   '/en/stories',
   '/ar/stories/two-paths/read',
   '/en/stories/TWO-PATHS/read',
+  '/en/stories/nope',
+  '/en/stories/TWO-PATHS',
+  '/ar/stories/two-paths',
 ] as const
 
 /**
@@ -282,7 +396,8 @@ export const PLAYER_NOT_FOUND_PATHS = [
  * staging (design §2.5, S4, F2). On the staging leg that URL is a real page whose pictures load from
  * the media origin, so only player-images.spec.ts, with its media stub, opens it there. Step 11
  * (A28): then the read URL of the staging-only narrated story, likewise a real page on staging,
- * which only player-audio.spec.ts opens there.
+ * which only player-audio.spec.ts opens there. Step 12 (CRIT-4): then the read URL of the
+ * staging-only featured story, a real page with pictures and clips on staging, which no test opens.
  */
 export function playerNotFoundPaths(leg: LaunchLeg): string[] {
   const run = process.env.E2E_LAUNCH
@@ -296,6 +411,7 @@ export function playerNotFoundPaths(leg: LaunchLeg): string[] {
     ...PLAYER_NOT_FOUND_PATHS,
     `/en/stories/${PICTURE_STORY_ID}/read`,
     `/en/stories/${NARRATION_STORY_ID}/read`,
+    `/en/stories/${FEATURED_STORY_ID}/read`,
   ]
 }
 

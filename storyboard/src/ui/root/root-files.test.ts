@@ -7,6 +7,10 @@
 // public/ guards (D10-B: no robots.txt, sitemap or other public file without a robots decision).
 // P1-4b (design p1-step10-design.md D11-P1, P29, §4.1): the player page in the page list, its
 // child-form generateStaticParams, no notFound() and no localized not-found, and its body order.
+// P1 Step 12 (design p1-step12-design.md §3.15 N16, A1; test plan T12-22): the story landing joins
+// the page list with the player's rules: the child-form generateStaticParams, [] while gated, no
+// notFound() (unknown ids are the global bilingual 404), no localized not-found, and a listed story
+// that was not built or lacks the locale stops the build with ids only (it never returns null).
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,6 +34,8 @@ const GLOBAL_NOT_FOUND = 'app/global-not-found.tsx'
 const ROOT_FILES = [GATE_LAYOUT, LOCALE_LAYOUT, GLOBAL_NOT_FOUND]
 /** The Step 10 player page (P1-4b; design p1-step10-design.md D11-P1, P29). */
 const PLAYER_PAGE = 'app/(reader)/[locale]/(player)/stories/[storyId]/read/page.tsx'
+/** The Step 12 story landing (design p1-step12-design.md §3.15 N16). */
+const LANDING_PAGE = 'app/(reader)/[locale]/(site)/stories/[storyId]/page.tsx'
 
 const BOOT_IMPORT = "import { TEXT_SCALE_BOOT_SCRIPT } from '@/core/progress/text-scale-boot'"
 const BOOT_SCRIPT = '<script dangerouslySetInnerHTML={{ __html: TEXT_SCALE_BOOT_SCRIPT }} />'
@@ -203,10 +209,11 @@ describe('the app/ tree (design §4, §7 items 6, 9-10)', () => {
   it('every page under [locale] sets dynamic and dynamicParams itself', () => {
     const pages = appFiles.filter((file) => file.startsWith('app/(reader)/[locale]/'))
     const pageFiles = pages.filter((file) => /\/page\.tsx$/.test(file))
-    expect(pageFiles).toEqual([
+    expect(pageFiles, '(T12-22 g1) the page list').toEqual([
       PLAYER_PAGE,
       'app/(reader)/[locale]/(site)/grown-ups/page.tsx',
       'app/(reader)/[locale]/(site)/page.tsx',
+      LANDING_PAGE,
     ])
     for (const file of pageFiles) {
       const source = read(file)
@@ -241,6 +248,43 @@ describe('the app/ tree (design §4, §7 items 6, 9-10)', () => {
     expect(skip).toBeGreaterThan(0)
     expect(hint).toBeGreaterThan(skip)
     expect(boundary).toBeGreaterThan(hint)
+  })
+
+  it('the story landing lists stories in the child form, [] while gated, never calls notFound() and throws for an unbuilt story (T12-22, Step 12)', () => {
+    const source = read(LANDING_PAGE)
+    // g2: the player's child form, one call per [locale] param; nothing listed while gated.
+    expect
+      .soft(source, '(g2) the child-form signature')
+      .toContain(
+        'export function generateStaticParams({ params }: { params: { locale: string } }) {',
+      )
+    expect
+      .soft(source, '(g2) [] while gated')
+      .toContain('if (!buildLaunch().readerRoutes || code === undefined) return []')
+    expect
+      .soft(source, '(g2) the listed stories')
+      .toContain('return listStoriesForLocale(code).map((s) => ({ storyId: s.storyId }))')
+    // g3: unknown ids are the global bilingual 404 through dynamicParams = false.
+    expect.soft(source, '(g3) no notFound').not.toMatch(/\bnotFound\b/)
+    // g4: no localized not-found anywhere under [locale] (a landing one included).
+    expect
+      .soft(
+        files('app/(reader)/[locale]').filter((file) => /\/not-found\.[^/]+$/.test(file)),
+        '(g4) no not-found file',
+      )
+      .toEqual([])
+    // g5: a listed story that was not built, or lacks the locale, stops the build (ids only).
+    expect
+      .soft(source, '(g5) the missing-story branch throws')
+      .toMatch(
+        /if \(story === null\) throw new Error\(`landing: story \$\{storyId\} was listed but not built`\)/,
+      )
+    expect
+      .soft(source, '(g5) the locale branch throws')
+      .toMatch(
+        /throw new Error\(`landing: story \$\{storyId\} was listed for \$\{code\} but has no \$\{code\} text`\)/,
+      )
+    expect.soft(source, '(g5) never returns null').not.toMatch(/return null\b/)
   })
 
   it('"/" is static and renders Coming soon or the gate from the launch flag', () => {

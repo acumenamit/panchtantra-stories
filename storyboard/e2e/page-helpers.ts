@@ -7,6 +7,13 @@
 // Step 10b adds fixtureGraph's progressSteps, endingsOf and pathTo (T-b5, T-b6).
 // Step 10c second review: the helpers player.spec.ts and player-share.spec.ts share (the last
 // section), moved here from player.spec.ts with no change of behaviour.
+// P1-3 Step 12a (design p1-step12-design.md §13.2): the shared Step 12 helpers, the last sections:
+// W1 the navigation hold watch (watchNavHold, expectHoldWatch, holdRecord, armBox, holdSpans), W2's
+// page side (boxesOf, through scripts/testing/e2e-readers.ts), W5 quietRequests (player.spec.ts's
+// trackRequests, moved), W6 seedRawProgressOnce (seedProgressOnce's body), W7 the share stubs
+// (moved from player-share.spec.ts with no change of behaviour), W8 holdChunksUntil, W9
+// step12ScreenPath, W10 buildInfo and W12 fixedClock. The 12a load stall (§21): clearSiteStorage,
+// which attemptPage and T11-HL1, HL3 and HL4 call before each later attempt.
 //
 // INJECTION: the specs append test elements to <body>, never inside <main>. React may hydrate
 // <main> after the load event that page.goto waits for, and an extra node inside it is a hydration
@@ -15,7 +22,8 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import type { APIRequestContext, Page } from '@playwright/test'
+import type { APIRequestContext, Page, Request } from '@playwright/test'
+import { measureBoxes, type BoxSet } from '../scripts/testing/e2e-readers'
 import { declaredCustomProperties, lintCss } from '../scripts/lint/css-rules'
 import type { LocaleCode } from '../src/core/locales'
 import { TEXT_SCALE_ATTRIBUTE } from '../src/core/progress/text-scale-boot'
@@ -270,6 +278,30 @@ export async function settleFonts(page: Page): Promise<void> {
   )
   await page.evaluate(async () => {
     await document.fonts.ready
+  })
+}
+
+/**
+ * The font settle of a page whose scripts are held (W8, E12-H5 and E12-L5): held async scripts
+ * keep the document loading, and WebKit then keeps document.fonts.ready pending until the load
+ * event (CSS Font Loading: a set is loading while its document is), so settleFonts would wait for
+ * W8's 15 s safety release and the "before" boxes would be read after hydration. This waits on the
+ * faces themselves: two frames, then each loading face until it settles, until no face is loading
+ * after two frames (at most 10 s, then it throws).
+ */
+export async function settleFontFaces(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const twoFrames = (): Promise<void> =>
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    const deadline = performance.now() + 10_000
+    await twoFrames()
+    while (performance.now() < deadline) {
+      const loading = [...document.fonts].filter((face) => face.status === 'loading')
+      if (loading.length === 0) return
+      await Promise.all(loading.map((face) => face.loaded.catch(() => undefined)))
+      await twoFrames()
+    }
+    throw new Error('settleFontFaces: a font face was still loading after 10 s')
   })
 }
 
@@ -708,6 +740,15 @@ export async function seedProgressOnce(
   page: Page,
   stories: Readonly<Record<string, SeededStory>>,
 ): Promise<string> {
+  return seedRawProgressOnce(page, progressRecordBytes(stories))
+}
+
+/**
+ * The bytes seedProgressOnce stores for `stories` (each its fixture's version, the orders 1, 2, …),
+ * for a test that writes them into a page that is already open (E12-P6: a run saved in another tab
+ * after the landing's one read, design p1-step12-design.md §19).
+ */
+export function progressRecordBytes(stories: Readonly<Record<string, SeededStory>>): string {
   const record: ProgressRecord = {
     schema: RECORD_SCHEMA,
     stories: Object.fromEntries(
@@ -722,7 +763,57 @@ export async function seedProgressOnce(
       ]),
     ),
   }
-  const raw = serializeProgress(record)
+  return serializeProgress(record)
+}
+
+/**
+ * Step 12 (design p1-step12-design.md §13.2 W6): seedProgressOnce's body with the bytes given, for a
+ * record no serializer writes (a newer schema, E12-H8 and E12-L18). Same page, same read-back.
+ * Returns the stored bytes.
+ */
+export async function seedRawProgressOnce(page: Page, raw: string): Promise<string> {
+  await onSeedPage(page, 'the page that seeds the progress record', async () => {
+    const stored = await page.evaluate(
+      ([key, value]) => {
+        window.localStorage.setItem(key, value)
+        return window.localStorage.getItem(key)
+      },
+      [PROGRESS_KEY, raw] as const,
+    )
+    expect(stored, 'the seeded progress record').toBe(raw)
+  })
+  return raw
+}
+
+/**
+ * Design p1-step12-design.md §13.9 and §21 (the load stall): empties the site's localStorage, so a
+ * later attempt of an in-test retry starts from the storage the first attempt started from. A page
+ * of the same browser context (attemptPage's fresh page, or the one page T11-HL1, HL3 and HL4
+ * reopen) still holds what an earlier attempt stored: a run it saved, which the reopened player
+ * resumes (E12-P3 then waits for the start node's choice that never comes), or Read to me left on
+ * (T11-HL1's Enter then turns it off). A page with no origin yet (attemptPage's fresh page, on
+ * about:blank) is cleared on the seed page (no app code, as seedProgressOnce). A page already on the
+ * site is cleared where it is: WebKit answers a page that went from the player to the seed page and
+ * back with a 304 (cache revalidation), which openPlayer's 200 precondition refuses (measured, §21).
+ * Precondition: nothing is left in localStorage.
+ */
+export async function clearSiteStorage(page: Page, attempt: number): Promise<void> {
+  const clear = async (): Promise<void> => {
+    const left = await page.evaluate(() => {
+      window.localStorage.clear()
+      return window.localStorage.length
+    })
+    expect(left, `precondition: the context's storage is empty before attempt ${attempt}`).toBe(0)
+  }
+  if (page.url() === 'about:blank') {
+    await onSeedPage(page, 'the page that clears the site storage', clear)
+  } else {
+    await clear()
+  }
+}
+
+/** Opens the seed page (served by page.route: an empty same-origin page), runs `body`, unroutes. */
+async function onSeedPage(page: Page, what: string, body: () => Promise<void>): Promise<void> {
   const isSeedPage = (url: URL): boolean => url.pathname === SEED_PATH
   await page.route(isSeedPage, (route) =>
     route.fulfill({
@@ -732,17 +823,9 @@ export async function seedProgressOnce(
     }),
   )
   const response = await page.goto(SEED_PATH)
-  expect(response?.status(), 'the page that seeds the progress record').toBe(200)
-  const stored = await page.evaluate(
-    ([key, value]) => {
-      window.localStorage.setItem(key, value)
-      return window.localStorage.getItem(key)
-    },
-    [PROGRESS_KEY, raw] as const,
-  )
-  expect(stored, 'the seeded progress record').toBe(raw)
+  expect(response?.status(), what).toBe(200)
+  await body()
   await page.unroute(isSeedPage)
-  return raw
 }
 
 /**
@@ -1129,6 +1212,8 @@ export const LORA_FILE = /\/_next\/static\/media\/lora[^/]*\.woff2$/
 export const NOTO_FILE = /\/_next\/static\/media\/noto[-_]sans[-_]devanagari[^/]*\.woff2$/
 /** An aborted font file: Chromium logs each one; WebKit logs none. */
 export const FONT_FAILED_LINE = /^Failed to load resource: net::ERR_FAILED$/
+/** expectWideFallback's bound on the self-hosted faces' wait after the settle (round 2). */
+export const WIDE_FACES_MS = 5_000
 
 /**
  * Before the page opens: the variant's text size and, for a wide variant, the wide Devanagari
@@ -1159,20 +1244,46 @@ export async function prepareVariant(
 /**
  * The wide variant's precondition (design §5): font files were aborted, every self-hosted
  * Devanagari face failed and both wide 'Noto Sans Devanagari' faces loaded, so the wide fallback
- * lays out the Devanagari text for the whole test.
+ * lays out the Devanagari text for the whole test. `settle` is settleFontFaces on a page whose
+ * scripts are held (W8).
+ * Step 12a review round 2 (R2-TPP-2): a face no text has asked for yet stays 'unloaded' after the
+ * settle (under load on WebKit, all four at once: design §18), and document.fonts.ready does not
+ * wait for it. So, after the settle, each self-hosted Devanagari face still 'unloaded' is
+ * requested with load() (its file is aborted like every other) and the faces are polled every
+ * 50 ms until none is 'unloaded' or 'loading', at most WIDE_FACES_MS; the assertion is unchanged
+ * and still requires 'error' for every one of them.
  */
-export async function expectWideFallback(page: Page, aborted: number): Promise<void> {
+export async function expectWideFallback(
+  page: Page,
+  aborted: number,
+  settle: (page: Page) => Promise<void> = settleFonts,
+): Promise<void> {
   expect(aborted, 'precondition: font files aborted').toBeGreaterThan(0)
   await page.evaluate(async () => {
     await (window as unknown as Record<string, unknown>)['__e2eWideFallback']
   })
-  await settleFonts(page)
-  const faces = await page.evaluate(() =>
-    [...document.fonts].map((face) => ({
+  await settle(page)
+  const faces = await page.evaluate(async (limit) => {
+    const own = (): FontFace[] =>
+      [...document.fonts].filter((face) => {
+        const family = face.family.replace(/["']/g, '')
+        return family !== 'Noto Sans Devanagari' && /devanagari/i.test(family)
+      })
+    const deadline = performance.now() + limit
+    for (const face of own()) {
+      if (face.status === 'unloaded') face.load().catch(() => undefined)
+    }
+    while (
+      performance.now() < deadline &&
+      own().some((face) => face.status === 'unloaded' || face.status === 'loading')
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return [...document.fonts].map((face) => ({
       family: face.family.replace(/["']/g, ''),
       status: face.status,
-    })),
-  )
+    }))
+  }, WIDE_FACES_MS)
   const own = faces.filter(
     (face) => face.family !== 'Noto Sans Devanagari' && /devanagari/i.test(face.family),
   )
@@ -1185,4 +1296,755 @@ export async function expectWideFallback(page: Page, aborted: number): Promise<v
     faces.filter((face) => face.family === 'Noto Sans Devanagari').map((face) => face.status),
     'precondition: both wide fallback faces loaded',
   ).toEqual(['loaded', 'loaded'])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Share stubs (design p1-step12-design.md §13.2 W7): moved unchanged from player-share.spec.ts so
+// the landing's Share tests use the same stubs; only `export` is new.
+
+/** How a share test sets the browser's share and clipboard (C5). */
+export interface ShareSetup {
+  /**
+   * undefined: navigator.share and canShare are both undefined. Otherwise canShare says yes and
+   * share resolves, rejects with an AbortError, never settles, or (deferred) rejects with a
+   * NotAllowedError when the test calls settleLater().
+   */
+  readonly share: 'undefined' | 'resolve' | 'abort' | 'never' | 'deferred'
+  /**
+   * real: the browser's own clipboard (Chromium, permissions granted); else a writeText stub that
+   * resolves, rejects, or (deferred) resolves when the test calls settleLater().
+   */
+  readonly clipboard: 'real' | 'resolve' | 'reject' | 'deferred'
+}
+
+export interface ShareCalls {
+  readonly share: readonly { title: unknown; url: unknown; onNavigator: boolean }[]
+  readonly canShare: number
+  readonly writeText: readonly string[]
+  /** Clicks whose target lies in a Share button. */
+  readonly shareClicks: number
+}
+
+/** Before any page script: the share and clipboard of `setup`, recording every call. */
+export async function stubShare(page: Page, setup: ShareSetup): Promise<void> {
+  await page.addInitScript((wanted) => {
+    const calls = {
+      share: [] as { title: unknown; url: unknown; onNavigator: boolean }[],
+      canShare: 0,
+      writeText: [] as string[],
+      shareClicks: 0,
+    }
+    const w = window as unknown as Record<string, unknown>
+    w['__e2eShare'] = calls
+    // A deferred share or copy hands its settle function to settleLater().
+    const later = (settle: () => void): void => {
+      w['__e2eSettleLater'] = settle
+    }
+    const define = (name: string, value: unknown): void => {
+      Object.defineProperty(Navigator.prototype, name, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value,
+      })
+    }
+    if (wanted.share === 'undefined') {
+      define('share', undefined)
+      define('canShare', undefined)
+    } else {
+      define('canShare', function canShare() {
+        calls.canShare++
+        return true
+      })
+      define('share', function share(this: unknown, data?: { title?: unknown; url?: unknown }) {
+        calls.share.push({ title: data?.title, url: data?.url, onNavigator: this === navigator })
+        if (wanted.share === 'resolve') return Promise.resolve()
+        if (wanted.share === 'abort') {
+          return Promise.reject(new DOMException('e2e: share sheet closed', 'AbortError'))
+        }
+        if (wanted.share === 'deferred') {
+          return new Promise<void>((_, reject) => {
+            later(() => reject(new DOMException('e2e: share failed', 'NotAllowedError')))
+          })
+        }
+        return new Promise<void>(() => undefined)
+      })
+    }
+    if (wanted.clipboard !== 'real') {
+      const clipboard = {
+        writeText(text: unknown): Promise<void> {
+          calls.writeText.push(String(text))
+          if (wanted.clipboard === 'deferred') {
+            return new Promise<void>((resolve) => {
+              later(() => resolve())
+            })
+          }
+          return wanted.clipboard === 'resolve'
+            ? Promise.resolve()
+            : Promise.reject(new DOMException('e2e: copy refused', 'NotAllowedError'))
+        },
+      }
+      Object.defineProperty(Navigator.prototype, 'clipboard', {
+        configurable: true,
+        enumerable: true,
+        get: () => clipboard,
+      })
+    }
+    document.addEventListener(
+      'click',
+      (event) => {
+        if (event.target instanceof Element && event.target.closest('button[data-share]')) {
+          calls.shareClicks++
+        }
+      },
+      { capture: true },
+    )
+  }, setup)
+}
+
+export async function shareCalls(page: Page): Promise<ShareCalls> {
+  return pageValue<ShareCalls>(page, '__e2eShare')
+}
+
+/** Settles the deferred share (rejects with a NotAllowedError) or copy (resolves). */
+export async function settleLater(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const settle = (window as unknown as Record<string, unknown>)['__e2eSettleLater']
+    if (typeof settle !== 'function') throw new Error('nothing deferred to settle')
+    ;(settle as () => void)()
+  })
+}
+
+/** C5: the page sees the share and canShare the setup asked for, whatever the browser exposes. */
+export async function expectShareSetup(page: Page, setup: ShareSetup): Promise<void> {
+  const kind = setup.share === 'undefined' ? 'undefined' : 'function'
+  expect(
+    await page.evaluate(() => [typeof navigator.share, typeof navigator.canShare]),
+    'navigator.share and canShare as stubbed (C5)',
+  ).toEqual([kind, kind])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Requests in flight (design p1-step12-design.md §13.2 W5): player.spec.ts's trackRequests,
+// moved unchanged under the name quietRequests. Every Step 12 test that reloads, opens another
+// page after a reader page or taps the language switch waits for it first (§13.1 E: WebKit
+// reports a router prefetch that a cross-document navigation aborts as a page error).
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Starts counting the page's requests in flight. The returned function waits until none has been
+ * in flight for `quietMs` (load states are sticky, so waitForLoadState('networkidle') can return
+ * while a later router prefetch is in flight).
+ * Precondition (review R2-FLK-4): start it after the test's last reload or cross-document
+ * navigation, and use it only to guard the next one. Chromium can drop a request that a reload
+ * cancels (an _rsc prefetch, a chunk) with neither requestfinished nor requestfailed, so it would
+ * stay in flight here forever. Clearing the set on framenavigated is no fix: same-document
+ * navigations fire it too.
+ */
+export function quietRequests(page: Page): (quietMs?: number) => Promise<void> {
+  const inFlight = new Set<Request>()
+  page.on('request', (request) => inFlight.add(request))
+  page.on('requestfinished', (request) => inFlight.delete(request))
+  page.on('requestfailed', (request) => inFlight.delete(request))
+  return async (quietMs = 500) => {
+    const deadline = Date.now() + 10_000
+    let quietSince = Date.now()
+    while (Date.now() < deadline) {
+      if (inFlight.size > 0) quietSince = Date.now()
+      else if (Date.now() - quietSince >= quietMs) return
+      await sleep(50)
+    }
+    throw new Error(`requests still in flight: ${[...inFlight].map((r) => r.url()).join(', ')}`)
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The navigation hold watch (design p1-step12-design.md §13.1 C, §13.2 W1; rules TIMING TESTS):
+// every set and removal of data-nav-hold on <html>, and every pointerdown, click and keydown, each
+// stamped with performance.now() in the page. The records live on the document, so they survive
+// soft navigations (the hold's whole point: it covers the old page and the new one).
+
+/** The hold attribute on <html> (SPEC:462, design §4.6), written out here. */
+export const HOLD_ATTRIBUTE = 'data-nav-hold'
+/**
+ * SPEC:462's 500 ms, written out: a test never reads the product's NAV_HOLD_MS, which a mutant
+ * (MU12-3) changes.
+ */
+export const SPEC_HOLD_MS = 500
+
+/** One record of the hold watch. */
+export interface HoldEvent {
+  readonly type: 'on' | 'off' | 'pointerdown' | 'click' | 'keydown'
+  /** performance.now() in the page. */
+  readonly t: number
+  readonly trusted?: boolean
+  readonly x?: number
+  readonly y?: number
+  readonly key?: string
+  /** Whether <html> held the attribute when the event reached window (capture). */
+  readonly held?: boolean
+  /** The event target: its element name and data-* attributes. */
+  readonly target?: string
+  /** Whether the target lies inside main. */
+  readonly inMain?: boolean
+  /** Whether the armed element's box held the point at that moment; null when none is armed. */
+  readonly inArmed?: boolean | null
+  /** location.pathname at the event. */
+  readonly path?: string
+}
+
+/**
+ * Before any page script (W1): the hold watch. A set or removal of the attribute is stamped when
+ * the setter is called (setAttribute, removeAttribute and toggleAttribute on <html> are wrapped:
+ * a MutationObserver callback only runs after the click handler that set it returns), and recorded
+ * by a MutationObserver on the document (subtree, attributeFilter [HOLD_ATTRIBUTE], records of
+ * <html> only: <html> does not exist yet when an init script runs), which takes the setter's
+ * stamp, or its own time for a change made another way. expectHoldWatch is its self-check.
+ */
+export async function watchNavHold(page: Page): Promise<void> {
+  await page.addInitScript((attribute) => {
+    const w = window as unknown as Record<string, unknown>
+    const events: Record<string, unknown>[] = []
+    w['__e2eHold'] = events
+    w['__e2eHoldArmed'] = null
+    // An init script runs before the parser has made <html> (documentElement is null on both
+    // engines), so <html> is read when it is needed and the observer watches the document.
+    const held = (): boolean => document.documentElement?.hasAttribute(attribute) ?? false
+    const stamps: number[] = []
+    const proto = Element.prototype
+    for (const name of ['setAttribute', 'removeAttribute', 'toggleAttribute'] as const) {
+      const original = proto[name] as unknown as (...args: unknown[]) => unknown
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value: function (this: Element, ...args: unknown[]) {
+          if (this === document.documentElement && args[0] === attribute) {
+            stamps.push(performance.now())
+          }
+          return original.apply(this, args)
+        },
+      })
+    }
+    new MutationObserver((all) => {
+      const records = all.filter((record) => record.target === document.documentElement)
+      records.forEach((record, index) => {
+        const before = record.oldValue !== null
+        const next = records[index + 1]
+        const after = next === undefined ? held() : next.oldValue !== null
+        const t = stamps.shift() ?? performance.now()
+        if (after) events.push({ type: 'on', t })
+        else if (before) events.push({ type: 'off', t })
+      })
+    }).observe(document, {
+      attributes: true,
+      attributeFilter: [attribute],
+      attributeOldValue: true,
+      subtree: true,
+    })
+    const describe = (target: EventTarget | null): string => {
+      if (!(target instanceof Element)) return target === null ? 'null' : 'window or document'
+      const marks = [...target.attributes]
+        .filter((a) => a.name.startsWith('data-'))
+        .map((a) => `[${a.name}${a.value === '' ? '' : `="${a.value}"`}]`)
+        .join('')
+      return `${target.localName}${marks}`
+    }
+    const inArmed = (x: number, y: number): boolean | null => {
+      const selector = w['__e2eHoldArmed']
+      if (typeof selector !== 'string') return null
+      const element = document.querySelector(selector)
+      if (element === null) return false
+      const box = element.getBoundingClientRect()
+      return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom
+    }
+    for (const type of ['pointerdown', 'click'] as const) {
+      window.addEventListener(
+        type,
+        (event) => {
+          const e = event as MouseEvent
+          events.push({
+            type,
+            t: performance.now(),
+            trusted: e.isTrusted,
+            x: e.clientX,
+            y: e.clientY,
+            held: held(),
+            target: describe(e.target),
+            inMain: e.target instanceof Element && e.target.closest('main') !== null,
+            inArmed: inArmed(e.clientX, e.clientY),
+            path: location.pathname,
+          })
+        },
+        { capture: true },
+      )
+    }
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        events.push({
+          type: 'keydown',
+          t: performance.now(),
+          trusted: event.isTrusted,
+          key: event.key,
+          held: held(),
+          target: describe(event.target),
+          path: location.pathname,
+        })
+      },
+      { capture: true },
+    )
+  }, HOLD_ATTRIBUTE)
+}
+
+/**
+ * W1's self-check, the first precondition of every hold test: the test sets the attribute and
+ * removes it, and the watch must record exactly [on, off] (MR12-1, an observer that filters
+ * another attribute name, turns this red). Those two records are then dropped.
+ */
+export async function expectHoldWatch(page: Page): Promise<void> {
+  const seen = await page.evaluate(async (attribute) => {
+    const events = (window as unknown as Record<string, unknown>)['__e2eHold'] as
+      { type: string }[] | undefined
+    if (events === undefined) return ['the watch is not installed']
+    const from = events.length
+    document.documentElement.setAttribute(attribute, '')
+    document.documentElement.removeAttribute(attribute)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    return events.splice(from).map((event) => event.type)
+  }, HOLD_ATTRIBUTE)
+  expect(seen, 'precondition: the hold watch records a set and a removal (W1 self-check)').toEqual([
+    'on',
+    'off',
+  ])
+}
+
+/** The hold watch's records so far (W1). */
+export async function holdRecord(page: Page): Promise<HoldEvent[]> {
+  return page.evaluate(() => [
+    ...(((window as unknown as Record<string, unknown>)['__e2eHold'] as HoldEvent[] | undefined) ??
+      []),
+  ])
+}
+
+/**
+ * Arms `selector` (W1): from now on each pointerdown and click records whether that element's box,
+ * read at the event, held the point. Returns the box now (viewport coordinates).
+ */
+export async function armBox(page: Page, selector: string): Promise<Box> {
+  return page.evaluate((wanted) => {
+    ;(window as unknown as Record<string, unknown>)['__e2eHoldArmed'] = wanted
+    const element = document.querySelector(wanted)
+    if (element === null) throw new Error(`armBox: no ${wanted}`)
+    const box = element.getBoundingClientRect()
+    return { left: box.left, top: box.top, right: box.right, bottom: box.bottom }
+  }, selector)
+}
+
+/** One hold: its first set, every set while it lasted, and its removal (null while it lasts). */
+export interface HoldSpan {
+  readonly on: number
+  readonly sets: readonly number[]
+  readonly off: number | null
+}
+
+/** The holds the watch saw, in order. */
+export function holdSpans(events: readonly HoldEvent[]): HoldSpan[] {
+  const spans: HoldSpan[] = []
+  let open: { on: number; sets: number[] } | null = null
+  for (const event of events) {
+    if (event.type === 'on') {
+      if (open === null) open = { on: event.t, sets: [event.t] }
+      else open.sets.push(event.t)
+    } else if (event.type === 'off' && open !== null) {
+      spans.push({ ...open, off: event.t })
+      open = null
+    }
+  }
+  if (open !== null) spans.push({ ...open, off: null })
+  return spans
+}
+
+/**
+ * 13.1 C "after the hold": waits in the page until <html> has no hold attribute (at most 2 s, so a
+ * hold that is never released fails as `released: false`, not as a timeout), then two frames and a
+ * 100 ms page timer. `at` is performance.now() when it ends.
+ */
+export async function afterHold(page: Page): Promise<{ released: boolean; at: number }> {
+  return page.evaluate(async (attribute) => {
+    const html = document.documentElement
+    let released = true
+    if (html.hasAttribute(attribute)) {
+      released = await new Promise<boolean>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (html.hasAttribute(attribute)) return
+          observer.disconnect()
+          resolve(true)
+        })
+        observer.observe(html, { attributes: true, attributeFilter: [attribute] })
+        setTimeout(() => {
+          observer.disconnect()
+          resolve(!html.hasAttribute(attribute))
+        }, 2000)
+      })
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return { released, at: performance.now() }
+  }, HOLD_ATTRIBUTE)
+}
+
+/** What lies at a point, read from the boxes of `selectors` (13.1 I: never elementFromPoint under a hold). */
+export async function boxesAt(
+  page: Page,
+  point: { readonly x: number; readonly y: number },
+  selectors: readonly string[],
+): Promise<string[]> {
+  return page.evaluate(
+    ({ x, y, wanted }) =>
+      wanted.filter((selector) =>
+        [...document.querySelectorAll(selector)].some((element) => {
+          const box = element.getBoundingClientRect()
+          return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom
+        }),
+      ),
+    { x: point.x, y: point.y, wanted: [...selectors] },
+  )
+}
+
+/** Scrolls to the end of the page; returns scrollY and the page's length in viewports (13.1 K). */
+export async function scrollToBottom(
+  page: Page,
+): Promise<{ scrollY: number; ratio: number; scrollHeight: number; innerHeight: number }> {
+  return page.evaluate(async () => {
+    const scrolling = document.scrollingElement ?? document.documentElement
+    window.scrollTo(0, scrolling.scrollHeight)
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    return {
+      scrollY: window.scrollY,
+      ratio: scrolling.scrollHeight / window.innerHeight,
+      scrollHeight: scrolling.scrollHeight,
+      innerHeight: window.innerHeight,
+    }
+  })
+}
+
+/**
+ * 13.9: the page of an attempt, the test's own first, then a new page of its context. Before a
+ * later attempt every open page of the context is closed ("the test closes the page"), so a late
+ * attempt's page, still holding its player or Home, cannot slow the next one. The new page shares
+ * the context's localStorage, so it is emptied first (§21): the attempt then starts from the storage
+ * attempt 1 started from and seeds its own, never from a run a late attempt saved (E12-P3 resumed
+ * it and waited 30 s for the start node's choice; E12-L11a tapped Continue under Start's name).
+ */
+export async function attemptPage(page: Page, errors: ConsoleErrors, n: number): Promise<Page> {
+  if (n === 1) return page
+  for (const open of page.context().pages()) await open.close()
+  const fresh = await page.context().newPage()
+  errors.watch(fresh)
+  await clearSiteStorage(fresh, n)
+  return fresh
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 12's CI-parity variants (design p1-step12-design.md §13.1 F; rules LAYOUT STABILITY)
+
+export interface Step12Variant extends RowVariant {
+  readonly name: 'V1' | 'V2' | 'V3' | 'V4'
+  /** A 320 px viewport (V4). */
+  readonly narrow: boolean
+}
+
+/**
+ * V1 /en 100% with the fonts as shipped; V2 /hi 100% under the wide Devanagari fallback with the
+ * self-hosted font files aborted; V3 V2 at 150% (the phones); V4 V3 at a 320 px viewport.
+ */
+export const STEP12_VARIANTS: Readonly<Record<Step12Variant['name'], Step12Variant>> = {
+  V1: { name: 'V1', code: 'en', scale: 100, wide: false, narrow: false },
+  V2: { name: 'V2', code: 'hi', scale: 100, wide: true, narrow: false },
+  V3: { name: 'V3', code: 'hi', scale: 150, wide: true, narrow: false },
+  V4: { name: 'V4', code: 'hi', scale: 150, wide: true, narrow: true },
+}
+
+/** A variant's title part, e.g. "V3 /hi 150% wide". */
+export function variantTitle(variant: Step12Variant): string {
+  return `${variant.name} /${variant.code} ${variant.scale}%${variant.wide ? ' wide' : ''}${variant.narrow ? ' 320 px' : ''}`
+}
+
+/** 150% text runs on the phones only (V3, V4): the reason a tablet skips, else null. */
+export function variantSkip(variant: Step12Variant, project: string): string | null {
+  return variant.scale !== 100 && !ROW_PHONES.includes(project) ? '150% text: the phones' : null
+}
+
+/** Before the page opens: the variant's viewport, text size and fonts. Returns the abort count. */
+export async function prepareStep12Variant(
+  page: Page,
+  variant: Step12Variant,
+  errors: ConsoleErrors,
+): Promise<() => number> {
+  if (variant.narrow) {
+    const viewport = page.viewportSize()
+    if (!viewport) throw new Error('the project sets no viewport')
+    await page.setViewportSize({ width: 320, height: viewport.height })
+  }
+  return prepareVariant(page, variant, errors)
+}
+
+/**
+ * After the page opened: the variant's precondition (wide fonts; the stored text size). With
+ * scriptsHeld (W8 holds the chunks), the fonts are settled by settleFontFaces.
+ */
+export async function expectStep12Variant(
+  page: Page,
+  variant: Step12Variant,
+  aborted: () => number,
+  { scriptsHeld = false }: { readonly scriptsHeld?: boolean } = {},
+): Promise<void> {
+  const settle = scriptsHeld ? settleFontFaces : settleFonts
+  if (variant.wide) await expectWideFallback(page, aborted(), settle)
+  else await settle(page)
+  expect(
+    await page.locator('html').getAttribute('data-text-scale'),
+    `precondition: the text size of ${variantTitle(variant)}`,
+  ).toBe(variant.scale === 100 ? null : String(variant.scale))
+}
+
+// ---------------------------------------------------------------------------------------------
+// A held tap into Home (design p1-step12-design.md §13.4.3 E12-P1 to P3, CRIT-3): the player's
+// three links to Home render through HeldLink, so a second tap on Home within 500 ms is refused.
+
+/** The fixture stories (the catalogue every open build lists); the only cards a test may tap. */
+const TAPPABLE_IDS: readonly string[] = ['lantern-walk', 'river-stones', 'two-paths']
+
+/** One run of the scenario: the gap, and the groups to check once the attempt counts. */
+export interface HeldHomeTap extends HoldAttempt {
+  readonly verify: () => Promise<void>
+}
+
+/**
+ * Taps `source` (a link to /`code` on a player page, W1 installed and self-checked) at its
+ * centre; as soon as Home has read progress, arms the first fixture card whose centre lies in the
+ * viewport and taps that centre. verify() then checks (g0) the hold began inside the first click
+ * and was on at the second pointerdown, whose point lay in the card; (g1) after the hold the URL
+ * is still Home; (g2) after the hold a tap at the same point opens that card's landing.
+ */
+export async function heldTapIntoHome(
+  page: Page,
+  code: LocaleCode,
+  source: string,
+): Promise<HeldHomeTap> {
+  const from = (await holdRecord(page)).length
+  const start = await centreInViewport(page, source)
+  await page.mouse.click(start.x, start.y)
+  const target = await page.evaluate(
+    async ({ home, ids }) => {
+      const ready = (): boolean =>
+        location.pathname === home &&
+        document.querySelector('[data-home-progress][data-phase="ready"]') !== null
+      const deadline = performance.now() + 5000
+      while (!ready() && performance.now() < deadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+      }
+      if (!ready()) return null
+      const fixtures = [...document.querySelectorAll('[data-home-list] [data-story-card]')].filter(
+        (card) => ids.includes(card.getAttribute('data-story-card') ?? ''),
+      )
+      const centre = (card: Element) => {
+        const box = card.getBoundingClientRect()
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      }
+      const inView = ({ x, y }: { x: number; y: number }): boolean =>
+        x > 0 && y > 0 && x < document.documentElement.clientWidth && y < window.innerHeight
+      for (const card of fixtures) {
+        const point = centre(card)
+        if (inView(point)) {
+          return { id: card.getAttribute('data-story-card') ?? '', ...point, scrolled: false }
+        }
+      }
+      // At 150% text on a short phone Home opens with every card below the fold: a finger can only
+      // tap what is on screen, so the first fixture card is scrolled into view (as
+      // centreInViewport does, 13.1 K).
+      const first = fixtures[0]
+      if (first === undefined) return null
+      first.scrollIntoView({ block: 'center', inline: 'center' })
+      const point = centre(first)
+      if (!inView(point)) return null
+      return { id: first.getAttribute('data-story-card') ?? '', ...point, scrolled: true }
+    },
+    { home: `/${code}`, ids: [...TAPPABLE_IDS] },
+  )
+  if (target === null) {
+    return {
+      gap: null,
+      verify: () => {
+        throw new Error(`precondition: Home /${code} read progress and showed a fixture card`)
+      },
+    }
+  }
+  const selector = `[data-home-list] [data-story-card="${target.id}"]`
+  if (target.scrolled) {
+    console.log(`[held tap into Home] /${code}: ${target.id} scrolled into view for the second tap`)
+  }
+  await armBox(page, selector)
+  await page.mouse.click(target.x, target.y)
+  const events = (await holdRecord(page)).slice(from)
+  const span = holdSpans(events)[0]
+  const downs = events.filter((event) => event.type === 'pointerdown')
+  const second = downs[1]
+  const firstClick = events.find((event) => event.type === 'click')
+  const gap = span !== undefined && second !== undefined ? second.t - span.on : null
+  return {
+    gap,
+    verify: async () => {
+      expect.soft(span, '(g0) a hold began at the tap on the link to Home').toBeDefined()
+      expect
+        .soft(
+          span !== undefined && firstClick !== undefined ? span.on - firstClick.t : null,
+          `(g0) the hold began inside the first click (set − click, ms; ${source})`,
+        )
+        .toBeGreaterThanOrEqual(0)
+      expect
+        .soft(
+          span !== undefined && firstClick !== undefined ? span.on - firstClick.t : null,
+          `(g0) the hold began inside the first click (set − click, ms; ${source})`,
+        )
+        .toBeLessThanOrEqual(50)
+      expect.soft(second?.held, '(g0) the hold was on at the second pointerdown').toBe(true)
+      expect.soft(second?.inArmed, `(g0) the second point lay in ${selector}'s box`).toBe(true)
+      const after = await afterHold(page)
+      expect.soft(after.released, '(g1) the hold was released').toBe(true)
+      expect
+        .soft(new URL(page.url()).pathname, '(g1) after the hold the URL is still Home')
+        .toBe(`/${code}`)
+      await page.mouse.click(target.x, target.y)
+      await page
+        .waitForURL((url) => url.pathname === `/${code}/stories/${target.id}`, { timeout: 5000 })
+        .catch(() => undefined)
+      expect
+        .soft(
+          new URL(page.url()).pathname,
+          "(g2) after the hold a tap there opens the card's landing",
+        )
+        .toBe(`/${code}/stories/${target.id}`)
+    },
+  }
+}
+
+/** One attempt of a hold scenario: the gap from the hold's set to the second pointerdown. */
+export interface HoldAttempt {
+  /**
+   * ms from the first hold's set to the second pointerdown; null when no hold was seen at the second
+   * tap (the attempt's groups have run by then, or a precondition threw).
+   */
+  readonly gap: number | null
+}
+
+/**
+ * The in-test retry of 13.9: runs `attempt` (each on a fresh page it opens itself) up to three
+ * times while its second tap came LATE_TAP_MS or more after the hold began (the destination was
+ * not ready in time). Each gap is annotated. Fails as "timing" when all three are late; never
+ * passes on a late tap. A null gap is not a late tap: no hold was seen at all, so that attempt
+ * counts and its own groups decide (a product that never holds fails at its (g0) group, not as
+ * "timing"; mutant prover 1, P1 Step 12a). An attempt returns null only after its groups ran.
+ * Returns the attempt number that counted.
+ */
+export async function withHoldRetry(
+  info: { readonly annotations: { type: string; description?: string }[] },
+  attempt: (n: number) => Promise<HoldAttempt>,
+): Promise<number> {
+  const gaps: string[] = []
+  for (let n = 1; n <= 3; n++) {
+    const { gap } = await attempt(n)
+    info.annotations.push({ type: 'hold gap', description: `attempt ${n}: ${String(gap)} ms` })
+    gaps.push(String(gap))
+    if (gap === null || gap < LATE_TAP_MS) return n
+  }
+  throw new Error(
+    `timing: the second tap came ${LATE_TAP_MS} ms or more after the hold began on all 3 attempts (gaps ${gaps.join(', ')} ms)`,
+  )
+}
+
+/** W2, the page side: each selector's boxes in page coordinates, and the document's scroll size. */
+export async function boxesOf(page: Page, selectors: readonly string[]): Promise<BoxSet> {
+  return page.evaluate(measureBoxes, [...selectors])
+}
+
+/**
+ * W8 (the form of player-audio.spec.ts's chunk hold): holds every JavaScript chunk, never the CSS,
+ * until the returned release() is called (at most 15 s), so the server HTML paints and stays
+ * unhydrated. held() counts the held requests; a test asserts it is above 0.
+ */
+export async function holdChunksUntil(
+  page: Page,
+): Promise<{ readonly release: () => void; readonly held: () => number }> {
+  let release = (): void => undefined
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let held = 0
+  await page.route(
+    (url) => url.pathname.startsWith('/_next/static/chunks/') && url.pathname.endsWith('.js'),
+    async (route) => {
+      held++
+      await Promise.race([released, new Promise((resolve) => setTimeout(resolve, 15_000))])
+      await route.continue().catch(() => undefined)
+    },
+  )
+  return { release: () => release(), held: () => held }
+}
+
+/** Where the P1-3 exit screens go: storyboard/migration-input/step12-screens/ (git-ignored). */
+const STEP12_SCREENS_DIR = path.join(ROOT, 'migration-input', 'step12-screens')
+
+/** W9: a P1-3 screen's file, <nn>-<screen>-<project>-<scale>.png. */
+export function step12ScreenPath(
+  nn: string,
+  name: string,
+  project: string,
+  scale: TextScale,
+): string {
+  return path.join(STEP12_SCREENS_DIR, `${nn}-${name}-${project}-${scale}.png`)
+}
+
+/** W10: what /build-info.json says about the build's stories (the ids are read at run time). */
+export interface BuildInfoStories {
+  readonly featuredStoryId: string | null
+  readonly storyIds: readonly string[]
+}
+
+/** W10: GET /build-info.json (200 on the open legs), parsed for the featured id and the story ids. */
+export async function buildInfo(request: APIRequestContext): Promise<BuildInfoStories> {
+  const response = await request.get('/build-info.json')
+  expect(response.status(), 'precondition: /build-info.json').toBe(200)
+  const info = (await response.json()) as {
+    featuredStoryId?: unknown
+    stories?: { storyId?: unknown }[]
+  }
+  const storyIds = (info.stories ?? []).map((story) => story.storyId)
+  if (!storyIds.every((id): id is string => typeof id === 'string')) {
+    throw new Error('/build-info.json: a story without a storyId')
+  }
+  const featured = info.featuredStoryId
+  if (featured !== null && typeof featured !== 'string') {
+    throw new Error('/build-info.json: featuredStoryId is neither a string nor null')
+  }
+  return { featuredStoryId: featured, storyIds }
+}
+
+/**
+ * W12: fixes the page's Date.now() at `iso` (page.clock.setFixedTime: Date only; timers and
+ * performance.now() keep running, PR-2) before the first navigation. expectFixedClock is the hard
+ * precondition after the first load (S12-AUD-1).
+ */
+export async function fixedClock(page: Page, iso: string): Promise<void> {
+  await page.clock.setFixedTime(new Date(iso))
+}
+
+export async function expectFixedClock(page: Page, iso: string): Promise<void> {
+  expect(
+    await page.evaluate(() => Date.now()),
+    `precondition: Date.now() in the page is ${iso}`,
+  ).toBe(new Date(iso).getTime())
 }

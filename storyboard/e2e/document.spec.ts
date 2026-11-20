@@ -14,6 +14,10 @@
 // P1-4b (design p1-step10-design.md §9.3 loops; Step 10a): on the open legs the routes include the
 // two-paths player pages (kind 'player'), which carry the same shared document, the story's title
 // and, as their first focusable element, the skip link to #main in the page's language.
+// P1-3 Step 12a (design p1-step12-design.md §13.4.5 E12-R4, A1, A2): on the open legs the routes
+// also include the two two-paths landings (kind 'landing', documentRoutes through legRoutes), titled
+// with the story's title through the [locale] layout's template (W4); they carry the same shared
+// document. The gated leg lists none (its landings are 404s, gated.spec.ts).
 import type { APIRequestContext, Page } from '@playwright/test'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { TEXT_SCALE_BOOT_SCRIPT } from '../src/core/progress/text-scale-boot'

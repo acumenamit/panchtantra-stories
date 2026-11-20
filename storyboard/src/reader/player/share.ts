@@ -1,9 +1,12 @@
-// Share from the ending card (Step 10c; design p1-step10-design.md D11-P14, §4.3, §8; spec §6.1
-// player "Share", §6.5 feature detection). Pure and framework-free: the island passes the
-// browser's navigator and its own status holder, a test passes fakes.
-// - shareUrlOf: the player URL in the content locale (the language the reader is reading, which may
-//   differ from the page's after a stored-first resume or a switch), built from the origin only, so
-//   the page's query and hash never leave. Step 12 moves it to the landing URL (H-12a).
+// Share from the ending card and the story landing (Step 10c; design p1-step10-design.md D11-P14,
+// §4.3, §8; P1 Step 12, design p1-step12-design.md §3.11 N12; spec §6.1 player "Share" and landing
+// "Share", §6.5 feature detection). Pure and framework-free: the island passes the browser's
+// navigator and its own status holder, a test passes fakes.
+// - shareUrlOf: the story's landing URL, /{locale}/stories/{storyId}, in the content locale (the
+//   language the reader is reading, which may differ from the page's after a stored-first resume
+//   or a switch), built from the origin only, so the page's query and hash never leave. The landing
+//   carries the Open Graph tags, so a shared link opens there, never straight into the player
+//   (Step 12, H-12a).
 // - runShare(env, { title, url }), the chain:
 //   1. While a share or a copy is pending, a tap is ignored (a second share() would reject with
 //      InvalidStateError).
@@ -23,7 +26,7 @@ import type { LocaleCode } from '../../core/locales'
 /** idle: nothing shown; pending: a share or copy runs; copied: "Link copied."; manual: the field. */
 export type ShareStatus = 'idle' | 'pending' | 'copied' | 'manual'
 
-/** What is shared: the story title in the content locale and the player URL. */
+/** What is shared: the story title in the content locale and the landing URL. */
 export interface ShareTarget {
   readonly title: string
   readonly url: string
@@ -48,13 +51,13 @@ export interface ShareEnv {
   readonly setStatus: (status: ShareStatus) => void
 }
 
-/** The player URL in the content locale: no query, no hash. */
+/** The story's landing URL in the content locale: no query, no hash. */
 export function shareUrlOf(
   where: Pick<Location, 'origin'>,
   storyId: string,
   contentLocale: LocaleCode,
 ): string {
-  return `${where.origin}/${contentLocale}/stories/${storyId}/read`
+  return `${where.origin}/${contentLocale}/stories/${storyId}`
 }
 
 function isAbortError(error: unknown): boolean {

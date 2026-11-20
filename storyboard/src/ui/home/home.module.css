@@ -1,0 +1,214 @@
+/*
+ * Home: the story shelf (P1 Step 12, design p1-step12-design.md 3.3, 3.5, 3.6, 3.24; spec SPEC:433,
+ * :496, :499). Token names only (colour and time literals live in tokens.css); logical properties
+ * only (RC-12). Widths are in rem, so they do not follow the text size (DEC:20).
+ * - Reserved cells (N6): the badge cell and the Continue cell are one-area grids; every variant
+ *   sits in that area and the hidden ones are visibility: hidden (no display, size or position
+ *   change), so the cell keeps the largest variant's box in every state and the progress read
+ *   moves nothing. Hidden variants are not hit-testable and not focusable.
+ * - A card is one target: its only link (the title) has an ::after that covers the card's border
+ *   box (the card is the positioned box and has no overflow clip, so the ::after reaches out over
+ *   the colour bar and the border, with the card's radius); the card shows the focus ring while
+ *   that link has keyboard focus.
+ * - The story colour is a custom property set per card (--story-color, the bar; decorative).
+ * - The type ladder never runs backwards: h1 (--fs-title, base.css) > the section h2s and the
+ *   hero's title (--fs-story) > the card titles and the card descriptions (--fs-body), so nothing
+ *   inside a card reads larger than its title (the h3 keeps its bold weight).
+ */
+
+.section {
+  margin-block: 0 var(--space-6);
+}
+
+.section > h2 {
+  font-size: var(--fs-story);
+}
+
+/* As many columns of at least 18rem as fit: one on phones, two on portrait tablets, three wider. */
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.heroList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  --story-color: var(--color-line-strong);
+  --card-border: 2px;
+  --card-bar: 4px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-block-size: var(--target-min);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-4);
+  border: var(--card-border) solid var(--color-line-strong);
+  border-block-start: var(--card-bar) solid var(--story-color);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  /* The house rule for taps (base.css: a, button, summary): the card's real target is its link's
+     ::after, which an inline <a> cannot give touch-action to, so the card sets it. */
+  touch-action: manipulation;
+}
+
+.card:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.card:has(a:focus-visible) {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+/* The containing block is the card's padding box (CSS 2.1 §10.1), so the insets reach out by the
+   bar and the border widths: a tap on the colour bar or the border opens the card too. */
+.card a::after {
+  content: '';
+  position: absolute;
+  inset-block-start: calc(-1 * var(--card-bar));
+  inset-block-end: calc(-1 * var(--card-border));
+  inset-inline: calc(-1 * var(--card-border));
+  border-radius: var(--radius-control);
+}
+
+/* A fixed box: a missing emoji font changes no layout. */
+.emoji {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  overflow: hidden;
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
+.book {
+  margin-block: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-small);
+  line-height: var(--lh-label);
+}
+
+.title {
+  margin-block: 0;
+  font-size: var(--fs-body);
+}
+
+.hero .title {
+  font-size: var(--fs-story);
+}
+
+.link {
+  color: var(--color-text-accent);
+}
+
+.description {
+  margin-block: 0;
+  font-size: var(--fs-body);
+}
+
+/* Age, duration, the badge cell: the cell's reserved width is a gap at the line end. */
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-block: auto 0;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-small);
+  line-height: var(--lh-label);
+}
+
+.badgeCell {
+  display: grid;
+}
+
+/* The block padding keeps Devanagari marks above and below the line (ैं, ई, the nukta) off the
+   pill's border; at 150% text they touched it with none (P1-3 draft screens 36-38). */
+.badge {
+  grid-area: 1 / 1;
+  justify-self: start;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-text);
+}
+
+/* The house's paint-only Hindi offset (P1-1c, D11-P26: Noto Sans Devanagari's ink sits about 0.12em
+   above the line box's centre), moved into the padding: a position offset would paint the badge
+   above the card's stretched link and make it a spot where a tap does nothing. The block padding
+   still sums to twice --space-1, so the pill's height is the same in every state and language. */
+.badge:lang(hi) {
+  padding-block-start: calc(var(--space-1) + 0.12em);
+  padding-block-end: calc(var(--space-1) - 0.12em);
+}
+
+.hidden {
+  visibility: hidden;
+}
+
+/* Continue reading: one card or the empty line, in a cell sized for the tallest variant. */
+.continueCell {
+  display: grid;
+}
+
+.continueCard {
+  --story-color: var(--color-line-strong);
+  --card-border: 2px;
+  --card-bar: 4px;
+  position: relative;
+  display: flex;
+  grid-area: 1 / 1;
+  align-items: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+  border: var(--card-border) solid var(--color-line-strong);
+  border-block-start: var(--card-bar) solid var(--story-color);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-raised);
+  /* As .card: the link's ::after is the target. */
+  touch-action: manipulation;
+}
+
+.continueCard:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.continueCard:has(a:focus-visible) {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+/* As .card a::after: the border box, with the card's radius. */
+.continueCard a::after {
+  content: '';
+  position: absolute;
+  inset-block-start: calc(-1 * var(--card-bar));
+  inset-block-end: calc(-1 * var(--card-border));
+  inset-inline: calc(-1 * var(--card-border));
+  border-radius: var(--radius-control);
+}
+
+.continueLink {
+  color: var(--color-text-accent);
+  font-weight: var(--fw-bold);
+}
+
+.continueEmpty {
+  grid-area: 1 / 1;
+  align-self: center;
+  margin-block: 0;
+  color: var(--color-text-secondary);
+}

@@ -8,12 +8,14 @@
 //   banner first, an h1 focused on mount, "Start this story again" (clears the saved run, keeps the
 //   endings, then reloads the page), "All stories" to /{locale}, and an empty live region.
 // - The error itself is never shown (no message, no stack, no digest).
+// - P1 Step 12 (design p1-step12-design.md §3.12 N13, §3.13 N14; S12-CRIT-3): "All stories" renders
+//   through HeldLink (same href and markup), so its tap starts the navigation hold.
 import { catchError } from 'next/error'
-import Link from 'next/link'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { LocaleCode } from '../../core/locales'
 import { readerStores } from '../../reader/progress'
 import { LiveRegion } from '../a11y/live-region'
+import { HeldLink } from '../shell/held-link'
 import shell from '../shell/shell.module.css'
 import { StorageBanner } from '../shell/storage-banner'
 import styles from './player.module.css'
@@ -59,9 +61,9 @@ export function PlayerFallback({ storyId, locale, strings }: PlayerFallbackProps
         >
           <span className={styles.actionLabel}>{strings.startThisAgain}</span>
         </button>
-        <Link href={`/${locale}`} className={styles.action}>
+        <HeldLink href={`/${locale}`} className={styles.action}>
           <span className={styles.actionLabel}>{strings.allStories}</span>
-        </Link>
+        </HeldLink>
       </div>
       <LiveRegion />
     </main>

@@ -97,6 +97,7 @@ import { mediaAllows, mediaAnswerFor, mediaAnswerText } from './media-answer'
 import {
   centreInViewport,
   choice,
+  clearSiteStorage,
   consoleErrors,
   expectWideFallback,
   FIRST_PARAGRAPH,
@@ -4228,6 +4229,9 @@ test.describe('narration in the player, Step 11: the run-area hold', { tag: '@st
         writesAfterMouse: number
       } | null = null
       for (let attempt = 1; attempt <= ATTEMPTS && done === null; attempt++) {
+        // A later attempt starts from attempt 1's storage (Step 12a load stall, design p1-step12-
+        // design.md §21): attempt 1 left Read to me on, so its Enter would turn it off.
+        if (attempt > 1) await clearSiteStorage(page, attempt)
         await openNarrated(page, 'en')
         await expectFakeInstalled(page, errors)
         await walkNarrated(page, row.path)
@@ -4855,6 +4859,8 @@ test.describe('narration in the player, Step 11: the run-area hold', { tag: '@st
       const tries: string[] = []
       let cases: Case[] | null = null
       for (let attempt = 1; attempt <= ATTEMPTS && cases === null; attempt++) {
+        // As HL1 (§21): a late attempt 1 saved its run, which the reopened player would resume.
+        if (attempt > 1) await clearSiteStorage(page, attempt)
         await openPlayer(page, urlOf(variant.code))
         if (variant.wide) await expectWideFallback(page, aborted())
         await expectFakeInstalled(page, errors)
@@ -5114,6 +5120,8 @@ test.describe('narration in the player, Step 11: the run-area hold', { tag: '@st
       before: RunState
     } | null = null
     for (let attempt = 1; attempt <= ATTEMPTS && result === null; attempt++) {
+      // As HL1 (§21): a late attempt 1 may leave Read to me on, so its Enter would turn it off.
+      if (attempt > 1) await clearSiteStorage(page, attempt)
       await openNarrated(page, 'en')
       await expectFakeInstalled(page, errors)
       const before = await runState(page)

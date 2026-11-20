@@ -1,0 +1,136 @@
+/*
+ * The story landing (P1 Step 12, design p1-step12-design.md 3.8, 3.9, 3.24, 4.5, 4.7; spec SPEC:434,
+ * :496, :499). Token names only (colour and time literals live in tokens.css); logical properties
+ * only (RC-12).
+ * - Reserved cells (N6): Start and Continue share one grid area (.primary); Start again has a slot
+ *   of its own (.againSlot) that keeps its box in every state. A hidden variant is visibility:
+ *   hidden only, never display: none, so the progress read moves nothing.
+ * - Start and Continue look like the player's action buttons; Start again is a secondary button;
+ *   every target is at least --target-min tall.
+ * - The Share row holds ShareControl's button and "Link copied." after it; the manual field
+ *   (player.module.css .shareField) follows the row on a line of its own.
+ */
+
+.landing {
+  max-inline-size: var(--measure-body);
+}
+
+.book {
+  color: var(--color-text-secondary);
+  font-size: var(--fs-small);
+  line-height: var(--lh-label);
+}
+
+.title {
+  font-size: var(--fs-display);
+}
+
+.description {
+  font-size: var(--fs-body);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-block: 0 var(--space-4);
+  padding: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+  list-style: none;
+}
+
+.theme {
+  font-size: var(--fs-label);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-target);
+  margin-block: var(--space-5) var(--space-4);
+}
+
+/* Start and Continue in one grid area: the cell is the wider label's box in every state. */
+.primary {
+  display: grid;
+}
+
+.primaryVariant {
+  grid-area: 1 / 1;
+}
+
+/* Start again's own reserved slot. */
+.againSlot {
+  display: grid;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-5);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-label);
+  text-decoration-line: none;
+}
+
+.action:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-4);
+  border: 2px solid var(--color-line-strong);
+  border-radius: var(--radius-pill);
+  background-color: transparent;
+  color: var(--color-text);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-label);
+  cursor: pointer;
+}
+
+.secondary:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/* The paint-only Hindi label offset the player's actions use (P1-1c, D11-P26). */
+.actionLabel:lang(hi) {
+  position: relative;
+  inset-block-start: 0.12em;
+}
+
+.hidden {
+  visibility: hidden;
+}
+
+.howMade {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-min);
+  margin-block: 0 var(--space-4);
+  font-size: var(--fs-label);
+  line-height: var(--lh-label);
+}
+
+.shareRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-target);
+}

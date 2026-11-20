@@ -13,6 +13,9 @@
 // The selector, marker and text come from src/ui/root/staging.ts; colours are the tokens'
 // --color-accent (#f59e0b) and --color-text-on-accent (#0d0a05). The shared guard in fixtures.ts
 // still fails any cookie, CSP violation or foreign request.
+// P1-3 Step 12a (design p1-step12-design.md §13.4.5 E12-R5): documentRoutes('staging') also holds
+// the two two-paths landings (kind 'landing'), which render the (site) layout's skip link after the
+// banner, as the other site pages do.
 import {
   STAGING_BANNER_ATTRIBUTE,
   STAGING_BANNER_MARKER,
@@ -38,7 +41,10 @@ test.describe('the staging banner', { tag: '@staging' }, () => {
     // The site pages and the player pages (P1-4b, design p1-step10-design.md §9.3 loops) render a
     // skip link after the banner; "/" and the 404 have none.
     const hasSkipLink =
-      route.kind === 'home' || route.kind === 'grown-ups' || route.kind === 'player'
+      route.kind === 'home' ||
+      route.kind === 'grown-ups' ||
+      route.kind === 'player' ||
+      route.kind === 'landing'
 
     test(`${label} shows one staging banner, first in the body and in flow`, async ({
       page,

@@ -20,13 +20,27 @@
 // Step 10d (C12, F1): the story-language switch is a header button, exactly one in a player
 // header's nav and none on another route; and every route, the player pages included, has at
 // least one lang island (on a player page, the switch's endonym in the other language).
+// P1-3 Step 12a (design p1-step12-design.md §13.4.5 E12-R3, §3.14 N15, A17): the story landing
+// (kind 'landing', two-paths in en and hi) keeps the site header: (a) the switch keeps the landing
+// path both ways, from each locale, waiting for no request in flight before each switch tap (W5);
+// (b) one polite live region, empty at load, and aria-current on neither the brand nor Grown-ups;
+// (c) at 320 px and 150% its header holds the 3 links; (d) the F3 loop visits it (legRoutes).
 import type { Page } from '@playwright/test'
 import { ENABLED_LOCALE_CODES, getLocaleDef, type LocaleCode } from '../src/core/locales'
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
 import { expect, test } from './fixtures'
-import { focusByKeyboard, prefsText, seedPrefs, settleFonts, storageAfter } from './page-helpers'
+import {
+  focusByKeyboard,
+  prefsText,
+  quietRequests,
+  seedPrefs,
+  settleFonts,
+  storageAfter,
+} from './page-helpers'
 import {
   focusLinkForWebKit,
+  LANDING_DOC_PATHS,
+  landingPath,
   legRoutes,
   liveRegions,
   message,
@@ -71,6 +85,35 @@ test.describe('the reader shell', { tag: '@review' }, () => {
         await waitForHydration(page)
         const switchLink = page.locator(`header nav a[hreflang="${other}"]`)
         await expect(switchLink).toHaveAttribute('href', `${pathOf(other)}?remember=1`)
+        await Promise.all([
+          page.waitForURL((url) => url.pathname === pathOf(other)),
+          switchLink.click(),
+        ])
+        await expect.poll(() => new URL(page.url()).search, 'the query is removed').toBe('')
+        expect(await page.locator('html').getAttribute('lang')).toBe(other)
+        await expect.poll(() => storedUiLocale(page), 'the saved uiLocale').toBe(other)
+        code = other
+      }
+    })
+  }
+
+  // Step 12 (E12-R3 a): a landing keeps its path both ways too, from each locale. The switch is a
+  // full load, so it waits until no router prefetch is in flight first (W5; §13.1 E).
+  for (const first of ENABLED_LOCALE_CODES) {
+    const pathOf = (code: LocaleCode) => landingPath(code, 'two-paths')
+    test(`the language switch keeps the landing path both ways from /${first} and saves uiLocale`, async ({
+      page,
+    }) => {
+      await seedPrefs(page, null)
+      let code: LocaleCode = first
+      await page.goto(pathOf(code))
+      for (let hop = 0; hop < 2; hop++) {
+        const other = otherOf(code)
+        await waitForHydration(page)
+        const quiet = quietRequests(page)
+        const switchLink = page.locator(`header nav a[hreflang="${other}"]`)
+        await expect(switchLink).toHaveAttribute('href', `${pathOf(other)}?remember=1`)
+        await quiet()
         await Promise.all([
           page.waitForURL((url) => url.pathname === pathOf(other)),
           switchLink.click(),
@@ -221,8 +264,14 @@ test.describe('the reader shell', { tag: '@review' }, () => {
     })
   }
 
-  for (const { path: routePath, code, kind } of readerPaths()) {
-    test(`${routePath}: one polite live region, empty at load; aria-current on the ${kind === 'home' ? 'brand' : 'Grown-ups link'}`, async ({
+  // Step 12 (E12-R3 b): the two landings too, where neither link carries aria-current.
+  for (const { path: routePath, code, kind } of [
+    ...readerPaths(),
+    ...LANDING_DOC_PATHS.map((landing) => ({ ...landing, kind: 'landing' as const })),
+  ]) {
+    const current =
+      kind === 'home' ? 'the brand' : kind === 'grown-ups' ? 'the Grown-ups link' : 'neither link'
+    test(`${routePath}: one polite live region, empty at load; aria-current on ${current}`, async ({
       page,
       request,
     }) => {
@@ -289,7 +338,11 @@ test.describe('the reader shell', { tag: '@review' }, () => {
       expect(layout.attribute).toBe('150')
       expect(layout.scrollWidth, 'horizontal scroll').toBeLessThanOrEqual(layout.clientWidth)
       expect(layout.links, 'header links').toBe(
-        route.kind === 'home' || route.kind === 'grown-ups' ? 3 : route.kind === 'player' ? 2 : 0,
+        route.kind === 'home' || route.kind === 'grown-ups' || route.kind === 'landing'
+          ? 3
+          : route.kind === 'player'
+            ? 2
+            : 0,
       )
       // Step 10d: the story-language switch, a header button (checked with the links below).
       expect(layout.switches, 'story-language switches in the header nav').toBe(

@@ -16,6 +16,11 @@
 // Step 11 (design p1-step11-design.md §0.2, §14.5) adds its 9 narration keys (owner-approved as
 // §0.2 drafts them; one unavailable message, Q1), none of which takes an argument, and pins their
 // exact values in both languages (A19).
+// P1 Step 12 (design p1-step12-design.md §0.2, A21; test plan T12-19) adds its 11 shelf and landing
+// keys (owner drafts: Q1 (a) the empty Continue line, Q2 (a) Hindi नई, Q3 (a); stop S7, the commit
+// waits for approval), the 'story' surface, and three table entries: home.finished {found}
+// {total} (a plural on total in English, so total is numeric and found any), story.age {age} and
+// story.theme {theme}; the sample type widens to strings, so age is sampled as stored ('6+').
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -53,7 +58,8 @@ const ALL = LOCALES.flatMap((locale) =>
 
 /**
  * Design §6.3: the 16 keys Step 7 renders, plus Step 10a's 4, Step 10b's 9, Step 10c's 7 and Step
- * 10d's 1 player keys (p1-step10 §0.2) and Step 11's 9 narration keys (p1-step11 §0.2), sorted.
+ * 10d's 1 player keys (p1-step10 §0.2), Step 11's 9 narration keys (p1-step11 §0.2) and Step 12's
+ * 11 shelf and landing keys (p1-step12 §0.2), sorted.
  */
 const DESIGN_KEYS = [
   'gate.prompt',
@@ -63,7 +69,13 @@ const DESIGN_KEYS = [
   'header.changeLanguage',
   'header.grownUps',
   'header.navLabel',
+  'home.continueEmpty',
+  'home.continueReading',
+  'home.featured',
+  'home.finished',
+  'home.new',
   'home.placeholder',
+  'home.reading',
   'home.title',
   'meta.description',
   'notFound.body',
@@ -102,6 +114,11 @@ const DESIGN_KEYS = [
   'shell.skipToMain',
   'storage.body',
   'storage.title',
+  'story.age',
+  'story.continue',
+  'story.howMade',
+  'story.start',
+  'story.theme',
 ]
 
 /** Step 11 (p1-step11-design.md §0.2, §14.5): the narration keys, exactly as the owner approved them. */
@@ -123,6 +140,30 @@ const STEP11_VALUES: Readonly<Record<string, Readonly<Record<Locale, string>>>> 
   'player.tapToListen': { en: 'Tap to listen', hi: 'सुनने के लिए टैप करें' },
 }
 
+/**
+ * Step 12 (p1-step12-design.md §0.2, A21): the shelf and landing keys, exactly as the owner approves
+ * them (drafts until then, stop S7). Hindi ढ़ is stored NFC, as U+0922 U+093C.
+ */
+const STEP12_VALUES: Readonly<Record<string, Readonly<Record<Locale, string>>>> = {
+  'home.continueEmpty': {
+    en: 'The story you are reading will show here.',
+    hi: 'आप जो कहानी पढ़ रहे हैं, वह यहाँ दिखेगी।',
+  },
+  'home.continueReading': { en: 'Continue reading', hi: 'पढ़ना जारी रखें' },
+  'home.featured': { en: 'Featured story', hi: 'विशेष कहानी' },
+  'home.finished': {
+    en: '{total, plural, one {Finished · {found} of # ending} other {Finished · {found} of # endings}}',
+    hi: 'पूरी पढ़ी · {total} में से {found} अंत',
+  },
+  'home.new': { en: 'New', hi: 'नई' },
+  'home.reading': { en: 'Reading', hi: 'पढ़ रहे हैं' },
+  'story.age': { en: 'Age {age}', hi: 'आयु {age}' },
+  'story.continue': { en: 'Continue', hi: 'आगे पढ़ें' },
+  'story.howMade': { en: 'How this story was made', hi: 'यह कहानी कैसे बनी' },
+  'story.start': { en: 'Start', hi: 'शुरू करें' },
+  'story.theme': { en: 'Theme: {theme}', hi: 'विषय: {theme}' },
+}
+
 const SURFACES = [
   'meta',
   'gate',
@@ -133,22 +174,29 @@ const SURFACES = [
   'storage',
   'notFound',
   'player',
+  'story',
 ]
 
 /**
  * Design p1-step10 §9.1 G5: the arguments each key takes, with their kind; every other key takes
- * none. Each entry also gives sample values and what t() makes of them in each language.
+ * none. Each entry also gives sample values and what t() makes of them in each language. Step 12
+ * widens the samples to strings (S12-CRIT-17): story.age is sampled as a package stores it ('6+').
  */
 const ARGUMENTS: Readonly<
   Record<
     string,
     {
       readonly kinds: Readonly<Record<string, ArgKind>>
-      readonly sample: Readonly<Record<string, number>>
+      readonly sample: Readonly<Record<string, string | number>>
       readonly formatted: Readonly<Record<Locale, string>>
     }
   >
 > = {
+  'home.finished': {
+    kinds: { found: 'any', total: 'numeric' },
+    sample: { found: 1, total: 2 },
+    formatted: { en: 'Finished · 1 of 2 endings', hi: 'पूरी पढ़ी · 2 में से 1 अंत' },
+  },
   'player.endingCount': {
     kinds: { found: 'numeric', total: 'any' },
     sample: { found: 2, total: 3 },
@@ -168,6 +216,16 @@ const ARGUMENTS: Readonly<
     kinds: { percent: 'numeric' },
     sample: { percent: 125 },
     formatted: { en: '125%', hi: '125%' },
+  },
+  'story.age': {
+    kinds: { age: 'any' },
+    sample: { age: '6+' },
+    formatted: { en: 'Age 6+', hi: 'आयु 6+' },
+  },
+  'story.theme': {
+    kinds: { theme: 'any' },
+    sample: { theme: 'Patience' },
+    formatted: { en: 'Theme: Patience', hi: 'विषय: Patience' },
   },
 }
 
@@ -199,7 +257,7 @@ function pluralProblems(locale: string, message: ParsedMessage): string[] {
 }
 
 describe('message catalogues: shape', () => {
-  it('hold exactly the design keys (Step 7, Steps 10a to 10d and Step 11), sorted, in the same order in both files', () => {
+  it('hold exactly the design keys (Step 7, Steps 10a to 10d, Step 11 and Step 12), sorted, in the same order in both files', () => {
     expect(KEYS).toEqual(DESIGN_KEYS)
     expect(Object.keys(CATALOGUE.hi)).toEqual(KEYS)
     expect([...KEYS].sort()).toEqual(KEYS)
@@ -213,6 +271,19 @@ describe('message catalogues: shape', () => {
       }
     }
     expect(CATALOGUE.en['player.narrationUnavailable']).toContain('isn’t')
+  })
+
+  it('hold the 11 Step 12 shelf and landing keys exactly as drafted for the owner (A21, T12-19 g2)', () => {
+    expect(Object.keys(STEP12_VALUES)).toHaveLength(11)
+    for (const [key, values] of Object.entries(STEP12_VALUES)) {
+      for (const locale of LOCALES) {
+        expect.soft(CATALOGUE[locale][key], `(g2) ${locale} ${key}`).toBe(values[locale])
+      }
+    }
+    // Hindi ढ़ as U+0922 U+093C (NFC), never the precomposed U+095D; the middle dot is U+00B7.
+    expect(CATALOGUE.hi['home.continueReading']).toContain('\u0922\u093c')
+    expect(CATALOGUE.hi['home.reading']).not.toContain('\u095d')
+    expect(String(CATALOGUE.en['home.finished'])).toContain('\u00b7')
   })
 
   it('use flat dotted keys <surface>.<item> in camelCase', () => {
@@ -392,6 +463,15 @@ describe('messages.ts', () => {
         }
       }
     }
+  })
+
+  it('t() formats home.finished with one ending in the singular (T12-19 g4)', () => {
+    expect(translator('en')('home.finished', { found: 1, total: 1 })).toBe(
+      'Finished · 1 of 1 ending',
+    )
+    expect(translator('hi')('home.finished', { found: 1, total: 1 })).toBe(
+      'पूरी पढ़ी · 1 में से 1 अंत',
+    )
   })
 
   it('t() throws on an extra argument, an unknown key and a locale without messages', () => {

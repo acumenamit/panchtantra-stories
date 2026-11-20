@@ -60,6 +60,20 @@
 //   assembled at run time (a concatenation, a template with a substitution, a variable), a loader
 //   other than those forms (createRequire, a Worker, eval or vm), a package under node_modules,
 //   and a copy of a builder's code.
+// P1-3 Step 12a (design p1-step12-design.md §3.17 N18, §9 A19, A20, §13.3 T12-27, T12-28, §13.5
+// items 4 and 6):
+// - featuredStoryOf derives the staging-only featured story from river-stones: the fixture as
+//   stored (every text, aiUse) plus a picture on all 8 nodes (the picture story's shapes; big_rock
+//   and ending_back wide) and a clip for every node in en and hi (16 each), so the featured rule
+//   keeps it (no A001, A005 or A006 error under --feature). With featuredStory the snapshot names it
+//   (featuredStoryId); with every derived story the catalogue holds 6 packages and 59 media objects.
+// - playerNotFoundPaths(leg): PLAYER_NOT_FOUND_PATHS loses the story URL without /read (the landing
+//   now serves it) and gains three landing-shaped 404s (8 entries); the featured story's read URL
+//   follows the narrated one on every leg but staging (11 on the gated and review legs).
+// - The scan of e2e/ runs for the third id (FEATURED_RULE): no e2e file but routes.ts may name it,
+//   its constant or its module, and routes.ts names it exactly twice (its import and the one
+//   template in playerNotFoundPaths); no spec, not even the one that taps the hero, which reads the
+//   id from /build-info.json at run time. Every picture sample is repeated for the new id.
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -69,18 +83,23 @@ import ts from 'typescript'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PLAYER_NOT_FOUND_PATHS, playerNotFoundPaths } from '../../e2e/routes'
 import { BuildInfo } from '../../src/core/content/build-info'
+import { featuredVerdict } from '../../src/core/content/featured'
 import { judgeHead, planMediaHeads } from '../../src/core/content/media'
 import { checkPackage } from '../../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import { CatalogueSnapshot } from '../../src/core/package/catalogue'
 import { StoryPackageV1 } from '../../src/core/package/v1'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
+import { validatePackage } from '../../src/core/validator/validate'
 import { playerDataOf } from '../../src/reader/player/player-data'
 import { loadContent } from '../load-content'
 import { stagingEnvs } from '../preview-staging'
+import { FEATURED_STORY_ID } from './featured-story-id'
 import { NARRATION_STORY_ID } from './narration-story-id'
 import { PICTURE_STORY_ID } from './picture-story-id'
 import { silentMp3 } from './silent-mp3'
 import {
+  featuredStoryOf,
   FIXTURES_DIR,
   LONG_PASSAGE_MIN,
   longPassageOf,
@@ -154,6 +173,35 @@ const narratedPath = (nodeId: string, locale: string): string =>
 const NARRATED_PATHS = NARRATED_CLIPS.map(({ nodeId, locale }) => narratedPath(nodeId, locale))
 /** The 42-frame silent MP3 every clip path serves (design §3.23): 6,048 bytes. */
 const CLIP_BYTES = 6048
+
+/** The featured story (Step 12), written out here as the other two ids are above. */
+const FEATURED_ID = 'river-stones-featured'
+/** Its pictures: every node, the picture story's shapes, big_rock and ending_back wide (§3.17). */
+const FEATURED_SHAPES: Readonly<Record<string, typeof WIDE>> = {
+  start: WIDE,
+  flat_stones: WIDE,
+  big_rock: WIDE,
+  far_bank: SQUARE,
+  round_stones: WIDE,
+  ending_dry: WIDE,
+  ending_wet: WIDE,
+  ending_back: WIDE,
+}
+const featuredImageId = (nodeId: string): string => narratedSha(`${FEATURED_ID}:${nodeId}`)
+const featuredImagePath = (nodeId: string, width: number): string =>
+  `media/${FEATURED_ID}/${featuredImageId(nodeId)}-w${width}.webp`
+const FEATURED_IMAGE_PATHS = NARRATED_NODES.flatMap((nodeId) =>
+  (FEATURED_SHAPES[nodeId]?.widths ?? []).map((width) => featuredImagePath(nodeId, width)),
+)
+/** Its clips: every node in en and hi (16), node order then locale order. */
+const FEATURED_CLIPS = NARRATED_NODES.flatMap((nodeId) =>
+  (['en', 'hi'] as const).map((locale) => ({ nodeId, locale })),
+)
+const featuredClipPath = (nodeId: string, locale: string): string =>
+  `media/${FEATURED_ID}/${narratedSha(`${FEATURED_ID}:${nodeId}:${locale}:audio`)}-audio.mp3`
+const FEATURED_CLIP_PATHS = FEATURED_CLIPS.map(({ nodeId, locale }) =>
+  featuredClipPath(nodeId, locale),
+)
 
 /** Check id → count, per severity. */
 function tally(
@@ -662,20 +710,291 @@ describe('publishFixturesAsStaging with narrationStory (design p1-step11 §8.1, 
   })
 })
 
+describe('FEATURED_STORY_ID, a leaf module (design p1-step12 §3.17, T12-27 g8)', () => {
+  it('(g8) is river-stones-featured, the one statement of a module that imports nothing', () => {
+    expect(FEATURED_STORY_ID).toBe(FEATURED_ID)
+    const path = join(REPO, 'scripts', 'testing', 'featured-story-id.ts')
+    const file = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
+    expect(file.statements.map((statement) => ts.isVariableStatement(statement))).toEqual([true])
+    const [statement] = file.statements
+    if (!statement || !ts.isVariableStatement(statement)) throw new Error('not a const')
+    expect(statement.getText()).toBe(`export const FEATURED_STORY_ID = '${FEATURED_ID}'`)
+  })
+})
+
+describe('featuredStoryOf (design p1-step12 §3.17 N18, A19, T12-27)', () => {
+  const source = fixture()
+  const pkg = featuredStoryOf(source)
+  const images = pkg.assets.filter((asset) => asset.kind === 'image')
+  const clips = pkg.assets.filter((asset) => asset.kind === 'audio')
+
+  it('(g1) strict-parses; only the id, the node pictures and the media assets differ from the fixture', () => {
+    expect(StoryPackageV1.parse(pkg)).toEqual(pkg)
+    const expected = fixtureJson()
+    expected.storyId = FEATURED_ID
+    expected.nodes = expected.nodes.map((node) => ({ ...node, image: featuredImageId(node.id) }))
+    expected.assets = pkg.assets
+    expect(pkg).toEqual(expected)
+    expect(pkg.text, '(g1) every text as stored').toEqual(fixtureJson().text)
+    expect(pkg.aiUse, '(g1) aiUse as stored').toEqual(fixtureJson().aiUse)
+    expect(fixtureJson().assets, '(g1) the fixture declares no media').toEqual([])
+    expect(source, '(g1) the source package is not changed').toEqual(fixture())
+  })
+
+  it('(g2) a picture on all 8 nodes (far_bank square, big_rock and ending_back wide): 16 variants of the 34-byte WebP, provenance unknown', () => {
+    expect(
+      Object.fromEntries(pkg.nodes.map((node) => [node.id, node.image])),
+      '(g2) every node names its picture',
+    ).toEqual(Object.fromEntries(NARRATED_NODES.map((nodeId) => [nodeId, featuredImageId(nodeId)])))
+    expect(images, '(g2) the image assets, in node order').toEqual(
+      NARRATED_NODES.map((nodeId) => {
+        const shape = FEATURED_SHAPES[nodeId] ?? WIDE
+        return {
+          kind: 'image',
+          id: featuredImageId(nodeId),
+          width: shape.width,
+          height: shape.height,
+          variants: shape.widths.map((width) => ({
+            path: featuredImagePath(nodeId, width),
+            mime: 'image/webp',
+            bytes: 34,
+            width,
+          })),
+          provenance: { origin: 'unknown' },
+        }
+      }),
+    )
+    expect(
+      images.flatMap((asset) => asset.variants),
+      '(g2) 16 picture variants',
+    ).toHaveLength(16)
+  })
+
+  it('(g3) 16 audio assets: every node in en and hi, one 6,048-byte silent MP3 variant each, provenance unknown', () => {
+    expect(FEATURED_CLIPS).toHaveLength(16)
+    expect(clips, '(g3) the audio assets, node order then locale order').toEqual(
+      FEATURED_CLIPS.map(({ nodeId, locale }) => ({
+        kind: 'audio',
+        id: narratedSha(`${FEATURED_ID}:${nodeId}:${locale}:audio`),
+        nodeId,
+        locale,
+        durationMs: 1008,
+        variants: [
+          { path: featuredClipPath(nodeId, locale), mime: 'audio/mpeg', bytes: CLIP_BYTES },
+        ],
+        provenance: { origin: 'unknown' },
+        narratedTextSha256: narratedSha(`${FEATURED_ID}:${nodeId}:${locale}`),
+      })),
+    )
+  })
+
+  it("(g4) the featured rule keeps it: no A001, A005 or A006 error under --feature, and the loader's featured line names it", async () => {
+    const report = validatePackage(pkg, {
+      ruleSet: PANCHATANTRA_RULESET,
+      mode: 'publish',
+      forFeature: true,
+    })
+    expect(
+      report.findings
+        .filter((f) => ['A001', 'A005', 'A006'].includes(f.checkId) && f.severity === 'error')
+        .map((f) => `${f.checkId} ${f.nodeId ?? ''} ${f.locale ?? ''}`),
+      '(g4) media errors under --feature',
+    ).toEqual([])
+    const packages = await stagingPackages(FIXTURES_DIR, {
+      pictureStory: true,
+      narrationStory: true,
+      featuredStory: true,
+    })
+    const entries = packages.map((p) => p.entry)
+    const built = packages.map((p) => ({
+      pkg: StoryPackageV1.parse(JSON.parse(new TextDecoder().decode(p.bytes))),
+    }))
+    expect(
+      featuredVerdict(FEATURED_ID, entries, [], built, PANCHATANTRA_RULESET),
+      '(g4) the verdict the loader logs',
+    ).toEqual({ featuredStoryId: FEATURED_ID, line: `content: featured story=${FEATURED_ID}` })
+    // Not vacuous: the same rule drops the picture story (no clips, two nodes with no picture).
+    expect(
+      featuredVerdict(ID, entries, [], built, PANCHATANTRA_RULESET).featuredStoryId,
+      '(g4) the rule drops a story with missing media',
+    ).toBeNull()
+  })
+
+  it('(g5) refuses another source story', () => {
+    const other = { ...source, storyId: 'two-paths' }
+    expect(() => featuredStoryOf(other)).toThrow(
+      'staging: the featured story derives from river-stones only',
+    )
+  })
+
+  it('declares 32 variants that pass the media path plan and the HEAD rule on the stub answers', () => {
+    const plan = planMediaHeads([{ pkg }], '')
+    if (!plan.ok) throw new Error(plan.reason)
+    expect(plan.value.heads.map((head) => [head.path, head.mime, head.bytes])).toEqual([
+      ...FEATURED_IMAGE_PATHS.map((path) => [path, 'image/webp', 34]),
+      ...FEATURED_CLIP_PATHS.map((path) => [path, 'audio/mpeg', CLIP_BYTES]),
+    ])
+    const webp = new Headers({ 'content-length': '34', 'content-type': 'image/webp' })
+    const mp3 = new Headers({ 'content-length': '6048', 'content-type': 'audio/mpeg' })
+    for (const head of plan.value.heads) {
+      expect(judgeHead(head, 200, head.mime === 'image/webp' ? webp : mp3)).toEqual({ ok: true })
+    }
+  })
+})
+
+describe('publishFixturesAsStaging with featuredStory (design p1-step12 §3.17, T12-27 g6, g7)', () => {
+  let root: string
+  let stubs: StubStorage[]
+  const ALL = { pictureStory: true, narrationStory: true, featuredStory: true } as const
+  const ALL_IDS = ['lantern-walk', 'river-stones', ID, NARRATED_ID, FEATURED_ID, 'two-paths']
+  const ALL_MEDIA = [
+    ...MEDIA_PATHS.map((path) => [path, 'image/webp', 34]),
+    ...NARRATED_PATHS.map((path) => [path, 'audio/mpeg', CLIP_BYTES]),
+    ...FEATURED_IMAGE_PATHS.map((path) => [path, 'image/webp', 34]),
+    ...FEATURED_CLIP_PATHS.map((path) => [path, 'audio/mpeg', CLIP_BYTES]),
+  ]
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'staging-catalogue-'))
+    stubs = []
+  })
+
+  afterEach(async () => {
+    for (const stub of stubs) await stub.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  const snapshotOf = (bytes: Uint8Array) =>
+    CatalogueSnapshot.parse(JSON.parse(new TextDecoder().decode(bytes)))
+
+  it('(g6) with every derived story: 6 packages, 59 media objects and a snapshot that names the featured story; without the option, featuredStoryId stays null', async () => {
+    const puts: { path: string; type: string }[] = []
+    const catalogue = await publishFixturesAsStaging(
+      { put: (path, _bytes, type) => void puts.push({ path, type }) },
+      FIXTURES_DIR,
+      ALL,
+    )
+    expect(
+      catalogue.packages.map((p) => p.entry.storyId),
+      '(g6) the packages',
+    ).toEqual(ALL_IDS)
+    expect(
+      catalogue.media.map((m) => [m.path, m.contentType, m.bytes.length]),
+      '(g6) the media objects',
+    ).toEqual(ALL_MEDIA)
+    expect(catalogue.media, '(g6) 59 media objects').toHaveLength(59)
+    expect(
+      puts.filter((p) => p.path.startsWith(`media/${FEATURED_ID}/`)),
+      '(g6) the featured media is published',
+    ).toHaveLength(32)
+    expect(
+      snapshotOf(catalogue.snapshotBytes).featuredStoryId,
+      '(g6) the snapshot names the featured story',
+    ).toBe(FEATURED_ID)
+
+    // Without the option: the picture and narrated stories as before, and no featured story.
+    const plain = await publishFixturesAsStaging({ put: () => undefined }, FIXTURES_DIR, {
+      pictureStory: true,
+      narrationStory: true,
+    })
+    expect(
+      plain.packages.map((p) => p.entry.storyId),
+      '(g6) without the option',
+    ).toEqual(ALL_IDS.filter((id) => id !== FEATURED_ID))
+    expect(plain.media, '(g6) without the option: 27 media objects').toHaveLength(27)
+    expect(
+      snapshotOf(plain.snapshotBytes).featuredStoryId,
+      '(g6) without the option the snapshot names none',
+    ).toBeNull()
+  })
+
+  it('(g7) loads in-process on win32 through the media HEAD gate: exit 0, 59 HEADs, build-info names the featured story', async () => {
+    const s = await startStubStorage()
+    stubs.push(s)
+    await publishFixturesAsStaging(s, FIXTURES_DIR, ALL)
+    const out: string[] = []
+    const errors: string[] = []
+    const code = await loadContent({
+      env: stagingEnvs({}, s.baseUrl).loader,
+      root,
+      platform: 'win32',
+      now: () => NOW,
+      log: (line) => void out.push(line),
+      logError: (line) => void errors.push(line),
+    })
+    expect(errors, '(g7) loader errors').toEqual([])
+    expect(code, '(g7) exit code').toBe(0)
+    const heads = s.requests.filter((r) => r.method === 'HEAD').map((r) => r.path)
+    expect([...heads].sort(), '(g7) the HEADs').toEqual(ALL_MEDIA.map(([path]) => path).sort())
+    expect(heads, '(g7) 59 HEADs').toHaveLength(59)
+    expect(out, '(g7) the featured story media').toContain(
+      `content: media story=${FEATURED_ID} variants=32 bytes=${16 * 34 + 16 * CLIP_BYTES} ok`,
+    )
+    expect(out, '(g7) the featured line').toContain(`content: featured story=${FEATURED_ID}`)
+    expect(out.at(-1), '(g7) the mode line').toBe(
+      MODE_LINE.replace('stories=4', 'stories=6').replace(
+        'featured=none',
+        `featured=${FEATURED_ID}`,
+      ),
+    )
+    const info = BuildInfo.parse(
+      JSON.parse(readFileSync(join(root, '.content', 'build-info.json'), 'utf8')),
+    )
+    expect(info.featuredStoryId, '(g7) build-info').toBe(FEATURED_ID)
+    expect(info.stories.map((story) => story.storyId)).toEqual(ALL_IDS)
+  })
+
+  it('the HEADs gate the load: a featured clip the stub lacks fails it at the media gate', async () => {
+    const s = await startStubStorage()
+    stubs.push(s)
+    const missing = FEATURED_CLIP_PATHS[5] ?? ''
+    await publishFixturesAsStaging(
+      { put: (path, bytes, type) => (path === missing ? undefined : s.put(path, bytes, type)) },
+      FIXTURES_DIR,
+      { featuredStory: true },
+    )
+    const errors: string[] = []
+    const code = await loadContent({
+      env: stagingEnvs({}, s.baseUrl).loader,
+      root,
+      platform: 'win32',
+      now: () => NOW,
+      log: () => undefined,
+      logError: (line) => void errors.push(line),
+    })
+    expect(code).toBe(1)
+    expect(errors[0]).toBe(
+      `content: media failed story=${FEATURED_ID} path=${missing} reason=status 400`,
+    )
+  })
+})
+
 describe('playerNotFoundPaths (design §2.5, S4, F2; T-a21 and the gated player test)', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
   })
 
   // Step 11 (T11-23, planned update): the narrated story's read URL follows the picture story's.
-  it('adds the picture and narrated story read URLs on every leg but staging, where they are real pages', () => {
+  // Step 12 (T12-28 g1, §13.5 item 6, planned update): the story URL without /read is the landing
+  // now, so it leaves; three landing-shaped 404s join; the featured story's read URL follows.
+  it('adds the picture, narrated and featured story read URLs on every leg but staging, where they are real pages', () => {
     vi.stubEnv('E2E_LAUNCH', undefined)
-    expect(PLAYER_NOT_FOUND_PATHS).toHaveLength(6)
+    expect([...PLAYER_NOT_FOUND_PATHS], '(T12-28 g1) the shared list').toEqual([
+      '/en/stories/nope/read',
+      '/hi/stories/two-paths/nope',
+      '/en/stories',
+      '/ar/stories/two-paths/read',
+      '/en/stories/TWO-PATHS/read',
+      '/en/stories/nope',
+      '/en/stories/TWO-PATHS',
+      '/ar/stories/two-paths',
+    ])
     for (const leg of ['gated', 'review'] as const) {
       expect(playerNotFoundPaths(leg), `(g1) ${leg}`).toEqual([
         ...PLAYER_NOT_FOUND_PATHS,
         `/en/stories/${ID}/read`,
         `/en/stories/${NARRATED_ID}/read`,
+        `/en/stories/${FEATURED_ID}/read`,
       ])
     }
     expect(playerNotFoundPaths('staging'), '(g2) staging').toEqual([...PLAYER_NOT_FOUND_PATHS])
@@ -696,10 +1015,11 @@ describe('playerNotFoundPaths (design §2.5, S4, F2; T-a21 and the gated player 
       ...PLAYER_NOT_FOUND_PATHS,
       `/en/stories/${ID}/read`,
       `/en/stories/${NARRATED_ID}/read`,
+      `/en/stories/${FEATURED_ID}/read`,
     ])
     expect(() => playerNotFoundPaths('staging')).toThrow("on the review leg: pass the run's leg")
     vi.stubEnv('E2E_LAUNCH', 'gated')
-    expect(playerNotFoundPaths('gated'), '(g3) gated').toHaveLength(8)
+    expect(playerNotFoundPaths('gated'), '(g3) gated').toHaveLength(11)
     // An empty value counts as set, and names no leg.
     vi.stubEnv('E2E_LAUNCH', '')
     expect(() => playerNotFoundPaths('gated')).toThrow('E2E_LAUNCH must be')
@@ -775,6 +1095,25 @@ const NARRATION_RULE: IdRule = {
       name: 'narration-media',
       matches: (value) => /narration-media/i.test(value),
       files: new Set(['player-audio.spec.ts']),
+    },
+  ],
+}
+
+// Step 12 (design p1-step12-design.md §3.17, CRIT-4, T12-28): the featured story. routes.ts alone
+// may name it (for the 404 read URL off staging); no spec does, not even the one that taps the hero:
+// it reads the id from /build-info.json at run time. staging-catalogue builds it too, so the picture
+// rule's builder fence holds for it as well.
+const FEATURED_RULE: IdRule = {
+  id: FEATURED_ID,
+  label: 'featured story',
+  name: 'FEATURED_STORY_ID',
+  module: 'featured-story-id',
+  namingFiles: new Set(['routes.ts']),
+  builders: [
+    {
+      name: 'staging-catalogue',
+      matches: (value) => value.toLowerCase().includes('staging-catalogue'),
+      files: new Set(['player-images.spec.ts']),
     },
   ],
 }
@@ -982,6 +1321,8 @@ function idFindings(files: readonly ScanFile[], rule: IdRule): string[] {
 const pictureIdFindings = (files: readonly ScanFile[]): string[] => idFindings(files, PICTURE_RULE)
 const narratedIdFindings = (files: readonly ScanFile[]): string[] =>
   idFindings(files, NARRATION_RULE)
+const featuredIdFindings = (files: readonly ScanFile[]): string[] =>
+  idFindings(files, FEATURED_RULE)
 
 // ---------------------------------------------------------------------------------------------
 // The reach walk (review round 3, S11-R3-FS-1; lint class 12): what each e2e entry loads, followed
@@ -1525,6 +1866,40 @@ const narratedRows = <T extends readonly string[]>(rows: readonly T[]): T[] =>
   rows.map((row) => row.map(toNarrated) as unknown as T)
 
 const N_ROUTES = toNarrated(ROUTES)
+
+/**
+ * Step 12 (T12-28 g3): the picture samples with the featured story's names: the id (and its
+ * percent-encoded tail), the name, the module, and the images spec as home-shelf.spec, the spec that
+ * would most want the id (it taps the hero). featuredSamplesHold proves none is left behind.
+ */
+function toFeatured(text: string): string {
+  return text
+    .replaceAll('%70%69%63%74%75%72%65%73', '%66%65%61%74%75%72%65%64')
+    .replaceAll('pictures', 'featured')
+    .replaceAll('PICTURES', 'FEATURED')
+    .replaceAll('PICTURE', 'FEATURED')
+    .replaceAll('picture', 'featured')
+    .replaceAll('player-images.spec', 'home-shelf.spec')
+}
+
+const featuredRows = <T extends readonly string[]>(rows: readonly T[]): T[] =>
+  rows.map((row) => row.map(toFeatured) as unknown as T)
+
+const F_ROUTES = toFeatured(ROUTES)
+/** A spec that names the featured story's id: what no e2e file but routes.ts may hold. */
+const F_SPEC = toFeatured(IMAGES_SPEC)
+/** The staging-catalogue samples for the featured rule: routes.ts as the featured shape. */
+const FEATURED_BUILDER_SAMPLES: readonly (readonly [string, string, string])[] = [
+  ...PICTURE_BUILDER_SAMPLES.map(
+    ([label, path, text]) => [label, path, text.replace(ROUTES, F_ROUTES)] as const,
+  ),
+  [
+    'the hero spec loading the builder',
+    'home-shelf.spec.ts',
+    "import { featuredStoryOf } from '../scripts/testing/staging-catalogue'",
+  ],
+]
+
 const AUDIO_SPEC = [
   "import { NARRATION_STORY_ID } from '../scripts/testing/narration-story-id'",
   "import { narrationClipPath } from '../scripts/testing/narration-story'",
@@ -2316,6 +2691,227 @@ describe('the narrated story id in e2e/ (design p1-step11 §3.23, A36, T11-24)',
       ]),
     ).toEqual([])
     expect(withRoutes(both)).toEqual([])
+  })
+})
+
+describe('the featured story id in e2e/ (design p1-step12 §3.17, CRIT-4, T12-28)', () => {
+  const scan = (...extra: ScanFile[]) =>
+    featuredIdFindings([{ path: 'routes.ts', text: F_ROUTES }, ...extra])
+  const withRoutes = (text: string) => featuredIdFindings([{ path: 'routes.ts', text }])
+
+  it('(g2) the real e2e/ folder holds to it: only routes.ts names the id, exactly twice', () => {
+    const files = e2eFiles()
+    const paths = files.map((file) => file.path)
+    // Not vacuous: the scan reads the specs Step 12 added, and routes.ts.
+    for (const path of ['routes.ts', 'home-shelf.spec.ts', 'landing.spec.ts']) {
+      expect(paths, `precondition: the scan reads e2e/${path}`).toContain(path)
+    }
+    expect(featuredIdFindings(files), '(g2) findings').toEqual([])
+    const naming = files
+      .filter((file) => new RegExp(`\\b${FEATURED_RULE.name}\\b`).test(file.text))
+      .map((file) => file.path)
+    expect(naming, '(g2) the files that name it').toEqual(['routes.ts'])
+    const routes = files.find((file) => file.path === 'routes.ts')?.text ?? ''
+    expect(
+      routes.match(new RegExp(`\\b${FEATURED_RULE.name}\\b`, 'g')),
+      '(g2) routes.ts names it twice',
+    ).toHaveLength(2)
+  })
+
+  it('(g3) the featured samples are the picture samples with every picture name replaced', () => {
+    const rows = [
+      ...featuredRows(LITERAL_SAMPLES),
+      ...featuredRows(NAME_SAMPLES),
+      ...featuredRows(MODULE_SAMPLES),
+      ...featuredRows(NOT_SCRIPT_SAMPLES),
+      ...featuredRows(JSX_SAMPLES),
+      ...featuredRows(REGEX_SAMPLES),
+      ...featuredRows(EXACT_NAME_SAMPLES),
+      ...featuredRows(ROUTES_SAMPLES),
+      [F_ROUTES, F_SPEC],
+    ]
+    for (const row of rows) {
+      for (const cell of row) {
+        expect(cell, 'no picture name is left behind').not.toMatch(/pictur|images\.spec|%70%69%63/i)
+      }
+    }
+    expect(F_ROUTES).toContain(
+      "import { FEATURED_STORY_ID } from '../scripts/testing/featured-story-id'",
+    )
+    expect(featuredRows(LITERAL_SAMPLES)[7]?.[2]).toBe(
+      "page.goto('/en/stories/%72%69%76%65%72%2d%73%74%6f%6e%65%73%2d%66%65%61%74%75%72%65%64/read')",
+    )
+    expect(percentDecoded(featuredRows(LITERAL_SAMPLES)[7]?.[2] ?? '')).toContain(FEATURED_ID)
+  })
+
+  it('accepts the allowed shape and near-misses', () => {
+    expect(scan()).toEqual([])
+    expect(
+      scan({
+        path: 'player.spec.ts',
+        text: "page.goto('/en/stories/river-stones/read') // the featured story is elsewhere\nconst FEATURED_STORY_IDS = 1",
+      }),
+    ).toEqual([])
+  })
+
+  it.each(featuredRows(LITERAL_SAMPLES))('(g3) rejects the literal: %s', (_label, path, text) => {
+    expect(scan({ path, text })).toContain(`${path}: holds the featured story id as a literal`)
+  })
+
+  it('(g3) rejects the literal in routes.ts', () => {
+    expect(withRoutes(`${F_ROUTES}\nconst x = '/en/stories/river-stones-featured/read'`)).toContain(
+      'routes.ts: holds the featured story id as a literal',
+    )
+  })
+
+  it.each(featuredRows(NAME_SAMPLES))(
+    '(g3) rejects naming it outside routes.ts: %s',
+    (_label, text) => {
+      expect(scan({ path: 'player.spec.ts', text })).toContain(
+        'player.spec.ts: names FEATURED_STORY_ID',
+      )
+    },
+  )
+
+  it('(g3) no spec may name it, not even the one that taps the hero', () => {
+    expect(scan({ path: 'home-shelf.spec.ts', text: F_SPEC })).toEqual(
+      expect.arrayContaining([
+        'home-shelf.spec.ts: names FEATURED_STORY_ID',
+        'home-shelf.spec.ts: refers to the featured-story-id module',
+      ]),
+    )
+  })
+
+  it.each(featuredRows(MODULE_SAMPLES))(
+    '(g3) rejects the module outside routes.ts: %s',
+    (_label, text) => {
+      expect(scan({ path: 'helpers.ts', text })).toContain(
+        'helpers.ts: refers to the featured-story-id module',
+      )
+    },
+  )
+
+  it.each(FEATURED_BUILDER_SAMPLES)(
+    '(g3) rejects the staging-catalogue module (it builds the featured story) outside the images spec: %s',
+    (_label, path, text) => {
+      const findings = path === 'routes.ts' ? withRoutes(text) : scan({ path, text })
+      expect(findings).toContain(`${path}: refers to the staging-catalogue module`)
+    },
+  )
+
+  it.each(featuredRows(NOT_SCRIPT_SAMPLES))(
+    '(g3) rejects a file that is not a script: %s',
+    (_label, path, text) => {
+      expect(scan({ path, text })).toContain(
+        `${path}: is not a script, so the scan cannot read its escapes`,
+      )
+    },
+  )
+
+  it.each(featuredRows(JSX_SAMPLES))(
+    '(g3) rejects a script that holds JSX: %s',
+    (_label, path, text) => {
+      expect(scan({ path, text })).toContain(
+        `${path}: holds JSX, whose character references the scan cannot read`,
+      )
+    },
+  )
+
+  it.each(featuredRows(REGEX_SAMPLES))(
+    '(g3) rejects a regex literal that holds %s escaped',
+    (_label, regex, finding) => {
+      expect(scan({ path: 'player.spec.ts', text: `const re = ${regex}` })).toContain(finding)
+    },
+  )
+
+  it.each(featuredRows(EXACT_NAME_SAMPLES))(
+    '(g3) allows only routes.ts by exact name: %s',
+    (_label, path) => {
+      expect(scan({ path, text: F_SPEC })).toContain(`${path}: names FEATURED_STORY_ID`)
+    },
+  )
+
+  it.each(featuredRows(ROUTES_SAMPLES))(
+    '(g3) rejects routes.ts other than its import and one template: %s',
+    (_label, text, finding) => {
+      expect(withRoutes(text)).toContain(finding)
+    },
+  )
+
+  const three = [
+    "import { FEATURED_STORY_ID } from '../scripts/testing/featured-story-id'",
+    "import { NARRATION_STORY_ID } from '../scripts/testing/narration-story-id'",
+    "import { PICTURE_STORY_ID } from '../scripts/testing/picture-story-id'",
+    'export function playerNotFoundPaths(leg: string): string[] {',
+    "  if (leg === 'staging') return []",
+    '  return [',
+    '    `/en/stories/${PICTURE_STORY_ID}/read`,',
+    '    `/en/stories/${NARRATION_STORY_ID}/read`,',
+    '    `/en/stories/${FEATURED_STORY_ID}/read`,',
+    '  ]',
+    '}',
+  ].join('\n')
+
+  it('(g4) routes.ts may hold all three ids, each named exactly twice (the real file shape)', () => {
+    expect(
+      pictureIdFindings([
+        { path: 'routes.ts', text: three },
+        { path: 'player-images.spec.ts', text: IMAGES_SPEC },
+      ]),
+      '(g4) the picture rule',
+    ).toEqual([])
+    expect(
+      narratedIdFindings([
+        { path: 'routes.ts', text: three },
+        { path: 'player-audio.spec.ts', text: AUDIO_SPEC },
+      ]),
+      '(g4) the narrated rule',
+    ).toEqual([])
+    expect(withRoutes(three), '(g4) the featured rule').toEqual([])
+  })
+
+  it("(g4) a landingNotFoundPaths that names the featured id fails (CRIT-4: the design's first form)", () => {
+    const landing = [
+      'export function landingNotFoundPaths(leg: string): string[] {',
+      "  if (leg === 'staging') return []",
+      '  return [`/en/stories/${FEATURED_STORY_ID}`]',
+      '}',
+    ].join('\n')
+    expect(withRoutes(`${three}\n${landing}`), '(g4) beside the read URL').toEqual(
+      expect.arrayContaining([
+        'routes.ts: names FEATURED_STORY_ID 3 times, not 2',
+        'routes.ts: its use is not the one template in playerNotFoundPaths',
+      ]),
+    )
+    const moved = three
+      .replace('    `/en/stories/${FEATURED_STORY_ID}/read`,\n', '')
+      .concat(`\n${landing}`)
+    expect(withRoutes(moved), '(g4) in place of the read URL').toContain(
+      'routes.ts: its use is not the one template in playerNotFoundPaths',
+    )
+  })
+
+  it('(g5) a spec that reads the id from /build-info.json at run time and holds no literal is clean', () => {
+    const hero = [
+      "import { buildInfo } from './page-helpers'",
+      "import { test } from './fixtures'",
+      "test('E12-H12 the hero', async ({ page, request }) => {",
+      '  const info = await buildInfo(request)',
+      "  const raw = await request.get('/build-info.json')",
+      '  const hero = page.locator(`[data-featured] [data-story-card="${info.featuredStoryId}"]`)',
+      '  await hero.click()',
+      '})',
+    ].join('\n')
+    const files = [{ path: 'home-shelf.spec.ts', text: hero }]
+    expect(scan(...files), '(g5) the featured rule').toEqual([])
+    expect(
+      pictureIdFindings([
+        { path: 'routes.ts', text: ROUTES },
+        { path: 'player-images.spec.ts', text: IMAGES_SPEC },
+        ...files,
+      ]),
+      '(g5) the picture rule',
+    ).toEqual([])
   })
 })
 

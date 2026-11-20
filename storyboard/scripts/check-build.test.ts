@@ -8,6 +8,10 @@
 // P1-4b (design p1-step10-design.md §9.1 G1, G2, §10.1 item 5): [player-pages] and
 // [package-text-leak] with every listed negative, on the 3 fixture packages and strictly parsed
 // variants of them, and the two player lines every runCheckBuild run prints.
+// P1 Step 12 (design p1-step12-design.md §3.16 N17, A18; test plan T12-25): [landing-pages], the
+// player rule's twin for <locale>/stories/<storyId>.html, the landing pattern among the open
+// build's required patterns, and the landing line every run prints after the player line. The
+// review sample output (withStories) now holds both story routes.
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -29,6 +33,7 @@ import {
 import {
   checkBuild,
   checkContentOutputs,
+  checkLandingPages,
   checkPackageTextLeak,
   checkPlayerPages,
   checkStagingBanner,
@@ -41,6 +46,8 @@ import {
   NO_CONTENT,
   packageTextForms,
   packageTextValues,
+  LANDING_PATTERN,
+  landingLine,
   PLAYER_PATTERN,
   playerLine,
   readBuiltContent,
@@ -220,11 +227,18 @@ const failuresOf = (
 
 // ---- the story player (P1-4b, design p1-step10-design.md §9.1 G1, G2) ----
 
-/** The two player lines of a build with no player page and no package (§10.1 item 5). */
-const NO_PLAYER_LINES = ['player pages: 0 (expected 0); package text values scanned: 0']
+/**
+ * The story lines of a build with no player page, no landing and no package (§10.1 item 5): the
+ * player line, then the landing line (Step 12, design p1-step12-design.md §3.16).
+ */
+const NO_PLAYER_LINES = [
+  'player pages: 0 (expected 0); package text values scanned: 0',
+  'landing pages: 0 (expected 0)',
+]
 /** The same lines when the build output could not be read (a [read] failure). */
 const UNREAD_PLAYER_LINES = [
   'player pages: unknown (expected 0); package text values scanned: unknown',
+  'landing pages: unknown (expected 0)',
 ]
 
 const fixture = (storyId: string): StoryPackageV1 =>
@@ -325,6 +339,39 @@ function withPlayers(base: BuildOutput, packages: readonly StoryPackageV1[]): Bu
     }
   })
 }
+
+// ---- the story landing (P1 Step 12, design p1-step12-design.md §3.16 N17) ----
+
+/** A landing page as Next writes it under the (site) layout: skip link, header, one main. */
+const landingPage = (code: string, main = '<main id="main" tabindex="-1" class="x_main">') =>
+  doc(
+    code,
+    `<title>Two Paths – Storyboard</title>${ROBOTS_META}`,
+    '<a href="#main" class="x_skip">Skip</a><header><a href="/' +
+      code +
+      '" lang="en">Storyboard</a></header>' +
+      `${main}<div data-landing=""><h1>x</h1></div><div role="status"></div></main>`,
+  )
+
+const landingPath = (code: string, storyId: string) => `${code}/stories/${storyId}.html`
+
+/** `base` with the landing pattern entry and, unless gated, a landing per story and enabled locale. */
+function withLandings(base: BuildOutput, packages: readonly StoryPackageV1[]): BuildOutput {
+  return changed(base, (o) => {
+    o.manifest.dynamicRoutes![LANDING_PATTERN] = pattern('^/([^/]+?)/stories/([^/]+?)(?:/)?$')
+    if (!o.html.has('en.html')) return // gated: the pattern entry only, as Next writes it
+    for (const pkg of packages) {
+      for (const code of ENABLED_LOCALE_CODES.filter((c) => pkg.locales.includes(c))) {
+        o.manifest.routes![`/${code}/stories/${pkg.storyId}`] = page(LANDING_PATTERN)
+        o.html.set(landingPath(code, pkg.storyId), landingPage(code))
+      }
+    }
+  })
+}
+
+/** Both story routes, as a review build has them: the players and the landings. */
+const withStories = (base: BuildOutput, packages: readonly StoryPackageV1[]): BuildOutput =>
+  withLandings(withPlayers(base, packages), packages)
 
 // ---- the staging banner (P1-2c) ----
 
@@ -737,7 +784,7 @@ describe('the real catalogues', () => {
 
 describe('[player-pages] (P1-4b, design p1-step10-design.md §9.1 G1)', () => {
   const CONTENT = contentOf(FIXTURES)
-  const OPEN_PLAYERS = withPlayers(openOutput(), FIXTURES)
+  const OPEN_PLAYERS = withStories(openOutput(), FIXTURES)
   const report = (failures: string[], pages: number, expected: number | null) => ({
     failures,
     pages,
@@ -748,7 +795,7 @@ describe('[player-pages] (P1-4b, design p1-step10-design.md §9.1 G1)', () => {
     expect(checkPlayerPages(OPEN_PLAYERS, OPEN, CONTENT)).toEqual(report([], 6, 6))
     const full = checkBuild(OPEN_PLAYERS, OPEN, CATALOGUE, CONTENT)
     expect(full.failures).toEqual([])
-    expect(full.launchLine).toBe('reader launch: open (review); locale routes: 10')
+    expect(full.launchLine).toBe('reader launch: open (review); locale routes: 16')
   })
 
   it('expects no player page while gated, or without content', () => {
@@ -958,6 +1005,184 @@ describe('[player-pages] (P1-4b, design p1-step10-design.md §9.1 G1)', () => {
     expect(playerLine(null, null, null)).toBe(
       'player pages: unknown (expected unknown); package text values scanned: unknown',
     )
+  })
+})
+
+describe('[landing-pages] (T12-25, Step 12; design p1-step12-design.md §3.16 N17)', () => {
+  const CONTENT = contentOf(FIXTURES)
+  const OPEN_STORIES = withStories(openOutput(), FIXTURES)
+  const report = (failures: string[], pages: number, expected: number | null) => ({
+    failures,
+    pages,
+    expected,
+  })
+
+  it('(g1) passes an open build with one landing per listed story and enabled locale (6)', () => {
+    expect
+      .soft(checkLandingPages(OPEN_STORIES, OPEN, CONTENT), '(g1) 6 of 6')
+      .toEqual(report([], 6, 6))
+    expect
+      .soft(checkBuild(OPEN_STORIES, OPEN, CATALOGUE, CONTENT).failures, '(g1) the full check')
+      .toEqual([])
+  })
+
+  it('(g2) expects no landing while gated, or without content; a landing in a gated build fails', () => {
+    const gated = withStories(gatedOutput(), FIXTURES)
+    expect
+      .soft(checkLandingPages(gated, GATED, CONTENT), '(g2) gated 0 of 0')
+      .toEqual(report([], 0, 0))
+    expect
+      .soft(checkLandingPages(openOutput(), OPEN, NO_CONTENT), '(g2) no content')
+      .toEqual(report([], 0, 0))
+    expect
+      .soft(checkLandingPages(openOutput(), OPEN, contentOf([])), '(g2) no story')
+      .toEqual(report([], 0, 0))
+    const stray = changed(gated, (o) => {
+      o.html.set(landingPath('en', 'two-paths'), landingPage('en'))
+    })
+    for (const content of [CONTENT, NO_CONTENT]) {
+      expect
+        .soft(checkLandingPages(stray, GATED, content), '(g2) a gated landing')
+        .toEqual(
+          report([`[landing-pages] gated build has ${landingPath('en', 'two-paths')}`], 1, 0),
+        )
+    }
+  })
+
+  it('(g3) expects only the enabled locales of each package ([en, hi, ar] gives 2)', () => {
+    const output = withStories(openOutput(), [SAMPLE])
+    expect
+      .soft(checkLandingPages(output, OPEN, contentOf([SAMPLE])), '(g3) 2 of 2')
+      .toEqual(report([], 2, 2))
+  })
+
+  it.each<[string, (o: { html: Map<string, string> }) => void, BuiltContent, string[]]>([
+    [
+      'an extra landing for a story build-info does not list',
+      (o) => o.html.set(landingPath('en', 'other-story'), landingPage('en')),
+      CONTENT,
+      [
+        `[landing-pages] unexpected ${landingPath('en', 'other-story')} (build-info lists no story other-story)`,
+      ],
+    ],
+    [
+      'a missing hi landing',
+      (o) => o.html.delete(landingPath('hi', 'two-paths')),
+      CONTENT,
+      [`[landing-pages] missing ${landingPath('hi', 'two-paths')}`],
+    ],
+    [
+      'a landing under a disabled locale',
+      (o) => o.html.set(landingPath('ar', 'two-paths'), landingPage('ar')),
+      CONTENT,
+      [
+        `[landing-pages] unexpected ${landingPath('ar', 'two-paths')} (ar is not an enabled locale)`,
+      ],
+    ],
+    [
+      'a hi landing for an en-only package',
+      () => undefined,
+      contentOf([FIXTURES[0]!, FIXTURES[1]!, EN_ONLY]),
+      [
+        `[landing-pages] unexpected ${landingPath('hi', 'two-paths')} (package two-paths has no hi text)`,
+      ],
+    ],
+    [
+      'a landing with two main#main',
+      (o) => {
+        const path = landingPath('en', 'lantern-walk')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '</main><main id="main"></main>'),
+        )
+      },
+      CONTENT,
+      [`[landing-pages] ${landingPath('en', 'lantern-walk')}: <main id="main" 2 time(s)`],
+    ],
+    [
+      'a second main landmark as <div data-x role="main">',
+      (o) => {
+        const path = landingPath('en', 'two-paths')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace('</main>', '</main><div data-x role="main">x</div>'),
+        )
+      },
+      CONTENT,
+      [`[landing-pages] ${landingPath('en', 'two-paths')}: <main 2 time(s)`],
+    ],
+    [
+      'a second main landmark as <section role="main" id="x">',
+      (o) => {
+        const path = landingPath('hi', 'river-stones')
+        o.html.set(
+          path,
+          (o.html.get(path) ?? '').replace(
+            '</main>',
+            '<section role="main" id="x"></section></main>',
+          ),
+        )
+      },
+      CONTENT,
+      [`[landing-pages] ${landingPath('hi', 'river-stones')}: <main 2 time(s)`],
+    ],
+    [
+      'a landing whose main has no id="main"',
+      (o) =>
+        o.html.set(landingPath('hi', 'lantern-walk'), landingPage('hi', '<main tabindex="-1">')),
+      CONTENT,
+      [`[landing-pages] ${landingPath('hi', 'lantern-walk')}: <main id="main" 0 time(s)`],
+    ],
+    [
+      'a landing whose html lang is not its locale',
+      (o) => o.html.set(landingPath('hi', 'river-stones'), landingPage('en')),
+      CONTENT,
+      [`[landing-pages] ${landingPath('hi', 'river-stones')}: <html lang> is not hi`],
+    ],
+  ])('(g4) fails %s', (_name, edit, content, failures) => {
+    const output = changed(OPEN_STORIES, edit)
+    expect
+      .soft(checkLandingPages(output, OPEN, content).failures, '(g4) the failure')
+      .toEqual(failures)
+  })
+
+  it.each([
+    ['a player page', 'en/stories/two-paths/read.html'],
+    ['a folder named like stories', 'en/storiesx/two-paths.html'],
+    ['the stories folder as a page', 'en/stories.html'],
+    ['another extension', 'en/stories/two-paths.htm'],
+    ['a deeper page', 'en/stories/two-paths/x.html'],
+  ])('(g6) does not count %s as a landing', (_name, path) => {
+    const output = changed(OPEN_STORIES, (o) => {
+      o.html.set(path, landingPage('en'))
+    })
+    expect.soft(checkLandingPages(output, OPEN, CONTENT), `(g6) ${path}`).toEqual(report([], 6, 6))
+  })
+
+  it('(g7) needs the landing pattern entry in an open build with at least one story', () => {
+    const output = changed(OPEN_STORIES, (o) => {
+      delete o.manifest.dynamicRoutes![LANDING_PATTERN]
+    })
+    expect
+      .soft(checkBuild(output, OPEN, CATALOGUE, contentOf([TWO_PATHS])).failures, '(g7) open')
+      .toEqual([
+        '[dynamic-routes] dynamicRoutes has no /[locale]/stories/[storyId] entry (design R23)',
+      ])
+    expect.soft(LANDING_PATTERN, '(g7) the pattern').toBe('/[locale]/stories/[storyId]')
+    // Not without a story, and not while gated.
+    expect
+      .soft(checkBuild(openOutput(), OPEN, CATALOGUE, contentOf([])).failures, '(g7) no story')
+      .toEqual([])
+    expect
+      .soft(checkBuild(gatedOutput(), GATED, CATALOGUE, CONTENT).failures, '(g7) gated')
+      .toEqual([])
+  })
+
+  it('(g8) prints one value-free line, in the design §3.16 form', () => {
+    expect.soft(landingLine(6, 6), '(g8) counts').toBe('landing pages: 6 (expected 6)')
+    expect
+      .soft(landingLine(null, null), '(g8) unknown')
+      .toBe('landing pages: unknown (expected unknown)')
   })
 })
 
@@ -1765,16 +1990,17 @@ describe('runCheckBuild on files', () => {
 
   const REVIEW: Env = { CONTENT_SOURCE: 'fixtures', READER_LAUNCH: 'review' }
   const REVIEW_LINES = [
-    'reader launch: open (review); locale routes: 10',
-    'content mode: fixtures; staging banner pages: 0 of 12',
+    'reader launch: open (review); locale routes: 16',
+    'content mode: fixtures; staging banner pages: 0 of 18',
     'player pages: 6 (expected 6); package text values scanned: 110',
+    'landing pages: 6 (expected 6)',
   ]
 
   it.each(['app', 'route-cache'] as const)(
-    'passes a review build with its 6 player pages in the %s layout (a page only in route-cache counts)',
+    'passes a review build with its 6 player pages and 6 landings in the %s layout (a page only in route-cache counts)',
     (layout) => {
       const root = writeRoot(
-        withPlayers(openOutput(), FIXTURES),
+        withStories(openOutput(), FIXTURES),
         true,
         layout,
         'fixtures',
@@ -1789,13 +2015,14 @@ describe('runCheckBuild on files', () => {
   )
 
   it('passes the CI checks build (gated, fixtures loaded): no player page, every value scanned', () => {
-    const root = writeRoot(withPlayers(gatedOutput(), FIXTURES), true, 'app', 'fixtures', FIXTURES)
+    const root = writeRoot(withStories(gatedOutput(), FIXTURES), true, 'app', 'fixtures', FIXTURES)
     expect(run(root, { CONTENT_SOURCE: 'fixtures' })).toEqual({
       code: 0,
       out: [
         'reader launch: gated (committed); locale routes: 0',
         'content mode: fixtures; staging banner pages: 0 of 2',
         'player pages: 0 (expected 0); package text values scanned: 110',
+        'landing pages: 0 (expected 0)',
         'check-build: ok',
       ],
       err: [],
@@ -1803,7 +2030,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('counts a byte-identical route-cache copy of a player page once', () => {
-    const output = withPlayers(openOutput(), FIXTURES)
+    const output = withStories(openOutput(), FIXTURES)
     const root = writeRoot(output, true, 'app', 'fixtures', FIXTURES)
     const path = playerPath('en', 'two-paths')
     writeRouteCache(root, 'player-copy', path, output.html.get(path) ?? '')
@@ -1815,7 +2042,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('a player page only in the route-cache layout counts, beside the app layout', () => {
-    const output = withPlayers(openOutput(), FIXTURES)
+    const output = withStories(openOutput(), FIXTURES)
     const path = playerPath('hi', 'river-stones')
     const html = new Map(output.html)
     html.delete(path)
@@ -1829,7 +2056,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('fails two different copies of one player page, and prints the player lines as unknown', () => {
-    const output = withPlayers(openOutput(), FIXTURES)
+    const output = withStories(openOutput(), FIXTURES)
     const root = writeRoot(output, true, 'app', 'fixtures', FIXTURES)
     const path = playerPath('en', 'two-paths')
     writeRouteCache(
@@ -1844,6 +2071,7 @@ describe('runCheckBuild on files', () => {
         'reader launch: open (review)',
         'content mode: fixtures; staging banner pages: unknown',
         'player pages: unknown (expected 6); package text values scanned: unknown',
+        'landing pages: unknown (expected 6)',
       ],
       err: [
         `check-build failed [read] two different prerendered files for ${path} (server/route-cache)`,
@@ -1852,7 +2080,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('fails a listed package that is missing or not strict, naming the file and no value', () => {
-    const output = withPlayers(openOutput(), [TWO_PATHS])
+    const output = withStories(openOutput(), [TWO_PATHS])
     const root = writeRoot(output, true, 'app', 'fixtures', [TWO_PATHS])
     const file = join(root, '.content', 'packages', 'two-paths.json')
     const secret = ['not', 'a', 'story', 'value'].join('_')
@@ -1861,9 +2089,10 @@ describe('runCheckBuild on files', () => {
     expect(strict).toEqual({
       code: 1,
       out: [
-        'reader launch: open (review); locale routes: 6',
-        'content mode: fixtures; staging banner pages: 0 of 8',
+        'reader launch: open (review); locale routes: 8',
+        'content mode: fixtures; staging banner pages: 0 of 10',
         'player pages: 2 (expected unknown); package text values scanned: 0',
+        'landing pages: 2 (expected unknown)',
       ],
       err: [
         'check-build failed [player-pages] .content/packages/two-paths.json failed strict parse',
@@ -1879,7 +2108,7 @@ describe('runCheckBuild on files', () => {
   })
 
   it('fails a leak of package text into .next/static, naming the file and ids only', () => {
-    const output = withPlayers(openOutput(), FIXTURES)
+    const output = withStories(openOutput(), FIXTURES)
     const line = packageTextValues(TWO_PATHS).find(
       (v) => v.locale === 'hi' && v.field === 'nodes.start.text',
     )!
@@ -1896,6 +2125,102 @@ describe('runCheckBuild on files', () => {
     })
     expect(JSON.stringify(result)).not.toContain(line.line)
   })
+})
+
+describe('[landing-pages] on files (T12-25 g5, g8)', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+  const REVIEW: Env = { CONTENT_SOURCE: 'fixtures', READER_LAUNCH: 'review' }
+
+  /** The review output with its packages, written in `layout` (as the runCheckBuild tests do). */
+  function root(output: BuildOutput, layout: 'app' | 'route-cache'): string {
+    const dir = mkdtempSync(join(tmpdir(), 'check-build-landing-'))
+    dirs.push(dir)
+    const write = (path: string, text: string | Uint8Array) => {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, text)
+    }
+    const stories = FIXTURES.map((pkg) => {
+      const bytes = jcsBytes(pkg)
+      write(join(dir, '.content', 'packages', `${pkg.storyId}.json`), bytes)
+      return {
+        storyId: pkg.storyId,
+        version: pkg.version,
+        packageSha256: createHash('sha256').update(bytes).digest('hex'),
+      }
+    })
+    const info = jcsBytes(buildInfo('fixtures', stories))
+    write(join(dir, '.content', 'build-info.json'), info)
+    write(join(dir, 'public', 'build-info.json'), info)
+    write(join(dir, '.next', 'prerender-manifest.json'), output.manifest ?? '')
+    for (const [path, html] of output.html) {
+      const source = `source-${path.replace(/\.html$/, '').replace(/\//g, '-')}`
+      write(
+        layout === 'app'
+          ? join(dir, '.next', 'server', 'app', path)
+          : join(dir, '.next', 'server', 'route-cache', 'APP_PAGE', source, '$', path),
+        html,
+      )
+    }
+    for (const [path, js] of output.staticJs) write(join(dir, '.next', 'static', path), js)
+    for (const locale of ['en', 'hi']) {
+      const values = Object.fromEntries(
+        CATALOGUE.filter((v) => v.locale === locale).map((v) => [v.key, v.value]),
+      )
+      write(join(dir, 'messages', `${locale}.json`), JSON.stringify(values))
+    }
+    return dir
+  }
+
+  function run(dir: string) {
+    const out: string[] = []
+    const err: string[] = []
+    const code = runCheckBuild({
+      root: dir,
+      env: REVIEW,
+      log: (l) => out.push(l),
+      logError: (l) => err.push(l),
+    })
+    return { code, out, err }
+  }
+
+  it.each(['app', 'route-cache'] as const)(
+    '(g5, g8) %s: each failure is found, and the landing line follows the player line on a failing run',
+    (layout) => {
+      const missing = landingPath('hi', 'two-paths')
+      const wrongLang = landingPath('hi', 'river-stones')
+      const twoMains = landingPath('en', 'lantern-walk')
+      const extra = landingPath('en', 'other-story')
+      const output = changed(withStories(openOutput(), FIXTURES), (o) => {
+        o.html.delete(missing)
+        o.html.set(wrongLang, landingPage('en'))
+        o.html.set(
+          twoMains,
+          (o.html.get(twoMains) ?? '').replace('</main>', '</main><main id="main"></main>'),
+        )
+        o.html.set(extra, landingPage('en'))
+      })
+      const result = run(root(output, layout))
+      expect.soft(result.code, `(g5) ${layout}: exit 1`).toBe(1)
+      expect
+        .soft(result.out.slice(2), `(g8) ${layout}: the player line, then the landing line`)
+        .toEqual([
+          'player pages: 6 (expected 6); package text values scanned: 110',
+          'landing pages: 6 (expected 6)',
+        ])
+      expect
+        .soft(result.err, `(g5) ${layout}: the failures, files and ids only`)
+        .toEqual([
+          `check-build failed [html-lang] ${wrongLang} has no <html lang="hi"`,
+          `check-build failed [landing-pages] ${twoMains}: <main id="main" 2 time(s)`,
+          `check-build failed [landing-pages] unexpected ${extra} (build-info lists no story other-story)`,
+          `check-build failed [landing-pages] ${wrongLang}: <html lang> is not hi`,
+          `check-build failed [landing-pages] missing ${missing}`,
+        ])
+    },
+  )
 })
 
 describe('[staging-banner] (P1-2c): checkStagingBanner', () => {

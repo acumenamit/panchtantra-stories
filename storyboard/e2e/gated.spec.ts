@@ -12,11 +12,17 @@
 // - Step 10e (design §2.5, F2): the unmatched paths are playerNotFoundPaths('gated'), which adds the
 //   staging-only picture story's read URL; Step 11 (design p1-step11-design.md §8.1, A28) adds the
 //   staging-only narrated story's read URL too: 14 paths.
+// - P1-3 Step 12a (design p1-step12-design.md §13.4.5 E12-R1, §13.5 item 7, A1, A20): every story
+//   landing an open build serves is the same 404 here (the landing's static params are empty while
+//   gated), and the unmatched list changes (the story URL without /read leaves; three
+//   landing-shaped 404s and the staging-only featured story's read URL join): 6 player pages, 6
+//   landings and 11 unmatched paths, 23 in all.
 import { DEFAULT_PREFS, serializePrefs } from '../src/core/progress/records'
 import { LOCALE_REDIRECT_SCRIPT } from '../src/core/progress/locale-redirect-boot'
 import { expect, test } from './fixtures'
 import { fontFamilies, seedPrefs, servedFontFaces, settleFonts, storageAfter } from './page-helpers'
 import {
+  landingPaths,
   message,
   NOT_FOUND_TITLE,
   playerNotFoundPaths,
@@ -114,12 +120,16 @@ test.describe('the gated build', { tag: '@gated' }, () => {
     expectSecurityHeaders(response.headers(), '/en (RSC: 1)')
   })
 
-  test('every player path is the bilingual 404 with the security headers, also as an RSC request', async ({
+  test('every player and landing path is the bilingual 404 with the security headers, also as an RSC request', async ({
     page,
     request,
   }) => {
-    const paths = [...playerPaths().map((player) => player.path), ...playerNotFoundPaths('gated')]
-    expect(paths, 'player paths and unmatched player-shaped URLs').toHaveLength(14)
+    const paths = [
+      ...playerPaths().map((player) => player.path),
+      ...landingPaths().map((landing) => landing.path),
+      ...playerNotFoundPaths('gated'),
+    ]
+    expect(paths, 'player and landing paths, and unmatched story-shaped URLs').toHaveLength(23)
     for (const routePath of paths) {
       const response = await page.goto(routePath)
       if (!response) throw new Error(`no response for ${routePath}`)

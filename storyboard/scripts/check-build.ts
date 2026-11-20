@@ -11,7 +11,8 @@
 //   Coming-soon markup with no redirect script, no locale link and no Hindi island.
 // - Open: a page for every enabled locale and none for a disabled one, both gate links and the
 //   redirect script exactly once on "/", <html lang> per locale page. Deliberately loose about
-//   deeper routes, so later steps need not edit it ([player-pages] below is the one exception).
+//   deeper routes, so later steps need not edit it ([player-pages] and [landing-pages] below are
+//   the exceptions).
 // - Both: "/" and /_not-found are built; every /[locale]… pattern has fallback false (with
 //   dynamicParams = false every unlisted param is a 404); noindex, nofollow exactly once on every
 //   200 page and noindex on the 404; no message value of 16 or more UTF-16 code units in client JS,
@@ -55,6 +56,15 @@
 //   "[player-pages] <path>: <main <k> time(s)", "[player-pages] <path>: <html lang> is not <code>",
 //   "[package-text-leak] <static file>: storyId <id> locale <l> node <n|-> field <f>" (plus the form
 //   that matched) and "[package-text-leak] content is loaded but 0 values were scanned".
+// - [landing-pages] (P1 Step 12; design p1-step12-design.md §3.16 N17, A18): the story landings,
+//   <locale>/stories/<storyId>.html (never read.html, a sibling folder or another extension), in
+//   either output layout, by the [player-pages] rules: open with content loaded, exactly one per
+//   listed story and enabled locale of its package, each with one main element, that one <main
+//   id="main">, and its <html lang>; with at least one story, a /[locale]/stories/[storyId] pattern
+//   entry too. Gated, or no content: no landing. A package that could not be read is reported once,
+//   by [player-pages]. Right after the player line, every run prints "landing pages: <n> (expected
+//   <m>)" ("unknown" where the build output or a package could not be read); failures take the
+//   [player-pages] forms with [landing-pages].
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -118,11 +128,17 @@ const LOCALE_PATTERN = '/[locale]'
 /** The story player's route (app/(reader)/[locale]/(player)/stories/[storyId]/read; P1-4b). */
 export const PLAYER_PATTERN = '/[locale]/stories/[storyId]/read'
 
+/** The story landing's route (app/(reader)/[locale]/(site)/stories/[storyId]; P1 Step 12). */
+export const LANDING_PATTERN = '/[locale]/stories/[storyId]'
+
 const REQUIRED_PATTERNS = {
   gated: [LOCALE_PATTERN],
   open: [LOCALE_PATTERN, '/[locale]/grown-ups'],
-  /** Also required when open and build-info lists at least one story (design p1-step10 §9.1 G1). */
-  openWithStories: [PLAYER_PATTERN],
+  /**
+   * Also required when open and build-info lists at least one story (design p1-step10 §9.1 G1;
+   * the landing from P1 Step 12, design p1-step12 §3.16).
+   */
+  openWithStories: [PLAYER_PATTERN, LANDING_PATTERN],
 } as const
 
 /** The four decision input names as a list: "A, B, C or D". */
@@ -729,6 +745,33 @@ export function readBuiltContent(root: string, buildInfo: Uint8Array | null): Bu
 /** A player page as BuildOutput.html keys it: <locale>/stories/<storyId>/read.html. */
 const PLAYER_PAGE = /^([^/]+)\/stories\/([^/]+)\/read\.html$/
 
+/** A landing page as BuildOutput.html keys it: <locale>/stories/<storyId>.html (P1 Step 12). */
+const LANDING_PAGE = /^([^/]+)\/stories\/([^/]+)\.html$/
+
+/** One kind of per-story page: its rule name, how its path is read and how it is written. */
+interface StoryPageKind {
+  readonly rule: 'player-pages' | 'landing-pages'
+  /** Captures the locale and the storyId. */
+  readonly page: RegExp
+  readonly path: (code: string, storyId: string) => string
+  /** Whether this rule reports the packages that could not be read (one rule does). */
+  readonly reportsProblems: boolean
+}
+
+const PLAYER_PAGES: StoryPageKind = {
+  rule: 'player-pages',
+  page: PLAYER_PAGE,
+  path: (code, storyId) => `${code}/stories/${storyId}/read.html`,
+  reportsProblems: true,
+}
+
+const LANDING_PAGES: StoryPageKind = {
+  rule: 'landing-pages',
+  page: LANDING_PAGE,
+  path: (code, storyId) => `${code}/stories/${storyId}.html`,
+  reportsProblems: false,
+}
+
 /**
  * A <main> element with id="main", its attributes in any order: React writes them in JSX prop
  * order, so a literal `<main id="main"` would miss `<main class="…" id="main">` (C8).
@@ -742,10 +785,11 @@ const MAIN_ELEMENT = /<main\b[^>]*\sid="main"[\s>]/g
 const ANY_MAIN = /<main[\s>]|<[a-z][^>]*\srole="main"[\s/>]/g
 
 /**
- * The player pages a build must have, path → locale: open, one per listed story and per enabled
- * locale of its package; gated, none. null when a listed package could not be read.
+ * The pages of one kind a build must have, path → locale: open, one per listed story and per
+ * enabled locale of its package; gated, none. null when a listed package could not be read.
  */
-function expectedPlayerPages(
+function expectedStoryPages(
+  kind: StoryPageKind,
   decision: LaunchDecision,
   content: BuiltContent,
 ): Map<string, string> | null {
@@ -754,7 +798,7 @@ function expectedPlayerPages(
   if (!decision.readerRoutes) return expected
   for (const pkg of content.packages) {
     for (const code of ENABLED_LOCALE_CODES) {
-      if (pkg.locales.includes(code)) expected.set(`${code}/stories/${pkg.storyId}/read.html`, code)
+      if (pkg.locales.includes(code)) expected.set(kind.path(code, pkg.storyId), code)
     }
   }
   return expected
@@ -769,17 +813,41 @@ export interface PlayerPagesReport {
   readonly expected: number | null
 }
 
+/** What [landing-pages] found: the [player-pages] report's shape (P1 Step 12). */
+export type LandingPagesReport = PlayerPagesReport
+
 /** Rule [player-pages] (design p1-step10-design.md §9.1 G1). */
 export function checkPlayerPages(
   output: BuildOutput,
   decision: LaunchDecision,
   content: BuiltContent,
 ): PlayerPagesReport {
-  const failures = content.problems.map((problem) => `[player-pages] ${problem}`)
+  return checkStoryPages(PLAYER_PAGES, output, decision, content)
+}
+
+/** Rule [landing-pages] (design p1-step12-design.md §3.16 N17, A18): the player rule's twin. */
+export function checkLandingPages(
+  output: BuildOutput,
+  decision: LaunchDecision,
+  content: BuiltContent,
+): LandingPagesReport {
+  return checkStoryPages(LANDING_PAGES, output, decision, content)
+}
+
+/** The shared per-story page rule: [player-pages] and [landing-pages]. */
+function checkStoryPages(
+  kind: StoryPageKind,
+  output: BuildOutput,
+  decision: LaunchDecision,
+  content: BuiltContent,
+): PlayerPagesReport {
+  const failures = kind.reportsProblems
+    ? content.problems.map((problem) => `[${kind.rule}] ${problem}`)
+    : []
   const fail = (message: string): void => {
-    failures.push(`[player-pages] ${message}`)
+    failures.push(`[${kind.rule}] ${message}`)
   }
-  const expected = expectedPlayerPages(decision, content)
+  const expected = expectedStoryPages(kind, decision, content)
   const listed = new Set(content.storyIds)
   const packages = new Map(content.packages.map((pkg) => [pkg.storyId, pkg]))
   /** A page that is not in the expected set, in the §8 form, with why it is not; ids only. */
@@ -794,9 +862,9 @@ export function checkPlayerPages(
           : `package ${storyId} could not be read`
     return `unexpected ${path} (${why})`
   }
-  const pages = [...output.html].filter(([path]) => PLAYER_PAGE.test(path))
+  const pages = [...output.html].filter(([path]) => kind.page.test(path))
   for (const [path, html] of pages) {
-    const [, code = '', storyId = ''] = PLAYER_PAGE.exec(path) ?? []
+    const [, code = '', storyId = ''] = kind.page.exec(path) ?? []
     if (expected !== null && !expected.has(path)) fail(unexpected(path, code, storyId))
     const mains = html.match(MAIN_ELEMENT)?.length ?? 0
     const anyMains = html.match(ANY_MAIN)?.length ?? 0
@@ -927,6 +995,11 @@ function nodeAndField(field: string): readonly [node: string, field: string] {
   return match === null ? ['-', field] : [match[1] ?? '-', match[2] ?? field]
 }
 
+/** The one value-free landing line every run prints after the player line (P1 Step 12, §3.16). */
+export function landingLine(pages: number | null, expected: number | null): string {
+  return `landing pages: ${pages ?? 'unknown'} (expected ${expected ?? 'unknown'})`
+}
+
 /** The one value-free player line every run prints (design p1-step10-design.md §8, §10.1 item 5). */
 export function playerLine(
   pages: number | null,
@@ -993,9 +1066,10 @@ export function runCheckBuild(options: CheckBuildOptions): number {
   }
   // [staging-banner] beside C-2 (P1-2c). Without a readable output its second lock still runs.
   const banner = checkStagingBanner(output ?? NO_OUTPUT, mode, options.env, platform)
-  // [player-pages] and [package-text-leak] (P1-4b) need the output; without it the [read] failure
-  // already fails the build, and only the package problems are added.
+  // [player-pages], [landing-pages] (P1 Step 12) and [package-text-leak] (P1-4b) need the output;
+  // without it the [read] failure already fails the build, and only the package problems are added.
   const player = output === undefined ? undefined : checkPlayerPages(output, decision, content)
+  const landing = output === undefined ? undefined : checkLandingPages(output, decision, content)
   const leak = output === undefined ? undefined : checkPackageTextLeak(output, content)
   result = {
     ...result,
@@ -1004,6 +1078,7 @@ export function runCheckBuild(options: CheckBuildOptions): number {
       ...contentFailures,
       ...banner.failures,
       ...(player?.failures ?? content.problems.map((problem) => `[player-pages] ${problem}`)),
+      ...(landing?.failures ?? []),
       ...(leak?.failures ?? []),
     ],
   }
@@ -1013,9 +1088,17 @@ export function runCheckBuild(options: CheckBuildOptions): number {
     playerLine(
       player?.pages ?? null,
       player === undefined
-        ? (expectedPlayerPages(decision, content)?.size ?? null)
+        ? (expectedStoryPages(PLAYER_PAGES, decision, content)?.size ?? null)
         : player.expected,
       leak?.values ?? null,
+    ),
+  )
+  log(
+    landingLine(
+      landing?.pages ?? null,
+      landing === undefined
+        ? (expectedStoryPages(LANDING_PAGES, decision, content)?.size ?? null)
+        : landing.expected,
     ),
   )
   if (result.failures.length === 0) {

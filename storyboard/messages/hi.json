@@ -6,7 +6,13 @@
   "header.changeLanguage": "भाषा बदलें:",
   "header.grownUps": "बड़ों के लिए",
   "header.navLabel": "साइट",
+  "home.continueEmpty": "आप जो कहानी पढ़ रहे हैं, वह यहाँ दिखेगी।",
+  "home.continueReading": "पढ़ना जारी रखें",
+  "home.featured": "विशेष कहानी",
+  "home.finished": "पूरी पढ़ी · {total} में से {found} अंत",
+  "home.new": "नई",
   "home.placeholder": "कहानियों की अलमारी तैयार हो रही है।",
+  "home.reading": "पढ़ रहे हैं",
   "home.title": "कहानियाँ",
   "meta.description": "बच्चों के लिए इंटरैक्टिव कहानियाँ (काम चल रहा है)।",
   "notFound.body": "यह पेज यहाँ नहीं है। हो सकता है लिंक ग़लत हो, या पेज कहीं और चला गया हो।",
@@ -44,5 +50,10 @@
   "player.tryAnother": "दूसरा रास्ता आज़माएँ",
   "shell.skipToMain": "मुख्य सामग्री पर जाएँ",
   "storage.body": "आप फिर भी हर कहानी पढ़ सकते हैं। कोई बड़ा व्यक्ति ब्राउज़र की सेटिंग्स में इस साइट को डेटा सहेजने की अनुमति दे सकता है।",
-  "storage.title": "यह डिवाइस अभी आपकी सेटिंग्स और पढ़ने की प्रगति याद नहीं रख रहा है।"
+  "storage.title": "यह डिवाइस अभी आपकी सेटिंग्स और पढ़ने की प्रगति याद नहीं रख रहा है।",
+  "story.age": "आयु {age}",
+  "story.continue": "आगे पढ़ें",
+  "story.howMade": "यह कहानी कैसे बनी",
+  "story.start": "शुरू करें",
+  "story.theme": "विषय: {theme}"
 }

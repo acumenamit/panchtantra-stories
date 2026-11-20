@@ -99,6 +99,17 @@
     touch-action: manipulation;
   }
 
+  /*
+   * The navigation hold (P1 Step 12, design p1-step12-design.md 3.13, 4.6): for 500 ms after a tap
+   * that navigates between the shelf, a landing and the player (or a tap on a landing's Share),
+   * src/ui/shell/nav-hold.ts sets data-nav-hold on html, and body takes no pointer taps, so the
+   * second tap of a double tap lands on nothing. The keyboard is not held. The only rule under
+   * src/ that sets this property (src/ui/shell/nav-hold.test.ts).
+   */
+  :root[data-nav-hold] body {
+    pointer-events: none;
+  }
+
   /* The ring is never removed; the canvas halo keeps it at 11.84:1 next to an amber fill. */
   :focus-visible {
     outline: var(--focus-width) solid var(--color-focus);

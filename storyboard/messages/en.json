@@ -6,7 +6,13 @@
   "header.changeLanguage": "Change language:",
   "header.grownUps": "Grown-ups",
   "header.navLabel": "Site",
+  "home.continueEmpty": "The story you are reading will show here.",
+  "home.continueReading": "Continue reading",
+  "home.featured": "Featured story",
+  "home.finished": "{total, plural, one {Finished · {found} of # ending} other {Finished · {found} of # endings}}",
+  "home.new": "New",
   "home.placeholder": "The story shelf is being built.",
+  "home.reading": "Reading",
   "home.title": "Stories",
   "meta.description": "Interactive stories for children (work in progress).",
   "notFound.body": "This page isn’t here. The link may be wrong, or the page may have moved.",
@@ -44,5 +50,10 @@
   "player.tryAnother": "Try another path",
   "shell.skipToMain": "Skip to main content",
   "storage.body": "You can still read every story. A grown-up can let this site save data in the browser settings.",
-  "storage.title": "This device isn’t remembering your settings or reading progress right now."
+  "storage.title": "This device isn’t remembering your settings or reading progress right now.",
+  "story.age": "Age {age}",
+  "story.continue": "Continue",
+  "story.howMade": "How this story was made",
+  "story.start": "Start",
+  "story.theme": "Theme: {theme}"
 }

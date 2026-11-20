@@ -27,11 +27,14 @@
 //   own under it, so the buttons keep one row on a tablet. ShareControl hands both parts to the
 //   card through its render prop, so the row is rendered inside the keyed control: a switch
 //   remounts Try another path and All stories with Share (order and settle unchanged).
-import Link from 'next/link'
+// - P1 Step 12 (design p1-step12-design.md §3.12 N13, §3.13 N14; S12-CRIT-3): All stories renders
+//   through HeldLink (same href and markup), so the tap starts the navigation hold: Home's cards
+//   and Continue card cannot take the second tap of a double tap. Share now shares the landing URL.
 import { useRef } from 'react'
 import type { StepResult } from '../../core/engine'
 import type { LocaleCode } from '../../core/locales'
 import type { PartView } from '../../reader/player/view'
+import { HeldLink } from '../shell/held-link'
 import styles from './player.module.css'
 import { ShareControl } from './share-control'
 import type { PlayerStrings } from './types'
@@ -117,9 +120,9 @@ export function EndingCard({
                   <span className={styles.actionLabel}>{strings.tryAnother}</span>
                 </button>
                 {share}
-                <Link href={`/${locale}`} data-all-stories="" className={styles.action}>
+                <HeldLink href={`/${locale}`} data-all-stories="" className={styles.action}>
                   <span className={styles.actionLabel}>{strings.allStories}</span>
-                </Link>
+                </HeldLink>
               </div>
               {field}
             </>
