@@ -972,7 +972,10 @@ interface ReachFence {
 }
 
 /** F1's allow-list: owner item 1 option 1 (lead decision 15). Step 14 adds its CLI. */
-const F1_ALLOWED: ReadonlySet<string> = new Set(['tools/publisher/content-deleter.ts'])
+const F1_ALLOWED: ReadonlySet<string> = new Set([
+  'tools/publisher/content-deleter.ts',
+  'tools/publisher/cli.ts',
+])
 
 const REACH_FENCES: readonly ReachFence[] = [
   {
@@ -1265,6 +1268,9 @@ const ALLOW_TABLE: ReadonlyMap<string, Partial<Record<FormId, Allowance>>> = new
   // Lead decision 3: narration reads its own Azure keys from the env file; it reaches no Storage
   // client (F1) and holds no Storage route (S1), so only the env-file form is allowed here.
   ['tools/narration/cli.ts', { 's2-env-file': 'must-hold' }],
+  // Step 14 (design p1-step14-design.md §3.15 edit 2): the publisher CLI loads the env file through
+  // env.ts on exactly two pinned lines (FS2a g4); the narration precedent above.
+  ['tools/publisher/cli.ts', { 's2-env-file': 'must-hold' }],
   ['.github/workflows/keep-alive.yml', { 's1-route': 'must-hold', 's1-apikey': 'must-hold' }],
 ])
 
@@ -2223,6 +2229,287 @@ function routeLiterals(tree: ts.SourceFile): string[] {
   return [...found].sort()
 }
 
+// ---- Step 14's entries and pins (design p1-step14-design.md §3.15 D14-11, D14-20; T14-82 to T14-87) ----
+
+/** The publisher CLI: the one F1 row and the one env-file reader Step 14 adds. */
+const PUBLISHER_CLI = 'tools/publisher/cli.ts'
+
+/**
+ * FS2a g4 (§3.15 edit 3): the publisher CLI's two env-file lines, trimmed, copied from the formatted
+ * file: the import, and the entry block's deps line that passes loadEnvFile by reference.
+ */
+const CLI_ENV_FILE_LINES: readonly string[] = [
+  "import { loadEnvFile, readStorageCredentials } from './env'",
+  'loadEnv: loadEnvFile,',
+]
+
+/** The trimmed text of each line of `path` that gives `form`, in line order. */
+function lineTextsOf(scan: Scan, path: string, form: FormId): string[] {
+  const lines = (scan.walk.files.find((file) => file.path === path)?.text ?? '').split('\n')
+  return scan.hits
+    .filter((hit) => hit.path === path && hit.form === form)
+    .map((hit) => hit.line)
+    .sort((a, b) => a - b)
+    .map((line) => (lines[line - 1] ?? '').trim())
+}
+
+/** FS2a g4's compare: exactly the pinned lines, in order. */
+const isPinnedEnvFileForm = (texts: readonly string[]): boolean =>
+  texts.length === CLI_ENV_FILE_LINES.length &&
+  texts.every((text, index) => text === CLI_ENV_FILE_LINES[index])
+
+/**
+ * FS4b g2 (§3.15 edit 9): the layout functions the stub must never call, so it answers from its own
+ * rules and never asks the fence (S14-CRIT-6 adds contentReadTarget).
+ */
+const FENCE_ANSWERS: readonly string[] = [
+  'targetOf',
+  'pointerTarget',
+  'classOfPath',
+  'contentReadTarget',
+]
+
+/** FS4b g2's filter: each identifier that names a fence answer, as `name:line`. */
+function asksTheFence(tokens: ScriptTokens): string[] {
+  return tokens.identifiers
+    .filter(({ value }) => FENCE_ANSWERS.includes(value))
+    .map(({ value, line }) => `${value}:${line}`)
+}
+
+/** The eight Step 13 non-test scripts under tools/publisher/ (FS4d g0). */
+const STEP13_PUBLISHER: ReadonlySet<string> = new Set([
+  'tools/publisher/content-deleter.ts',
+  'tools/publisher/env.ts',
+  'tools/publisher/hook.ts',
+  'tools/publisher/http.ts',
+  'tools/publisher/storage-layout.ts',
+  'tools/publisher/storage-stub.ts',
+  'tools/publisher/storage.ts',
+  'tools/publisher/verify.ts',
+])
+
+/** One FS4d row: exact specifiers, plus any src/core module, plus (stage-testkit only) any node: module. */
+interface ImportRow {
+  readonly specs: readonly string[]
+  readonly srcCore: boolean
+  readonly anyNode: boolean
+}
+
+const importRow = (specs: readonly string[], srcCore = true, anyNode = false): ImportRow => ({
+  specs,
+  srcCore,
+  anyNode,
+})
+
+/** Each Step 14 module's allowed specifiers (§3.15 edit 8, D14-20). */
+const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
+  ['tools/publisher/args.ts', importRow(['node:path'])],
+  ['tools/publisher/port.ts', importRow(['./storage-layout'], false)],
+  ['tools/publisher/local-files.ts', importRow(['node:fs', 'node:path'], false)],
+  ['tools/publisher/media-check.ts', importRow([])],
+  [
+    'tools/publisher/story-checks.ts',
+    importRow(['zod', './local-files', './media-check', './port', './storage-layout']),
+  ],
+  ['tools/publisher/catalogue-state.ts', importRow(['./port', './storage-layout'])],
+  [
+    'tools/publisher/stage.ts',
+    importRow([
+      './catalogue-state',
+      './local-files',
+      './media-check',
+      './port',
+      './report',
+      './story-checks',
+      './storage-layout',
+      'node:path',
+    ]),
+  ],
+  ['tools/publisher/report.ts', importRow(['node:fs', 'node:path'])],
+  ['tools/publisher/stage-testkit.ts', importRow([], true, true)],
+  [
+    PUBLISHER_CLI,
+    importRow(
+      [
+        './args',
+        './env',
+        './port',
+        './stage',
+        './storage',
+        '../../scripts/load-content',
+        '../../src/config/security-headers',
+        'node:path',
+        'node:url',
+      ],
+      false,
+    ),
+  ],
+])
+
+/** g4: modules that open a network or run other code, with or without `node:`. */
+const NETWORK_MODULES: ReadonlySet<string> = new Set([
+  'http',
+  'https',
+  'http2',
+  'net',
+  'tls',
+  'dgram',
+  'child_process',
+  'worker_threads',
+  'cluster',
+  'vm',
+])
+/** g5: the network globals, as an identifier or an exact literal. */
+const NETWORK_NAMES: ReadonlySet<string> = new Set([
+  'fetch',
+  'WebSocket',
+  'EventSource',
+  'XMLHttpRequest',
+  'Request',
+])
+/** g3: the targets no new module imports, and those only the CLI imports. */
+const NEVER_IMPORTED: readonly string[] = [
+  'tools/publisher/hook',
+  'tools/publisher/verify',
+  'tools/publisher/content-deleter',
+  'tools/publisher/storage-stub',
+]
+const CLI_ONLY_IMPORTS: readonly string[] = ['tools/publisher/storage', 'tools/publisher/env']
+/** g3: the env.ts exports the CLI names, and no other (S14-AUD-13). */
+const CLI_ENV_NAMES: readonly string[] = ['loadEnvFile', 'readStorageCredentials']
+/** g8 (S14-AUD-14): the CLI's two captureRunContext lines, trimmed, copied from the formatted file. */
+const CLI_RUN_CONTEXT_LINES: readonly string[] = [
+  "import { RUN_CONTEXT_NAMES, captureRunContext, parseArgs } from './args'",
+  'const runContext = captureRunContext(process.env, process.platform)',
+]
+
+const isRelativeSpecifier = (spec: string): boolean => {
+  const text = spec.replaceAll('\\', '/')
+  return text === '.' || text === '..' || text.startsWith('./') || text.startsWith('../')
+}
+
+/**
+ * A relative specifier's target from `from`, lower-cased, without a script extension or `/index`:
+ * './Hook.js' from tools/publisher/stage.ts is 'tools/publisher/hook'. null for any other specifier.
+ */
+function relativeTarget(from: string, spec: string): string | null {
+  if (!isRelativeSpecifier(spec)) return null
+  return posix
+    .normalize(posix.join(posix.dirname(from), spec.replaceAll('\\', '/')))
+    .replace(/\/$/, '')
+    .replace(/\.[cm]?[jt]sx?$/i, '')
+    .replace(/\/index$/i, '')
+    .toLowerCase()
+}
+
+/** g1: an exact specifier of the row, a module under src/core (after `..` is resolved), or a node: module. */
+function inImportRow(row: ImportRow, from: string, spec: string): boolean {
+  if (row.specs.includes(spec)) return true
+  if (
+    row.srcCore &&
+    spec.startsWith('../../src/core/') &&
+    posix.normalize(posix.join(posix.dirname(from), spec)).startsWith('src/core/')
+  ) {
+    return true
+  }
+  return row.anyNode && spec.startsWith('node:')
+}
+
+const FS4D_GROUPS = ['g0', 'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7', 'g8'] as const
+type Fs4dGroup = (typeof FS4D_GROUPS)[number]
+type Fs4dFindings = Record<Fs4dGroup, string[]>
+
+/**
+ * FS4d (§3.15 edit 8; D14-20): Step 14's pins over the shared tokens of one scan, not a new scanner
+ * form. Every non-test script under tools/publisher/ that is not a Step 13 file is a new module: g0
+ * needs its row, g1 keeps its specifiers within the row, g2-g7 apply to every new module, and g3's
+ * name half and g8 read the CLI. A finding names the path, the line and the specifier or name.
+ */
+function fs4dFindings(scan: Scan, envExports: readonly string[]): Fs4dFindings {
+  const found: Fs4dFindings = {
+    g0: [],
+    g1: [],
+    g2: [],
+    g3: [],
+    g4: [],
+    g5: [],
+    g6: [],
+    g7: [],
+    g8: [],
+  }
+  const modules = scan.walk.files.filter(
+    (file) =>
+      file.cls === 'script' &&
+      file.path.startsWith('tools/publisher/') &&
+      !STEP13_PUBLISHER.has(file.path),
+  )
+  for (const file of modules) {
+    const path = file.path
+    const row = FS4D_ROWS.get(path)
+    if (row === undefined) found.g0.push(path)
+    const tokens = scan.tokens(path)
+    if (tokens === null) continue
+    for (const { value: spec, line } of tokens.specifiers) {
+      const at = `${path}:${line} ${spec}`
+      if (row !== undefined && !inImportRow(row, path, spec)) found.g1.push(at)
+      const bare = !isRelativeSpecifier(spec) && !spec.startsWith('node:')
+      if (bare && (spec !== 'zod' || path !== 'tools/publisher/story-checks.ts')) found.g2.push(at)
+      const target = relativeTarget(path, spec)
+      if (
+        target !== null &&
+        (NEVER_IMPORTED.includes(target) ||
+          (CLI_ONLY_IMPORTS.includes(target) && path !== PUBLISHER_CLI))
+      ) {
+        found.g3.push(at)
+      }
+      const moduleName =
+        spec
+          .replaceAll('\\', '/')
+          .replace(/^node:/i, '')
+          .split('/')[0] ?? ''
+      if (NETWORK_MODULES.has(moduleName.toLowerCase())) found.g4.push(at)
+    }
+    for (const { value, line } of [...tokens.identifiers, ...tokens.exactLiterals]) {
+      if (NETWORK_NAMES.has(value)) found.g5.push(`${path}:${line} ${value}`)
+    }
+    for (const { value, line } of [...tokens.identifiers, ...tokens.exactLiterals]) {
+      if (path !== PUBLISHER_CLI && (value === 'console' || value === 'process')) {
+        found.g6.push(`${path}:${line} ${value}`)
+      }
+    }
+    for (const { value, line } of tokens.literals) {
+      if (/^panchatantra@/i.test(value)) found.g7.push(`${path}:${line}`)
+    }
+    if (path !== PUBLISHER_CLI) continue
+    const named = [
+      ...new Set(
+        [...tokens.identifiers, ...tokens.exactLiterals]
+          .map(({ value }) => value)
+          .filter((value) => envExports.includes(value)),
+      ),
+    ].sort()
+    if (named.join(' ') !== CLI_ENV_NAMES.join(' ')) {
+      found.g3.push(`${path} env.ts names: ${named.join(' ')}`)
+    }
+    const lines = (file.text ?? '').split('\n')
+    const captureLines = [
+      ...new Set(
+        tokens.identifiers
+          .filter(({ value }) => value === 'captureRunContext')
+          .map(({ line }) => line),
+      ),
+    ].sort((a, b) => a - b)
+    const texts = captureLines.map((line) => (lines[line - 1] ?? '').trim())
+    if (
+      texts.length !== CLI_RUN_CONTEXT_LINES.length ||
+      texts.some((text, index) => text !== CLI_RUN_CONTEXT_LINES[index])
+    ) {
+      found.g8.push(`${path}:${captureLines.join(',')} captureRunContext`)
+    }
+  }
+  return found
+}
+
 // ---- export lists (FX; A18) ----
 
 describe('export lists (FX)', () => {
@@ -2266,6 +2553,7 @@ describe('export lists (FX)', () => {
         'MASTERS_CACHE_SECONDS',
         'MAX_JSON_BYTES',
         'classOfPath',
+        'contentReadTarget',
         'pointerTarget',
         'recheckTarget',
         'recheckUrl',
@@ -2315,6 +2603,12 @@ describe('export lists (FX)', () => {
       'readSupabaseUrl',
     ])
   })
+
+  it('T14-82 FX6 cli.ts exports exactly runCli (an allowed F1 file cannot re-export the client factory)', async () => {
+    const cli = await moduleOf('cli.ts')
+    expect(typeof cli.runCli, 'precondition: cli.ts loads and holds runCli').toBe('function')
+    expect.soft(Object.keys(cli).sort(), '(g1) the pinned list').toEqual(['runCli'])
+  })
 })
 
 // ---- the reach walk (FW; A16) ----
@@ -2344,6 +2638,7 @@ describe('the reach walk (FW)', () => {
         'tools/narration/cli.ts',
         'scripts/load-content.ts',
         'tools/publisher/storage-stub.ts',
+        PUBLISHER_CLI,
       ]) {
         expect(real.entries, `precondition: ${entry} is an entry`).toContain(entry)
       }
@@ -2777,6 +3072,60 @@ describe('the reach walk (FW)', () => {
 
   it('T13-FW7 a fenced module named by its repository path in a script literal or runnable text is a finding outside its fence', () => {
     expectSamples('g1', FENCED_PATH_SAMPLES)
+  })
+
+  it("T14-87 FW F1's cli.ts row is exact, and any import of storage.ts from a library module is a finding (L9, L14; lint class 12, file classes 2-4)", () => {
+    const loadsStorage = "import { x } from './storage'\nexport const y = x"
+    expect(
+      reachOfFiles({ ...STORAGE_FILES, [PUBLISHER_CLI]: loadsStorage }),
+      'precondition: tools/publisher/cli.ts importing ./storage gives no finding',
+    ).toEqual([])
+    const names: readonly (readonly [string, string])[] = [
+      ['tools/publisher/Cli.ts', loadsStorage],
+      ['tools/publisher/cli.mts', loadsStorage],
+      ['tools/publisher/cli.ts/index.ts', "import { x } from '../storage'\nexport const y = x"],
+      ['tools/publisher/x/cli.ts', "import { x } from '../storage'\nexport const y = x"],
+      ['tools/cli.ts', "import { x } from './publisher/storage'\nexport const y = x"],
+    ]
+    for (const [path, text] of names) {
+      expect
+        .soft(
+          loads(reachOfFiles({ ...STORAGE_FILES, [path]: text }), path, 'F1 storage client'),
+          `(g1) ${path} reaching storage.ts is a finding`,
+        )
+        .toBe(true)
+    }
+    const library: readonly (readonly [string, Record<string, string>, string])[] = [
+      [
+        'a type-only import in stage.ts',
+        {
+          'tools/publisher/stage.ts':
+            "import type { StorageClient } from './storage'\nexport type C = StorageClient",
+        },
+        'tools/publisher/stage.ts',
+      ],
+      [
+        'export * in port.ts',
+        { 'tools/publisher/port.ts': "export * from './storage'" },
+        'tools/publisher/port.ts',
+      ],
+      [
+        'two hops, report.ts > helper.ts > storage.ts',
+        {
+          'tools/publisher/report.ts': "import { h } from './helper'\nexport const r = h",
+          'tools/publisher/helper.ts': "export { x as h } from './storage'",
+        },
+        'tools/publisher/report.ts',
+      ],
+    ]
+    for (const [id, files, entry] of library) {
+      expect
+        .soft(
+          loads(reachOfFiles({ ...STORAGE_FILES, ...files }), entry, 'F1 storage client'),
+          `(g2) ${id} is a finding`,
+        )
+        .toBe(true)
+    }
   })
 })
 
@@ -3778,10 +4127,10 @@ describe('S1: the Storage request surface (FS1)', () => {
 
 describe("S2: the key's reach (FS2)", () => {
   it(
-    'T13-FS2a real tree: no S2 finding outside env.ts and the narration env-file form, and each allowed cell is in use',
+    "T13-FS2a real tree: no S2 finding outside env.ts, the narration env-file form and the publisher CLI's two env-file lines, and each allowed cell is in use",
     { timeout: WALK_TIMEOUT },
     () => {
-      for (const path of ['tools/publisher/env.ts', 'tools/narration/cli.ts']) {
+      for (const path of ['tools/publisher/env.ts', 'tools/narration/cli.ts', PUBLISHER_CLI]) {
         expect(realRead(path), `precondition: ${path} was read`).toBe(true)
       }
       expect
@@ -3793,7 +4142,7 @@ describe("S2: the key's reach (FS2)", () => {
       expect
         .soft(
           unusedAllowances(real.scan.hits, 's2'),
-          '(g2) env.ts holds the name, the marker and the env-file form; cli.ts the env-file form',
+          '(g2) env.ts holds the name, the marker and the env-file form; narration cli.ts and publisher cli.ts the env-file form',
         )
         .toEqual([])
       expect
@@ -3810,6 +4159,90 @@ describe("S2: the key's reach (FS2)", () => {
           '(g3) cli.ts holds no other form',
         )
         .toEqual([])
+      expect
+        .soft(
+          isPinnedEnvFileForm(lineTextsOf(real.scan, PUBLISHER_CLI, 's2-env-file')),
+          `(g4) ${PUBLISHER_CLI} env-file lines (${realHits(PUBLISHER_CLI, 's2-env-file').join(', ')}) are exactly the two pinned lines`,
+        )
+        .toBe(true)
+      expect
+        .soft(
+          real.scan.hits
+            .filter(
+              (hit) =>
+                hit.path === PUBLISHER_CLI &&
+                hit.form.startsWith('s2-') &&
+                hit.form !== 's2-env-file',
+            )
+            .map(findingOf),
+          `(g4) ${PUBLISHER_CLI} holds no other S2 form`,
+        )
+        .toEqual([])
+    },
+  )
+
+  it(
+    "T14-86 FS2a cli.ts's env-file form is exactly the two pinned lines (L14)",
+    { timeout: WALK_TIMEOUT },
+    () => {
+      expect(realRead(PUBLISHER_CLI), `precondition: ${PUBLISHER_CLI} was read`).toBe(true)
+      expect(
+        realHits(PUBLISHER_CLI, 's2-env-file').length,
+        `precondition: ${PUBLISHER_CLI} gives an s2-env-file hit`,
+      ).toBeGreaterThan(0)
+      // The samples start from a small cli.ts of their own that holds the two pinned lines, so g1
+      // reads the compare alone and a plant in the real file reaches g2.
+      const base = [
+        "import { loadEnvFile, readStorageCredentials } from './env'",
+        'export async function runCli(deps: { loadEnv: () => unknown; env: object }) {',
+        '  deps.loadEnv()',
+        '  return readStorageCredentials(deps.env)',
+        '}',
+        'export const deps = {',
+        '  loadEnv: loadEnvFile,',
+        '}',
+      ].join('\n')
+      const inMemory = (text: string) =>
+        lineTextsOf(scanFiles({ [PUBLISHER_CLI]: text }), PUBLISHER_CLI, 's2-env-file')
+      expect(
+        isPinnedEnvFileForm(inMemory(base)),
+        'precondition: a cli.ts holding the two pinned lines passes the compare in memory',
+      ).toBe(true)
+      const samples: readonly (readonly [string, string])[] = [
+        [
+          'a third loadEnvFile() line',
+          base.replace('  deps.loadEnv()', '  deps.loadEnv()\n  loadEnvFile()'),
+        ],
+        [
+          'the reference moved into runCli as a call',
+          base
+            .replace('  deps.loadEnv()', '  loadEnvFile()')
+            .replace('loadEnv: loadEnvFile,', 'loadEnv: () => undefined,'),
+        ],
+        [
+          'an ENV_FILE import',
+          base.replace(
+            "import { loadEnvFile, readStorageCredentials } from './env'",
+            "import { ENV_FILE, loadEnvFile, readStorageCredentials } from './env'",
+          ),
+        ],
+        [
+          "a '.env.local' literal",
+          base.replace('  deps.loadEnv()', "  deps.loadEnv()\n  const local = '.env.local'"),
+        ],
+      ]
+      for (const [id, text] of samples) {
+        expect(text, `precondition: the sample "${id}" differs from the base`).not.toBe(base)
+        expect
+          .soft(isPinnedEnvFileForm(inMemory(text)), `(g1) ${id} fails the g4 compare`)
+          .toBe(false)
+      }
+      expect
+        .soft(
+          isPinnedEnvFileForm(lineTextsOf(real.scan, PUBLISHER_CLI, 's2-env-file')),
+          `(g2) the real file's env-file lines (${realHits(PUBLISHER_CLI, 's2-env-file').join(', ')}) equal the pinned texts`,
+        )
+        .toBe(true)
     },
   )
 
@@ -3914,7 +4347,7 @@ describe('S3: Secret.reveal (FS3)', () => {
 
 describe('literal and import pins (FS4)', () => {
   it(
-    'T13-FS4a storage.ts holds exactly the three route literals and no other method; no console; imports pinned',
+    'T13-FS4a storage.ts holds exactly the four route literals and no other method; no console; imports pinned',
     { timeout: WALK_TIMEOUT },
     () => {
       const storage = realTree('tools/publisher/storage.ts')
@@ -3927,9 +4360,10 @@ describe('literal and import pins (FS4)', () => {
         'precondition: storage.ts holds route literals',
       ).toBeGreaterThan(0)
       expect
-        .soft(routeLiterals(storage), '(g1) exactly the three pinned route literals')
+        .soft(routeLiterals(storage), '(g1) exactly the four pinned route literals')
         .toEqual([
           '/storage/v1/object/',
+          '/storage/v1/object/authenticated/content/',
           '/storage/v1/object/authenticated/masters/',
           '/storage/v1/object/list/content',
         ])
@@ -4000,10 +4434,8 @@ describe('literal and import pins (FS4)', () => {
         .toEqual([])
       expect
         .soft(
-          tokens.identifiers
-            .filter(({ value }) => ['targetOf', 'pointerTarget', 'classOfPath'].includes(value))
-            .map(({ value, line }) => `${value}:${line}`),
-          '(g2) no targetOf, pointerTarget or classOfPath',
+          asksTheFence(tokens),
+          '(g2) no targetOf, pointerTarget, classOfPath or contentReadTarget',
         )
         .toEqual([])
     },
@@ -4135,6 +4567,446 @@ describe('literal and import pins (FS4)', () => {
           '(g4) never createStorageClient',
         )
         .toBe(false)
+    },
+  )
+
+  it(
+    "T14-83 FS4d real tree: each new module's imports, network names and globals are pinned (A26, CRIT-4, CRIT-5, TP-3)",
+    { timeout: WALK_TIMEOUT },
+    async () => {
+      const envExports = await exportNames('env.ts')
+      expect(envExports, 'precondition: env.ts exports the two names the CLI takes').toEqual(
+        expect.arrayContaining([...CLI_ENV_NAMES]),
+      )
+      for (const path of FS4D_ROWS.keys()) {
+        expect(
+          real.scan.tokens(path)?.specifiers.length ?? 0,
+          `precondition: ${path} parsed with at least one specifier`,
+        ).toBeGreaterThan(0)
+      }
+      const found = fs4dFindings(real.scan, envExports)
+      expect
+        .soft(
+          found.g0,
+          '(g0) every non-test script under tools/publisher/ is a Step 13 file or has a row',
+        )
+        .toEqual([])
+      expect.soft(found.g1, "(g1) each module's specifiers lie within its row").toEqual([])
+      expect
+        .soft(found.g2, '(g2) zod is the only bare package, held by story-checks.ts only')
+        .toEqual([])
+      expect
+        .soft(
+          found.g3,
+          '(g3) no ./hook, ./verify, ./content-deleter or ./storage-stub; ./storage and ./env from cli.ts only; cli.ts names only loadEnvFile and readStorageCredentials of env.ts',
+        )
+        .toEqual([])
+      expect
+        .soft(found.g4, '(g4) no network module, with or without node:, in any import form')
+        .toEqual([])
+      expect
+        .soft(found.g5, '(g5) no fetch, WebSocket, EventSource, XMLHttpRequest or Request')
+        .toEqual([])
+      expect.soft(found.g6, '(g6) no console or process outside cli.ts').toEqual([])
+      expect.soft(found.g7, '(g7) no literal starting panchatantra@').toEqual([])
+      expect
+        .soft(
+          found.g8,
+          '(g8) cli.ts names captureRunContext on its import and the pinned entry line',
+        )
+        .toEqual([])
+    },
+  )
+
+  it(
+    'T14-84 FS4d negative samples through the same predicates (L14, CRIT-5; catalogue lint classes 1-8, 10-13)',
+    { timeout: WALK_TIMEOUT },
+    async () => {
+      const envExports = await exportNames('env.ts')
+      const flat = (found: Fs4dFindings) => FS4D_GROUPS.flatMap((group) => found[group])
+      expect(
+        flat(fs4dFindings(real.scan, envExports)),
+        'precondition: the real tree passes FS4d (T14-83)',
+      ).toEqual([])
+      const cliText = readFileSync(join(HERE, 'cli.ts'), 'utf8')
+      for (const [id, files] of [
+        [
+          'a clean stage.ts',
+          {
+            'tools/publisher/stage.ts': "import { x } from './storage-layout'\nexport const y = x",
+          },
+        ],
+        ['the real cli.ts alone', { [PUBLISHER_CLI]: cliText }],
+      ] as const) {
+        expect(
+          flat(fs4dFindings(scanFiles(files), envExports)),
+          `precondition: ${id} in memory gives no finding`,
+        ).toEqual([])
+      }
+      const runContextChanged = cliText
+        .replace(
+          'const runContext = captureRunContext(process.env, process.platform)',
+          'const started = Date.now()',
+        )
+        .replace('    runContext,\n', '    runContext: process.env,\n')
+      expect(runContextChanged, 'precondition: the run-context sample was built').not.toBe(cliText)
+      // g3's cli.ts samples add one name to a cli.ts that already names the two it may, so each is
+      // flagged for the added name.
+      const cliBase =
+        "import { loadEnvFile, readStorageCredentials } from './env'\nexport const named = [loadEnvFile, readStorageCredentials]\n"
+      expect(
+        fs4dFindings(scanFiles({ [PUBLISHER_CLI]: cliBase }), envExports).g3,
+        'precondition: a cli.ts naming only loadEnvFile and readStorageCredentials gives no g3 finding',
+      ).toEqual([])
+      const stage = 'tools/publisher/stage.ts'
+      const report = 'tools/publisher/report.ts'
+      const state = 'tools/publisher/catalogue-state.ts'
+      const one = (path: string, text: string): Readonly<Record<string, string>> => ({
+        [path]: text,
+      })
+      const flagged: readonly (readonly [
+        string,
+        Readonly<Record<string, string>>,
+        readonly Fs4dGroup[],
+      ])[] = [
+        // Network globals (g5): catalogue lint classes 1-8 and the class 10 neighbours.
+        ['c1 fetch() in stage.ts', one(stage, "export const f = () => fetch('https://x')"), ['g5']],
+        [
+          'c2 globalThis.fetch in report.ts',
+          one(report, 'export const f = (u: string) => globalThis.fetch(u)'),
+          ['g5'],
+        ],
+        [
+          'c3 a computed literal key',
+          one(report, "export const f = (u: string) => globalThis['fetch'](u)"),
+          ['g5'],
+        ],
+        [
+          'c4 a computed template key',
+          one(report, 'export const f = (u: string) => globalThis[`fetch`](u)'),
+          ['g5'],
+        ],
+        [
+          'c5 optional chaining',
+          one(report, 'export const f = (u: string) => globalThis?.fetch(u)'),
+          ['g5'],
+        ],
+        [
+          'c6 an alias',
+          one(report, 'const g = globalThis\nexport const f = (u: string) => g.fetch(u)'),
+          ['g5'],
+        ],
+        ['c7 destructuring', one(report, 'const { fetch: f } = globalThis\nexport { f }'), ['g5']],
+        [
+          'c7 computed destructuring',
+          one(report, "const { ['fetch']: f } = globalThis\nexport { f }"),
+          ['g5'],
+        ],
+        [
+          'c8 Reflect.get with a literal name',
+          one(report, "export const f = Reflect.get(globalThis, 'fetch')"),
+          ['g5'],
+        ],
+        ['c10 WebSocket', one(stage, 'export const s = (u: string) => new WebSocket(u)'), ['g5']],
+        [
+          'c10 EventSource',
+          one(stage, 'export const s = (u: string) => new EventSource(u)'),
+          ['g5'],
+        ],
+        ['c10 XMLHttpRequest', one(stage, 'export const s = () => new XMLHttpRequest()'), ['g5']],
+        ['c10 Request', one(stage, 'export const s = (u: string) => new Request(u)'), ['g5']],
+        // Network modules (g4): each of the ten, every import form the tokeniser records.
+        [
+          'node:https in catalogue-state.ts',
+          one(state, "import { request } from 'node:https'\nexport const r = request"),
+          ['g4'],
+        ],
+        [
+          'https without node:',
+          one(state, "import https from 'https'\nexport const h = https"),
+          ['g4', 'g2'],
+        ],
+        [
+          'require of node:net',
+          one(state, "export const n: unknown = require('node:net')"),
+          ['g4'],
+        ],
+        ['import() of node:tls', one(state, "export const t = () => import('node:tls')"), ['g4']],
+        [
+          'a type-only node:http import',
+          one(state, "import type { Agent } from 'node:http'\nexport type A = Agent"),
+          ['g4'],
+        ],
+        [
+          'export * from node:child_process',
+          one(state, "export * from 'node:child_process'"),
+          ['g4'],
+        ],
+        [
+          'a side-effect node:worker_threads import',
+          one(state, "import 'node:worker_threads'"),
+          ['g4'],
+        ],
+        ['node:http2', one(state, "import 'node:http2'"), ['g4']],
+        ['dgram', one(state, "import 'dgram'"), ['g4', 'g2']],
+        ['cluster', one(state, "import 'cluster'"), ['g4', 'g2']],
+        ['node:vm', one(state, "import vm from 'node:vm'\nexport const v = vm"), ['g4']],
+        ['NODE:HTTPS in upper case', one(state, "import 'NODE:HTTPS'"), ['g4', 'g2']],
+        // Bare packages (g2) and rows (g1).
+        [
+          'undici in local-files.ts',
+          one('tools/publisher/local-files.ts', "import x from 'undici'\nexport const u = x"),
+          ['g2', 'g1'],
+        ],
+        [
+          'zod in args.ts',
+          one('tools/publisher/args.ts', "import { z } from 'zod'\nexport const s = z.string()"),
+          ['g2', 'g1'],
+        ],
+        [
+          'media-check.ts importing ./local-files',
+          one(
+            'tools/publisher/media-check.ts',
+            "import { readLocalFile } from './local-files'\nexport const r = readLocalFile",
+          ),
+          ['g1'],
+        ],
+        [
+          'stage-testkit.ts importing scripts/testing',
+          one(
+            'tools/publisher/stage-testkit.ts',
+            "import { x } from '../../scripts/testing/staging-catalogue'\nexport const y = x",
+          ),
+          ['g1'],
+        ],
+        [
+          'a src/core specifier whose .. leaves src/core',
+          one(
+            stage,
+            "import { x } from '../../src/core/../../tools/publisher/hook'\nexport const y = x",
+          ),
+          ['g1', 'g3'],
+        ],
+        // Imports of fenced or hook modules (g3), path forms included.
+        ['./hook in stage.ts', one(stage, "import './hook'"), ['g3', 'g1']],
+        ['./Hook.js in stage.ts', one(stage, "import './Hook.js'"), ['g3']],
+        [
+          '../publisher/verify in stage.ts',
+          one(stage, "import { verify } from '../publisher/verify'\nexport const v = verify"),
+          ['g3'],
+        ],
+        [
+          './content-deleter.ts re-exported',
+          one(stage, "export * from './content-deleter.ts'"),
+          ['g3'],
+        ],
+        [
+          './storage-stub in story-checks.ts',
+          one('tools/publisher/story-checks.ts', "import './storage-stub'"),
+          ['g3', 'g1'],
+        ],
+        [
+          './storage outside the CLI',
+          one(
+            stage,
+            "import { createStorageClient } from './storage'\nexport const c = createStorageClient",
+          ),
+          ['g3'],
+        ],
+        [
+          './env outside the CLI',
+          one(report, "import { loadEnvFile } from './env'\nexport const l = loadEnvFile"),
+          ['g3'],
+        ],
+        [
+          'readDeployHookUrl in cli.ts',
+          one(
+            PUBLISHER_CLI,
+            `${cliBase}import { readDeployHookUrl } from './env'\nexport const r = readDeployHookUrl`,
+          ),
+          ['g3'],
+        ],
+        [
+          'checkPublisherEnv in cli.ts',
+          one(PUBLISHER_CLI, `${cliBase}export const c = (env: object) => checkPublisherEnv(env)`),
+          ['g3'],
+        ],
+        [
+          'an env.ts name as a computed key in cli.ts',
+          one(
+            PUBLISHER_CLI,
+            `${cliBase}import * as env from './env'\nexport const r = env['readDeployHookUrl']`,
+          ),
+          ['g3'],
+        ],
+        // console and process outside the CLI (g6).
+        [
+          'console.error in stage.ts',
+          one(stage, 'export const e = (x: string) => console.error(x)'),
+          ['g6'],
+        ],
+        ['process.env in stage.ts', one(stage, 'export const v = process.env.X'), ['g6']],
+        [
+          'process as a computed literal key',
+          one(stage, "export const p: unknown = globalThis['process']"),
+          ['g6'],
+        ],
+        [
+          'console through Reflect.get',
+          one(stage, "export const c: unknown = Reflect.get(globalThis, 'console')"),
+          ['g6'],
+        ],
+        // A rule-set literal (g7).
+        [
+          'a rule-set literal in story-checks.ts',
+          one('tools/publisher/story-checks.ts', "export const ref = 'panchatantra@3.0.0'"),
+          ['g7'],
+        ],
+        [
+          'a rule-set template head',
+          one(
+            'tools/publisher/story-checks.ts',
+            'export const ref = (v: string) => `panchatantra@${v}`',
+          ),
+          ['g7'],
+        ],
+        // A script without a row (g0), every script extension (catalogue lint class 11).
+        ...['stage.mts', 'extra.ts', 'x.cts', 'x.tsx', 'x.js', 'x.jsx', 'x.mjs', 'x.cjs'].map(
+          (name) =>
+            [
+              `tools/publisher/${name} has no row`,
+              one(`tools/publisher/${name}`, 'export const x = 1'),
+              ['g0'],
+            ] as const,
+        ),
+        // The CLI's run-context line (g8).
+        [
+          'runContext: process.env in the entry block',
+          one(PUBLISHER_CLI, runContextChanged),
+          ['g8'],
+        ],
+      ]
+      for (const [id, files, groups] of flagged) {
+        const scan = scanFiles(files)
+        const found = fs4dFindings(scan, envExports)
+        for (const group of groups) {
+          expect.soft(found[group].length, `(g1) ${id} is flagged by ${group}`).toBeGreaterThan(0)
+        }
+        expect.soft(scan.walk.findings, `(g1) ${id} walks cleanly`).toEqual([])
+      }
+      const notFlagged: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+        // Documented limits (L14; catalogue lint class 13).
+        [
+          'a name assembled at run time',
+          one(stage, "export const f = (globalThis as Record<string, unknown>)['fe' + 'tch']"),
+        ],
+        [
+          'import() of a variable',
+          one(stage, 'export const load = (name: string) => import(name)'),
+        ],
+        [
+          'a fetch inside a src/core module (FS4d is one hop)',
+          {
+            [stage]: "import { get } from '../../src/core/net'\nexport const y = get",
+            'src/core/net.ts': 'export const get = (u: string) => fetch(u)',
+          },
+        ],
+        // Near misses.
+        [
+          'names that hold a network name',
+          one(
+            stage,
+            'export const fetchImpl = 1\nexport const prefetch = 2\nexport type R = RequestInit',
+          ),
+        ],
+        [
+          'names that hold console or process',
+          one(stage, "export const processed = 1\nexport const consoleLine = 'console line'"),
+        ],
+        [
+          './storage-layout is not ./storage',
+          one(
+            stage,
+            "import { classOfPath } from './storage-layout'\nexport const c = classOfPath",
+          ),
+        ],
+        [
+          'the rule-set ref read from the rule set',
+          one(
+            'tools/publisher/story-checks.ts',
+            "import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'\nexport const ref = PANCHATANTRA_RULESET.ref\nexport const name = 'panchatantra'",
+          ),
+        ],
+      ]
+      for (const [id, files] of notFlagged) {
+        const scan = scanFiles(files)
+        expect.soft(flat(fs4dFindings(scan, envExports)), `(g2) ${id} is not flagged`).toEqual([])
+        expect.soft(scan.walk.findings, `(g2) ${id} walks cleanly`).toEqual([])
+      }
+    },
+  )
+
+  it(
+    'T14-85 FS4b the stub-asks-the-fence predicate flags contentReadTarget (CRIT-6)',
+    { timeout: WALK_TIMEOUT },
+    () => {
+      const stub = realTree('tools/publisher/storage-stub.ts')
+      expect(stub, 'precondition: the stub parsed').toBeDefined()
+      if (stub === undefined) return
+      expect(asksTheFence(tokensOf(stub)), 'precondition: the real stub passes FS4b g2').toEqual([])
+      const path = 'tools/publisher/storage-stub.ts'
+      const asks = (text: string): string[] | undefined => {
+        const tokens = scanFiles({ [path]: text }).tokens(path)
+        return tokens === null ? undefined : asksTheFence(tokens)
+      }
+      const layout = "import * as layout from './storage-layout'\n"
+      const flagged: readonly (readonly [string, string])[] = [
+        [
+          'a named import and a call',
+          "import { contentReadTarget } from './storage-layout'\nexport const t = contentReadTarget({ kind: 'pointer', mode: 'staging' })",
+        ],
+        [
+          'a member call',
+          `${layout}export const t = (ref: unknown) => layout.contentReadTarget(ref)`,
+        ],
+        [
+          'optional chaining',
+          `${layout}export const t = (ref: unknown) => layout?.contentReadTarget(ref)`,
+        ],
+        [
+          'an alias',
+          `${layout}const l = layout\nexport const t = (ref: unknown) => l.contentReadTarget(ref)`,
+        ],
+        ['destructuring', `${layout}const { contentReadTarget: read } = layout\nexport { read }`],
+        ['targetOf', `${layout}export const t = (ref: unknown) => layout.targetOf(ref)`],
+        ['pointerTarget', `${layout}export const t = () => layout.pointerTarget('staging')`],
+        [
+          'classOfPath',
+          `${layout}export const t = (p: string) => layout.classOfPath('content', p)`,
+        ],
+      ]
+      for (const [id, text] of flagged) {
+        expect.soft(asks(text)?.length ?? 0, `(g1) ${id} is flagged`).toBeGreaterThan(0)
+      }
+      const notFlagged: readonly (readonly [string, string])[] = [
+        ['the near miss contentReadTargets', 'export const contentReadTargets = 1'],
+        // Documented limits of FS4b's identifier form (unchanged from Step 13): computed names.
+        [
+          'limit: a computed literal key',
+          `${layout}export const t = (ref: unknown) => layout['contentReadTarget'](ref)`,
+        ],
+        [
+          'limit: a computed template key',
+          `${layout}export const t = (ref: unknown) => layout[\`contentReadTarget\`](ref)`,
+        ],
+        [
+          'limit: Reflect.get with a literal name',
+          `${layout}export const t: unknown = Reflect.get(layout, 'contentReadTarget')`,
+        ],
+      ]
+      for (const [id, text] of notFlagged) {
+        expect.soft(asks(text), `(g2) ${id} is not flagged`).toEqual([])
+      }
     },
   )
 })

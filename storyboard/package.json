@@ -13,6 +13,7 @@
     "live:check": "tsx scripts/live-check.ts",
     "fixtures:catalogue": "tsx scripts/build-fixtures-catalogue.ts",
     "preview:staging": "tsx scripts/preview-staging.ts",
+    "publisher": "tsx tools/publisher/cli.ts",
     "start": "next start --port 3005",
     "lint": "eslint . && tsx scripts/lint/css-lint.ts",
     "typecheck": "tsc --noEmit",

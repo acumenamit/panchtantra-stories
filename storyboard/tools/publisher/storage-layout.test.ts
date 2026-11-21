@@ -23,6 +23,7 @@ import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import { Sha256, StoryId } from '../../src/core/package/v1'
 import {
   classOfPath,
+  contentReadTarget,
   MASTERS_CACHE_SECONDS,
   MAX_JSON_BYTES,
   pointerTarget,
@@ -1262,5 +1263,176 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
       expect.soft(triple.stage, `(g1) ${name} stage`).toMatch(/^[a-z-]+$/)
       expect.soft(triple.rule, `(g1) ${name} rule`).toMatch(/^[a-z0-9-]+$/)
     }
+  })
+})
+
+// ---- Step 14 (P1-8c): the content read target (design p1-step14-design.md §3.4, §14.10) ----
+
+describe('storage-layout: contentReadTarget (Step 14)', () => {
+  it('T14-74 contentReadTarget accepts a pointer mode or a snapshot seq and returns the same Target as pointerTarget or targetOf (A11)', () => {
+    const staging = pointerTarget('staging')
+    const seven = targetOf({ kind: 'snapshot', seq: 7 })
+    expect(staging.ok, 'precondition: pointerTarget(staging) is ok').toBe(true)
+    expect(seven.ok, 'precondition: targetOf(snapshot 7) is ok').toBe(true)
+    for (const mode of ['production', 'staging'] as const) {
+      const want = valueOf(pointerTarget(mode))
+      expect
+        .soft(contentReadTarget({ kind: 'pointer', mode }), `(g1) ${mode}`)
+        .toStrictEqual({ ok: true, value: want })
+      const bare = Object.assign(Object.create(null) as Ref, { kind: 'pointer', mode })
+      expect
+        .soft(contentReadTarget(bare), `(g1) ${mode} with a null prototype`)
+        .toStrictEqual({ ok: true, value: want })
+    }
+    for (const seq of [7, Number.MAX_SAFE_INTEGER]) {
+      const want = valueOf(targetOf({ kind: 'snapshot', seq }))
+      const got = contentReadTarget({ kind: 'snapshot', seq })
+      expect.soft(got, `(g2) snapshot ${seq}`).toStrictEqual({ ok: true, value: want })
+      expect
+        .soft(got.ok && Object.isFrozen(got.value.fields), `(g2) ${seq} fields frozen`)
+        .toBe(true)
+      expect.soft(got.ok && recheckTarget(got.value).ok, `(g2) ${seq} passes re-check 1`).toBe(true)
+    }
+  })
+
+  it('T14-75 contentReadTarget refuses every other ref at stage field and reads the ref once (A11, CRIT-10)', () => {
+    const positives: [string, Ref][] = [
+      ['pointer staging', { kind: 'pointer', mode: 'staging' }],
+      ['snapshot 7', { kind: 'snapshot', seq: 7 }],
+    ]
+    for (const [name, ref] of positives) {
+      expect(contentReadTarget(ref).ok, `precondition: ${name} passes`).toBe(true)
+    }
+    // (g1) the kinds
+    const kinds: [string, unknown, ReturnType<typeof refusal>][] = [
+      ['package', PACKAGE_REF(), refusal('package', 'field', 'kind-not-content-readable')],
+      ['media', MEDIA_REF(), refusal('media', 'field', 'kind-not-content-readable')],
+      ['approval', APPROVAL_REF(), refusal('approval', 'field', 'kind-not-content-readable')],
+      ['waiver', WAIVER_REF(), refusal('waiver', 'field', 'kind-not-content-readable')],
+      ['kind x', { kind: 'x', mode: 'staging' }, refusal('ref', 'field', 'kind-unknown')],
+      ['no kind', { mode: 'staging' }, refusal('ref', 'field', 'kind-unknown')],
+    ]
+    for (const [name, ref, want] of kinds) {
+      let outcome: unknown
+      try {
+        outcome = refusalOf(contentReadTarget(ref))
+      } catch (error) {
+        outcome = `threw ${error instanceof Error ? error.name : typeof error}`
+      }
+      expect.soft(outcome, `(g1) ${name}`).toEqual(want)
+    }
+    // (g2) the shapes
+    const shapes: [string, unknown, ReturnType<typeof refusal>][] = [
+      [
+        'extra key',
+        { kind: 'pointer', mode: 'staging', x: 1 },
+        refusal('pointer', 'field', 'ref-keys'),
+      ],
+      ['no mode', { kind: 'pointer' }, refusal('pointer', 'field', 'ref-keys')],
+      ['no seq', { kind: 'snapshot' }, refusal('snapshot', 'field', 'ref-keys')],
+      [
+        'symbol key',
+        { kind: 'pointer', mode: 'staging', [Symbol('x')]: 1 },
+        refusal('pointer', 'field', 'ref-keys'),
+      ],
+      [
+        'Object.create({})',
+        Object.assign(Object.create({}) as Ref, { kind: 'pointer', mode: 'staging' }),
+        refusal('ref', 'field', 'ref-prototype'),
+      ],
+      ['[]', [], refusal('ref', 'field', 'ref-not-object')],
+      ['null', null, refusal('ref', 'field', 'ref-not-object')],
+      ["'pointer'", 'pointer', refusal('ref', 'field', 'ref-not-object')],
+    ]
+    const hiddenExtra: Ref = { kind: 'pointer', mode: 'staging' }
+    Object.defineProperty(hiddenExtra, 'path', { value: 'x', enumerable: false })
+    shapes.push(['non-enumerable key', hiddenExtra, refusal('pointer', 'field', 'ref-keys')])
+    const hiddenSeq: Ref = { kind: 'snapshot' }
+    Object.defineProperty(hiddenSeq, 'seq', { value: 7, enumerable: false })
+    shapes.push(['non-enumerable seq', hiddenSeq, refusal('snapshot', 'field', 'ref-keys')])
+    let getterRuns = 0
+    const getterMode: Ref = { kind: 'pointer' }
+    Object.defineProperty(getterMode, 'mode', {
+      get: () => (getterRuns++, 'staging'),
+      enumerable: true,
+    })
+    shapes.push(['accessor mode', getterMode, refusal('pointer', 'field', 'ref-accessor')])
+    const getterKind: Ref = { mode: 'staging' }
+    Object.defineProperty(getterKind, 'kind', { get: () => 'pointer', enumerable: true })
+    shapes.push(['accessor kind', getterKind, refusal('ref', 'field', 'ref-accessor')])
+    for (const [name, ref, want] of shapes) {
+      expect.soft(refusalOf(contentReadTarget(ref)), `(g2) ${name}`).toEqual(want)
+    }
+    expect.soft(getterRuns, '(g2) the mode getter ran 0 times').toBe(0)
+    // (g3) the field values
+    const modes: [string, unknown][] = [
+      ['fixtures', 'fixtures'],
+      ['Production', 'Production'],
+      ["' staging'", ' staging'],
+      ["new String('staging')", new String('staging')],
+    ]
+    for (const [name, mode] of modes) {
+      expect
+        .soft(refusalOf(contentReadTarget({ kind: 'pointer', mode })), `(g3) mode ${name}`)
+        .toEqual(refusal('pointer', 'field', 'mode'))
+    }
+    const seqs: [string, unknown][] = [
+      ['0', 0],
+      ['-1', -1],
+      ['1.5', 1.5],
+      ["'7'", '7'],
+      ['2**53', 2 ** 53],
+      ['-0', -0],
+      ['NaN', NaN],
+      ['Infinity', Infinity],
+    ]
+    for (const [name, seq] of seqs) {
+      expect
+        .soft(refusalOf(contentReadTarget({ kind: 'snapshot', seq })), `(g3) seq ${name}`)
+        .toEqual(refusal('snapshot', 'field', 'seq'))
+    }
+    // (g4) a Proxy whose ownKeys answer differs per call: one ownKeys call, no get trap
+    const proxyOf = (base: Ref, second: (string | symbol)[]) => {
+      const counts = { ownKeys: 0, get: 0 }
+      const proxy = new Proxy(base, {
+        ownKeys(target) {
+          counts.ownKeys++
+          return counts.ownKeys === 1 ? Reflect.ownKeys(target) : second
+        },
+        get(target, key, receiver) {
+          counts.get++
+          return key === 'mode' ? 'production' : Reflect.get(target, key, receiver)
+        },
+      })
+      return { proxy, counts }
+    }
+    const pointerProxy = proxyOf({ kind: 'pointer', mode: 'staging' }, ['kind'])
+    const pointerResult = contentReadTarget(pointerProxy.proxy)
+    expect(
+      pointerProxy.counts.ownKeys,
+      'precondition: the pointer ownKeys trap ran',
+    ).toBeGreaterThan(0)
+    expect
+      .soft(
+        pointerResult.ok && pointerResult.value.path,
+        '(g4) pointer built from the first answer',
+      )
+      .toBe('catalogue/staging.json')
+    expect.soft(pointerProxy.counts.ownKeys, '(g4) pointer ownKeys called once').toBe(1)
+    expect.soft(pointerProxy.counts.get, '(g4) pointer get trap never called').toBe(0)
+    const snapshotProxy = proxyOf({ kind: 'snapshot', seq: 7 }, ['kind', 'seq', 'extra'])
+    const snapshotResult = contentReadTarget(snapshotProxy.proxy)
+    expect(
+      snapshotProxy.counts.ownKeys,
+      'precondition: the snapshot ownKeys trap ran',
+    ).toBeGreaterThan(0)
+    expect
+      .soft(
+        snapshotResult.ok && snapshotResult.value.path,
+        '(g4) snapshot built from the first answer',
+      )
+      .toBe('catalogue/snapshots/7.json')
+    expect.soft(snapshotProxy.counts.ownKeys, '(g4) snapshot ownKeys called once').toBe(1)
+    expect.soft(snapshotProxy.counts.get, '(g4) snapshot get trap never called').toBe(0)
   })
 })

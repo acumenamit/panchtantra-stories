@@ -4,7 +4,8 @@
 // target before any request is built: re-check 1 on the target (a safe path, the class's own
 // anchored pattern and bucket, the captured fields) and re-check 2 on the request URL (origin,
 // pathname, no search, no hash). Every refusal is a fixed triple {cls, stage, rule} that never
-// carries a caller value (D12-14).
+// carries a caller value (D12-14). Step 14 (p1-step14-design.md §3.4) adds contentReadTarget, the
+// target of a pointer or snapshot read.
 import {
   expectedPackagePath,
   expectedSnapshotPath,
@@ -54,10 +55,17 @@ export interface WaiverRef {
   readonly storyId: string
   readonly waiverSha256: string
 }
+/** A pointer read names the mode only; the client adds a fresh cache nonce on every read. */
+export interface PointerReadRef {
+  readonly kind: 'pointer'
+  readonly mode: PointerMode
+}
 /** What create may write. */
 export type CreateRef = PackageRef | MediaRef | SnapshotRef | ApprovalRef
 /** What readMaster may read. */
 export type MasterReadRef = ApprovalRef | WaiverRef
+/** What readContent may read (Step 14, D13-4): a pointer by mode or a snapshot by seq. */
+export type ContentReadRef = PointerReadRef | SnapshotRef
 
 export type TargetFields = Readonly<Record<string, string | number>>
 
@@ -318,6 +326,46 @@ export function pointerTarget(mode: unknown): LayoutResult<Target> {
       { mode },
     ),
   }
+}
+
+/** The one field each content-readable kind holds besides `kind`. */
+const CONTENT_READ_FIELD: Readonly<Record<'pointer' | 'snapshot', string>> = {
+  pointer: 'mode',
+  snapshot: 'seq',
+}
+
+/**
+ * The target a content read names (Step 14, D13-4), or a refusal at stage `field`: exactly
+ * `{kind: 'pointer', mode}` or `{kind: 'snapshot', seq}`, under targetOf's shape rules. The ref is
+ * read once (one ownKeys, one descriptor per key) and the Target is built only from the values
+ * captured on that read, never through targetOf or a get on the ref (S14-CRIT-10). The Target equals
+ * pointerTarget's or targetOf's, so re-check 1 applies unchanged.
+ */
+export function contentReadTarget(ref: unknown): LayoutResult<Target> {
+  if (typeof ref !== 'object' || ref === null || Array.isArray(ref)) {
+    return refused('ref', 'field', 'ref-not-object')
+  }
+  const proto: unknown = Object.getPrototypeOf(ref)
+  if (proto !== Object.prototype && proto !== null) return refused('ref', 'field', 'ref-prototype')
+  const { values, accessor, badKeys } = readOwnData(ref)
+  const kindValue = values.get('kind')
+  const kind: TargetKind | null =
+    kindValue === 'pointer'
+      ? 'pointer'
+      : typeof kindValue === 'string' && Object.hasOwn(CLASSES, kindValue)
+        ? (kindValue as RefKind)
+        : null
+  if (accessor) return refused(kind ?? 'ref', 'field', 'ref-accessor')
+  if (kind === null) return refused('ref', 'field', 'kind-unknown')
+  if (kind !== 'pointer' && kind !== 'snapshot') {
+    return refused(kind, 'field', 'kind-not-content-readable')
+  }
+  if (badKeys || values.size !== 2 || !values.has(CONTENT_READ_FIELD[kind])) {
+    return refused(kind, 'field', 'ref-keys')
+  }
+  if (kind === 'pointer') return pointerTarget(values.get('mode'))
+  if (!fieldOk('seq', values.get('seq'))) return refused('snapshot', 'field', 'seq')
+  return { ok: true, value: buildTarget('snapshot', values) }
 }
 
 interface ClassPattern {

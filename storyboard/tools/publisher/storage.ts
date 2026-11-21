@@ -3,10 +3,13 @@
 // - Callers name objects by typed refs (storage-layout.ts). Bucket, path, content type, cache and
 //   the upsert flag come from the class table, never from a caller. Re-check 1 (the target) and
 //   re-check 2 (the request URL) run before any request.
-// - Four methods only: create (create-only, x-upsert false), writePointer (the two pointers, the
-//   only overwrites), readMaster (approvals and waivers, the authenticated GET) and listContent.
-//   The transport sends GET and POST only, to routes built from three fixed literals; this module
-//   has no delete, move, copy, sign or bucket route.
+// - Five methods only: create (create-only, x-upsert false), writePointer (the two pointers, the
+//   only overwrites), readMaster (approvals and waivers, the authenticated GET), readContent (the
+//   two pointers, each with a fresh cache nonce, and snapshots, the authenticated GET; Step 14,
+//   p1-step14-design.md §3.4) and listContent. The transport sends GET and POST only, to routes
+//   built from four fixed literals; this module has no delete, move, copy, sign or bucket route.
+// - A request URL carries no search and no hash, and its href is exactly origin, pathname and
+//   search; the one search sent is `?cacheNonce=<digits>` on a pointer read.
 // - A body is type-checked and copied at entry, before any await; size, the build's own gates, the
 //   hash and the request all use the copy.
 // - The secret key goes on the `apikey` header only. `bearerFallback` (a boolean, off by default)
@@ -32,11 +35,13 @@ import { isSecretKeyShape, Secret } from './env'
 import { describeNetworkError, parseJsonBytes, readCapped } from './http'
 import {
   classOfPath,
+  contentReadTarget,
   MAX_JSON_BYTES,
   pointerTarget,
   recheckTarget,
   recheckUrl,
   targetOf,
+  type ContentReadRef,
   type CreateRef,
   type LayoutResult,
   type MasterReadRef,
@@ -53,10 +58,15 @@ const MAX_TIMEOUT_MS = 600_000
 const MIN_KEY_LENGTH = 8
 const MAX_RESPONSE_BYTES = MAX_JSON_BYTES
 
-// The closed route list (§4.1): every request URL is built from one of these three literals.
+// The closed route list (§4.1): every request URL is built from one of these four literals.
 const OBJECT_ROUTE = '/storage/v1/object/'
 const MASTERS_READ_ROUTE = '/storage/v1/object/authenticated/masters/'
+const CONTENT_READ_ROUTE = '/storage/v1/object/authenticated/content/'
 const LIST_ROUTE = '/storage/v1/object/list/content'
+/** The one search the transport sends: a pointer read's cache nonce (Step 14, D13-4). */
+const NONCE_SEARCH = /^\?cacheNonce=[1-9][0-9]{0,15}$/
+/** A nonce as text: a positive integer of at most 16 digits, no leading zero. */
+const NONCE_TEXT = /^[1-9][0-9]{0,15}$/
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
 const SUPABASE_HOST = /^[a-z0-9]{20}\.supabase\.co$/
@@ -123,6 +133,9 @@ export type ReadResult =
   | { readonly kind: 'hash-mismatch'; readonly sha256: string }
   | StorageFailure
 
+/** A pointer or snapshot read: a read result without the hash check (content names hold no hash). */
+export type ContentReadResult = Exclude<ReadResult, { readonly kind: 'hash-mismatch' }>
+
 export interface StoredObject {
   readonly path: string
   readonly size: number | null
@@ -141,6 +154,8 @@ export interface StorageClient {
   writePointer(mode: PointerMode, body: Uint8Array): Promise<PointerResult>
   /** Reads an approval or waiver from masters by exact name. */
   readMaster(ref: MasterReadRef): Promise<ReadResult>
+  /** Reads a pointer (with a fresh cache nonce) or a snapshot from content, authenticated. */
+  readContent(ref: ContentReadRef): Promise<ContentReadResult>
   /** Every content object under a folder ('' or 'a/b/'), recursively, all pages, sorted by path. */
   listContent(folder: string): Promise<ListResult>
 }
@@ -372,13 +387,18 @@ async function bodyGateRule(
 
 /**
  * The class a request path belongs to under the closed route list (§4.1), or null: the list route
- * (POST), an approval or waiver under the authenticated masters route (GET), or a creatable class's
- * object path (POST). send() refuses any other URL, so a later call site that builds a URL another
- * way (OBJECT_ROUTE + 'move', a relative URL) cannot send it (review fix SEC-6).
+ * (POST), a pointer or snapshot under the authenticated content route (GET; Step 14), an approval or
+ * waiver under the authenticated masters route (GET), or a creatable class's object path (POST).
+ * send() refuses any other URL, so a later call site that builds a URL another way (OBJECT_ROUTE +
+ * 'move', a relative URL) cannot send it (review fix SEC-6).
  */
 function routeClass(method: 'GET' | 'POST', pathname: string): string | null {
   if (method === 'POST' && pathname === LIST_ROUTE) return 'listing'
   if (method === 'GET') {
+    if (pathname.startsWith(CONTENT_READ_ROUTE)) {
+      const kind = classOfPath('content', pathname.slice(CONTENT_READ_ROUTE.length))?.kind
+      return kind === 'pointer' || kind === 'snapshot' ? kind : null
+    }
     if (!pathname.startsWith(MASTERS_READ_ROUTE)) return null
     const kind = classOfPath('masters', pathname.slice(MASTERS_READ_ROUTE.length))?.kind
     return kind === 'approval' || kind === 'waiver' ? kind : null
@@ -526,7 +546,11 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     headers: Record<string, string>,
     body?: Uint8Array<ArrayBuffer> | string,
   ): Promise<Exchange> {
-    if (url.origin !== origin || url.search !== '' || url.hash !== '') {
+    // WHATWG reports a bare '?' or '#' as an empty search or hash while fetch still sends it, so the
+    // href itself must be exactly origin, pathname and search (Step 14, D14-23).
+    if (url.href !== url.origin + url.pathname + url.search) refuseRule(cls, 'url', 'url-mismatch')
+    const nonceRead = cls === 'pointer' && method === 'GET' && NONCE_SEARCH.test(url.search)
+    if (url.origin !== origin || (url.search !== '' && !nonceRead) || url.hash !== '') {
       refuseRule(cls, 'url', 'url-mismatch')
     }
     if (routeClass(method, url.pathname) !== cls) refuseRule(cls, 'url', 'url-mismatch')
@@ -567,13 +591,13 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     failure.kind === 'failed' ? { ...failure, code: safeCode(failure.code) } : failure
 
   /** A non-2xx read answer through classifyRead, its failure code scrubbed. */
-  const classifiedRead = (status: number, body: unknown): ReadResult => {
+  const classifiedRead = (status: number, body: unknown): ContentReadResult => {
     const result = classifyRead(status, body)
     return result.kind === 'failed' ? scrubFailure(result) : result
   }
 
-  async function readTarget(target: Target): Promise<ReadResult> {
-    const url = checkedUrl(target, MASTERS_READ_ROUTE + target.path)
+  /** One authenticated GET of a checked URL, classified; no name hash is checked here. */
+  async function getObject(target: Target, url: URL): Promise<ContentReadResult> {
     const exchange = await send(target.kind, 'GET', url, { 'accept-encoding': 'identity' })
     if (exchange.kind === 'network') return networkFailure(exchange)
     const success = exchange.status >= 200 && exchange.status < 300
@@ -585,12 +609,45 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     if (success) {
       if (exchange.bytes === null) return { kind: 'too-large', limit: MAX_JSON_BYTES }
       const sha256 = await sha256Hex(exchange.bytes)
-      if (target.kind === 'waiver' && sha256 !== target.fields.waiverSha256) {
-        return { kind: 'hash-mismatch', sha256 }
-      }
       return { kind: 'found', bytes: exchange.bytes, size: exchange.bytes.byteLength, sha256 }
     }
     return classifiedRead(exchange.status, bodyOf(exchange))
+  }
+
+  async function readTarget(target: Target): Promise<ReadResult> {
+    const result = await getObject(target, checkedUrl(target, MASTERS_READ_ROUTE + target.path))
+    if (
+      result.kind === 'found' &&
+      target.kind === 'waiver' &&
+      result.sha256 !== target.fields.waiverSha256
+    ) {
+      return { kind: 'hash-mismatch', sha256: result.sha256 }
+    }
+    return result
+  }
+
+  /** The last nonce sent; each pointer read sends a larger one. */
+  let lastNonce = 0
+
+  /**
+   * A fresh nonce: Math.max(Date.now(), last + 1), a positive safe integer of at most 16 digits;
+   * any other value (a clock of NaN, 1e16 or 2**53) is refused with nothing sent.
+   */
+  function nextNonce(): number {
+    const nonce = Math.max(Date.now(), lastNonce + 1)
+    if (!Number.isSafeInteger(nonce) || nonce < 1 || !NONCE_TEXT.test(String(nonce))) {
+      refuseRule('pointer', 'url', 'url-mismatch')
+    }
+    lastNonce = nonce
+    return nonce
+  }
+
+  async function readContent(ref: ContentReadRef): Promise<ContentReadResult> {
+    const target = expectTarget(contentReadTarget(ref))
+    const url = checkedUrl(target, CONTENT_READ_ROUTE + target.path)
+    // The assignment replaces any search; it never appends (documented, L10a).
+    if (target.kind === 'pointer') url.search = `?cacheNonce=${nextNonce()}`
+    return getObject(target, url)
   }
 
   /** One POST of the copy; the answer classified as an upload. */
@@ -713,5 +770,5 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     return { kind: 'listed', objects }
   }
 
-  return { create, writePointer, readMaster, listContent }
+  return { create, writePointer, readMaster, readContent, listContent }
 }

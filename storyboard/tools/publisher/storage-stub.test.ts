@@ -876,3 +876,117 @@ describe('the Storage stub (G2)', () => {
     }
   })
 })
+
+// ---- Step 14 (P1-8c): the nonce form (design p1-step14-design.md §4.7, §14.10) ----
+
+/** One raw request line over node:net, so a `#` reaches the server exactly as written. */
+function rawLine(target: StorageStub, method: string, requestTarget: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port: Number(target.origin.port) })
+    const chunks: Buffer[] = []
+    socket.on('connect', () => {
+      socket.write(
+        `${method} ${requestTarget} HTTP/1.1\r\nhost: 127.0.0.1\r\napikey: ${FAKE_KEY}\r\n` +
+          'connection: close\r\n\r\n',
+      )
+    })
+    socket.on('data', (chunk: Buffer) => chunks.push(chunk))
+    socket.on('error', reject)
+    socket.on('close', () => {
+      const head = Buffer.concat(chunks).toString('latin1').split('\r\n')[0] ?? ''
+      resolve(Number(head.split(' ')[1] ?? 0))
+    })
+  })
+}
+
+describe('the Storage stub nonce form (Step 14)', () => {
+  it('T14-81 the stub models exactly ?cacheNonce=<1-16 digits, no leading zero> on a pointer GET (A12, L10 stub half)', async () => {
+    const pointerBytes = text('{"pointer":"staging"}')
+    stub.put('content', 'catalogue/staging.json', pointerBytes, 'application/json')
+    const staging = `${AUTHENTICATED}content/catalogue/staging.json`
+    const production = `${AUTHENTICATED}content/catalogue/production.json`
+    const plain = await raw(stub, 'GET', staging, { apikey: FAKE_KEY })
+    expect(plain.status, 'precondition: the pointer GET with no search is served').toBe(200)
+    // (g1) modelled: both pointers, 1 digit and 16 digits
+    const sixteen = '1234567890123456'
+    for (const nonce of ['1', sixteen]) {
+      const found = await raw(stub, 'GET', `${staging}?cacheNonce=${nonce}`, { apikey: FAKE_KEY })
+      expect.soft(found.status, `(g1) staging nonce ${nonce.length} digits found`).toBe(200)
+      expect
+        .soft(new Uint8Array(found.body), `(g1) staging nonce ${nonce.length} bytes`)
+        .toEqual(pointerBytes)
+      const missing = await raw(stub, 'GET', `${production}?cacheNonce=${nonce}`, {
+        apikey: FAKE_KEY,
+      })
+      expect.soft(missing.status, `(g1) production nonce ${nonce.length} digits missing`).toBe(400)
+      expect
+        .soft(missing.body.toString('utf8'), `(g1) production nonce ${nonce.length} missing body`)
+        .toBe(MISSING_OBJECT_BODY)
+    }
+    // (g2) every near miss is unexpected (500) and recorded with its search
+    const local = await startStorageStub({ apikey: FAKE_KEY })
+    try {
+      const stagingBytes = text('{"pointer":"local"}')
+      const snapshotBytes = text('{"snapshot":7}')
+      local.put('content', 'catalogue/staging.json', stagingBytes, 'application/json')
+      local.put('content', 'catalogue/snapshots/7.json', snapshotBytes, 'application/json')
+      const localStaging = `${AUTHENTICATED}content/catalogue/staging.json`
+      const gets = [
+        `${localStaging}?cacheNonce=`,
+        `${localStaging}?cacheNonce=01`,
+        `${localStaging}?cacheNonce=12345678901234567`,
+        `${localStaging}?cacheNonce=1&x=2`,
+        `${localStaging}?x=1`,
+        `${localStaging}?cacheNonceX=1`,
+        `${localStaging}?cachenonce=1`,
+        `${localStaging}?CACHENONCE=1`,
+        `${localStaging}?%63acheNonce=1`,
+        `${localStaging}?`,
+        `${AUTHENTICATED}content/catalogue/Staging.json?cacheNonce=1`,
+        `${AUTHENTICATED}content/catalogue/staging.json/?cacheNonce=1`,
+        `${AUTHENTICATED}masters/catalogue/staging.json?cacheNonce=1`,
+        `${AUTHENTICATED}content/catalogue/snapshots/7.json?cacheNonce=1`,
+      ]
+      const sent: string[] = []
+      for (const target of gets) {
+        const answer = await raw(local, 'GET', target, { apikey: FAKE_KEY })
+        expect.soft(answer.status, `(g2) GET ${target.slice(AUTHENTICATED.length)}`).toBe(500)
+        sent.push(`GET ${target}`)
+      }
+      const hash = `${localStaging}?cacheNonce=1#x`
+      expect.soft(await rawLine(local, 'GET', hash), '(g2) GET ?cacheNonce=1#x').toBe(500)
+      sent.push(`GET ${hash}`)
+      const post = `${OBJECT}content/catalogue/staging.json?cacheNonce=1`
+      const posted = await raw(
+        local,
+        'POST',
+        post,
+        { apikey: FAKE_KEY, 'content-type': 'application/json', 'x-upsert': 'true' },
+        text('{"pointer":"overwritten"}'),
+      )
+      expect.soft(posted.status, '(g2) POST with a nonce').toBe(500)
+      sent.push(`POST ${post}`)
+      expect
+        .soft(
+          local.unexpected.map((entry) => `${entry.method} ${entry.pathname}${entry.search}`),
+          '(g2) each is recorded in unexpected with its search, in order',
+        )
+        .toEqual(sent)
+      // (g3) the store is unchanged after g2
+      expect
+        .soft(local.object('content', 'catalogue/staging.json')?.bytes, '(g3) staging unchanged')
+        .toEqual(stagingBytes)
+      expect
+        .soft(
+          local.object('content', 'catalogue/snapshots/7.json')?.bytes,
+          '(g3) snapshot unchanged',
+        )
+        .toEqual(snapshotBytes)
+      expect
+        .soft(local.object('content', 'catalogue/production.json'), '(g3) nothing created')
+        .toBeUndefined()
+    } finally {
+      await local.close()
+    }
+  })
+})

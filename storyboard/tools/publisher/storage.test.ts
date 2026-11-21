@@ -3,6 +3,8 @@
 // six kept helper tests. One expect.soft per claim, messages "(gN) ..."; preconditions are hard.
 // No request leaves 127.0.0.1: the recorder never touches the network, and a loopback guard on the
 // global fetch refuses and counts any other host (13.1 D, guard G5).
+// Step 14 (P1-8c, design p1-step14-design.md §14.10) adds readContent: T14-76 to T14-78, and the
+// listed edits of T13-C6, T13-H3, T13-R26 (g5) and T13-W14.
 import { createServer, type Server } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
 import { inspect } from 'node:util'
@@ -775,12 +777,18 @@ describe('createStorageClient construction', () => {
     }
   })
 
-  it('T13-C6 the client has exactly four methods and nothing else', () => {
+  it('T13-C6 the client has exactly five methods and nothing else', () => {
     const { storage } = client()
     expect
       .soft(Reflect.ownKeys(storage).map(String).sort(), '(g1) own keys')
-      .toEqual(['create', 'listContent', 'readMaster', 'writePointer'])
-    for (const key of ['create', 'listContent', 'readMaster', 'writePointer'] as const) {
+      .toEqual(['create', 'listContent', 'readContent', 'readMaster', 'writePointer'])
+    for (const key of [
+      'create',
+      'listContent',
+      'readContent',
+      'readMaster',
+      'writePointer',
+    ] as const) {
       expect.soft(typeof storage[key], `(g1) ${key} is a function`).toBe('function')
     }
     const proto: unknown = Object.getPrototypeOf(storage)
@@ -1920,6 +1928,16 @@ describe('requests on the recorder', () => {
           ['500 over the cap', overCap(500), { kind: 'failed', status: 500, code: 'unknown' }],
         ],
       ],
+      [
+        'g5 readContent',
+        (storage) => storage.readContent({ kind: 'pointer', mode: 'staging' }),
+        [
+          ['401 cut', cut(401), { kind: 'unauthorized', status: 401 }],
+          ['403 over the cap', overCap(403), { kind: 'unauthorized', status: 403 }],
+          ['500 cut', cut(500), { kind: 'failed', status: 500, code: 'unknown' }],
+          ['200 cut', cut(200), { kind: 'failed', status: null, code: 'TypeError' }],
+        ],
+      ],
     ]
     for (const [label, call, rows] of routes) {
       const [group, route] = label.split(' ')
@@ -1928,6 +1946,156 @@ describe('requests on the recorder', () => {
         expect.soft(await call(storage), `(${group}) ${route} ${name}`).toEqual(want)
         expect.soft(calls.length, `(${group}) ${route} ${name} one call`).toBe(1)
       }
+    }
+  })
+
+  // ---- Step 14 (P1-8c): readContent (design p1-step14-design.md §3.4, §14.10) ----
+
+  const CONTENT_READ = 'http://127.0.0.1:9/storage/v1/object/authenticated/content/'
+  const POINTER_READ = (mode: 'production' | 'staging') => ({ kind: 'pointer', mode }) as const
+  const nonceOf = (url: string | undefined): number => {
+    const match = /\?cacheNonce=([1-9][0-9]{0,15})$/.exec(url ?? '')
+    return match ? Number(match[1]) : Number.NaN
+  }
+
+  it('T14-76 readContent on the recorder: the route, a nonce on pointer reads only, the headers, one call and no retry (A11)', async () => {
+    const { storage, calls } = client(() => bytesResponse(POINTER(7)))
+    const first = await storage.readContent(POINTER_READ('staging'))
+    expect(first.kind, 'precondition: found').toBe('found')
+    // (g1) the route, with a nonce on pointer reads only
+    await storage.readContent(POINTER_READ('production'))
+    expect(calls.length, 'precondition: two pointer calls').toBe(2)
+    const snapshotRead = await storage
+      .readContent({ kind: 'snapshot', seq: 7 })
+      .then((result) => result.kind)
+      .catch((error: unknown) => `threw ${(error as Error).message}`)
+    expect.soft(snapshotRead, '(g1) snapshot read found').toBe('found')
+    for (const [i, mode] of (['staging', 'production'] as const).entries()) {
+      expect
+        .soft(calls[i]?.url, `(g1) ${mode} pointer url`)
+        .toMatch(
+          new RegExp(
+            `^${CONTENT_READ.replaceAll('.', '\\.')}catalogue/${mode}\\.json\\?cacheNonce=[1-9][0-9]{0,15}$`,
+          ),
+        )
+      expect.soft(calls[i]?.method, `(g1) ${mode} GET`).toBe('GET')
+    }
+    expect
+      .soft(calls[2]?.url, '(g1) snapshot url with no search')
+      .toBe(`${CONTENT_READ}catalogue/snapshots/7.json`)
+    // (g2) the headers
+    for (const [i, call] of calls.entries()) {
+      expect
+        .soft(call.headers, `(g2) headers ${i}`)
+        .toEqual({ apikey: FAKE_KEY, 'accept-encoding': 'identity' })
+      expect.soft(call.body, `(g2) no body ${i}`).toBeUndefined()
+    }
+    const bearer = client(() => bytesResponse(POINTER(7)), { bearerFallback: true })
+    await bearer.storage.readContent(POINTER_READ('staging'))
+    await bearer.storage.readContent({ kind: 'snapshot', seq: 7 })
+    for (const [i, call] of bearer.calls.entries()) {
+      expect.soft(call.headers, `(g2) bearerFallback headers ${i}`).toEqual({
+        apikey: FAKE_KEY,
+        authorization: `Bearer ${FAKE_KEY}`,
+        'accept-encoding': 'identity',
+      })
+    }
+    // (g3) Date.now frozen: three pointer reads give strictly increasing nonces
+    const frozen = vi.spyOn(Date, 'now').mockReturnValue(1_732_190_000_000)
+    const fresh = client(() => bytesResponse(POINTER(7)))
+    try {
+      for (let i = 0; i < 3; i++) await fresh.storage.readContent(POINTER_READ('staging'))
+    } finally {
+      frozen.mockRestore()
+    }
+    const nonces = fresh.calls.map((call) => nonceOf(call.url))
+    expect(nonces.length, 'precondition: three frozen-clock calls').toBe(3)
+    expect
+      .soft(
+        nonces[0]! < nonces[1]! && nonces[1]! < nonces[2]!,
+        `(g3) strictly increasing ${nonces.join(' ')}`,
+      )
+      .toBe(true)
+    // (g4) a clock outside the nonce range is refused at stage url, with 0 calls
+    for (const [name, value] of [
+      ['1e16', 1e16],
+      ['2**53', 2 ** 53],
+      ['NaN', Number.NaN],
+    ] as const) {
+      const edge = client(() => bytesResponse(POINTER(7)))
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(value)
+      try {
+        await expectRefused(
+          `(g4) Date.now ${name}`,
+          () => edge.storage.readContent(POINTER_READ('staging')),
+          'pointer url url-mismatch',
+          () => edge.calls.length,
+        )
+      } finally {
+        spy.mockRestore()
+      }
+    }
+    // (g5) a 500 is one call: never retried
+    const failing = client(() => json(500, {}))
+    expect
+      .soft(await failing.storage.readContent(POINTER_READ('staging')), '(g5) failed')
+      .toEqual({ kind: 'failed', status: 500, code: 'unknown' })
+    expect.soft(failing.calls.length, '(g5) one call').toBe(1)
+  })
+
+  it('T14-77 readContent classification: found without a hash check, too-large, not-found, unauthorized, failed scrubbed (A11)', async () => {
+    const marked = text('{"marker":"q7body"}')
+    const markedSha = await sha256Hex(marked)
+    const refs = [POINTER_READ('staging'), { kind: 'snapshot', seq: 7 } as const]
+    for (const ref of refs) {
+      const read = (respond: Respond) => client(respond).storage.readContent(ref)
+      const label = ref.kind
+      expect(markedSha === SHA_A, 'precondition: the bytes hash to no name').toBe(false)
+      // (g1) found whatever the bytes
+      expect
+        .soft(await read(() => bytesResponse(marked.slice())), `(g1) ${label} found`)
+        .toEqual({ kind: 'found', bytes: marked, size: marked.byteLength, sha256: markedSha })
+      // (g2) over the cap
+      expect
+        .soft(
+          await read(() => new Response(new Uint8Array(MAX_JSON_BYTES + 1))),
+          `(g2) ${label} over 1 MiB`,
+        )
+        .toEqual({ kind: 'too-large', limit: MAX_JSON_BYTES })
+      // (g3) not-found and unauthorized through classifyRead
+      const rows: [string, () => Response, unknown][] = [
+        [
+          '400 not_found',
+          () => json(400, { statusCode: '404', error: 'not_found' }),
+          { kind: 'not-found' },
+        ],
+        [
+          '400 NoSuchKey',
+          () => json(400, { statusCode: '404', code: 'NoSuchKey', error: 'not_found' }),
+          { kind: 'not-found' },
+        ],
+        ['404 not_found', () => json(404, { error: 'not_found' }), { kind: 'not-found' }],
+        ['401', () => json(401, {}), { kind: 'unauthorized', status: 401 }],
+        ['403', () => json(403, {}), { kind: 'unauthorized', status: 403 }],
+      ]
+      for (const [name, answer, want] of rows) {
+        expect.soft(await read(answer), `(g3) ${label} ${name}`).toEqual(want)
+      }
+      // (g4) failures scrubbed
+      const echoed = await read(() => json(500, { code: FAKE_KEY, message: `bad ${FAKE_KEY}` }))
+      expect
+        .soft(echoed, `(g4) ${label} 500 echoing the key`)
+        .toEqual({ kind: 'failed', status: 500, code: 'unknown' })
+      expect.soft(JSON.stringify(echoed).includes(FAKE_KEY), `(g4) ${label} no key`).toBe(false)
+      const partial = FAKE_KEY.slice('sb_secret_'.length)
+      const echoedPart = await read(() => json(500, { code: partial }))
+      expect
+        .soft(echoedPart, `(g4) ${label} 500 echoing the key without its sb_ start`)
+        .toEqual({ kind: 'failed', status: 500, code: 'unknown' })
+      const network = await read(() => Promise.reject(new TypeError('fetch failed')))
+      expect
+        .soft(network.kind === 'failed' && network.status, `(g4) ${label} network status null`)
+        .toBe(null)
     }
   })
 })
@@ -2264,15 +2432,16 @@ describe('the key never leaves the client', () => {
     }
   })
 
-  it('T13-H3 an echoed key in a server code becomes unknown on all four methods', async () => {
+  it('T13-H3 an echoed key in a server code becomes unknown on all five methods', async () => {
     const answer: Respond = () => json(500, { code: FAKE_KEY, message: `bad ${FAKE_KEY}` })
     const results = [
       await asCreate(client(answer).storage, MEDIA_REF(), MEDIA()),
       await asRead(client(answer).storage, APPROVAL_REF()),
       await client(answer).storage.writePointer('production', POINTER(7)),
       await client(answer).storage.listContent(''),
+      await client(answer).storage.readContent({ kind: 'pointer', mode: 'staging' }),
     ]
-    expect(results.length, 'precondition: 4 calls').toBe(4)
+    expect(results.length, 'precondition: 5 calls').toBe(5)
     results.forEach((result, i) => {
       expect.soft(result, `(g1) ${i}`).toEqual({ kind: 'failed', status: 500, code: 'unknown' })
       expect.soft(JSON.stringify(result).includes(FAKE_KEY), `(g2) ${i} no key`).toBe(false)
@@ -2833,7 +3002,9 @@ describe('over the wire against the storage stub', () => {
       await storage.writePointer('production', POINTER(7))
       await asRead(storage, WAIVER_REF())
       await storage.listContent('catalogue/snapshots/') // an empty folder: one list request
-      expect(s.requests.length, 'precondition: 4 requests').toBe(4)
+      await storage.readContent({ kind: 'pointer', mode: 'staging' }) // missing: one request
+      await storage.readContent({ kind: 'snapshot', seq: 7 }) // missing: one request
+      expect(s.requests.length, 'precondition: 6 requests').toBe(6)
       for (const entry of s.requests)
         expect
           .soft(entry.authorization, `(g1) ${flag} ${entry.method} ${entry.pathname.slice(0, 40)}`)
@@ -2862,5 +3033,53 @@ describe('over the wire against the storage stub', () => {
     expect
       .soft(result.kind === 'failed' && result.code.startsWith('TypeError'), '(g1) TypeError code')
       .toBe(true)
+  })
+
+  it('T14-78 readContent over the wire: the stub serves the nonce form; found, missing and snapshot reads (A11, A12)', async () => {
+    const pointerBytes = POINTER(7)
+    const snapshotBytes = SNAPSHOT()
+    stub.put('content', 'catalogue/staging.json', pointerBytes, 'application/json')
+    stub.put('content', 'catalogue/snapshots/7.json', snapshotBytes, 'application/json')
+    const read = '/storage/v1/object/authenticated/content/'
+    // (g1) the staging pointer, with a nonce
+    const found = await wire(stub).readContent({ kind: 'pointer', mode: 'staging' })
+    expect(stub.requests.length, 'precondition: one request').toBe(1)
+    expect.soft(found, '(g1) pointer found with its bytes').toEqual({
+      kind: 'found',
+      bytes: pointerBytes,
+      size: pointerBytes.byteLength,
+      sha256: await sha256Hex(pointerBytes),
+    })
+    const entry = stub.requests[0]!
+    expect.soft(entry.method, '(g1) GET').toBe('GET')
+    expect.soft(entry.pathname, '(g1) pathname').toBe(`${read}catalogue/staging.json`)
+    expect.soft(entry.search, '(g1) a nonce search').toMatch(/^\?cacheNonce=[1-9][0-9]{0,15}$/)
+    expect.soft(entry.values['accept-encoding'], '(g1) identity').toBe('identity')
+    expect.soft(entry.apikeyMatched, '(g1) apikey matched').toBe(true)
+    expectWireHeaders(entry, ['accept-encoding', 'apikey'], '(g1) headers')
+    // (g2) production missing, under both missing bodies
+    for (const missing of ['not_found', 'NoSuchKey'] as const) {
+      const s = await startStub({ missing })
+      expect
+        .soft(
+          await wire(s).readContent({ kind: 'pointer', mode: 'production' }),
+          `(g2) missing ${missing}`,
+        )
+        .toEqual({ kind: 'not-found' })
+      expect.soft(s.requests.length, `(g2) ${missing} one request`).toBe(1)
+    }
+    // (g3) the snapshot, with no search
+    const snapshot = await wire(stub)
+      .readContent({ kind: 'snapshot', seq: 7 })
+      .catch((error: unknown) => `threw ${(error as Error).message}`)
+    expect.soft(snapshot, '(g3) snapshot found').toEqual({
+      kind: 'found',
+      bytes: snapshotBytes,
+      size: snapshotBytes.byteLength,
+      sha256: await sha256Hex(snapshotBytes),
+    })
+    const last = stub.requests.at(-1)
+    expect.soft(last?.pathname, '(g3) pathname').toBe(`${read}catalogue/snapshots/7.json`)
+    expect.soft(last?.search, '(g3) no search').toBe('')
   })
 })

@@ -7,8 +7,11 @@
 //   page, POST /storage/v1/object/list/{content|masters}.
 // - It fails closed. A missing or wrong apikey, or an authorization header other than Bearer of the
 //   same key, is recorded in `unexpected` and answered 401. Any other method, route, query, path form
-//   or malformed list body is recorded in `unexpected` and answered 500. Overrides apply to modelled
-//   routes only. Every test asserts that `unexpected` is empty (expectNoUnexpected).
+//   or malformed list body is recorded in `unexpected` and answered 500. The one query it models is a
+//   pointer read's cache nonce (Step 14, p1-step14-design.md §4.7): exactly `?cacheNonce=<1-16
+//   digits, no leading zero>` on a GET of content catalogue/production.json or catalogue/staging.json
+//   on the read route. Overrides apply to modelled routes only. Every test asserts that `unexpected`
+//   is empty (expectNoUnexpected).
 // - Every answer sets content-length explicitly, through writeHead before end, so a dropped length
 //   would show as a chunked answer (stub-storage.ts:5-8: Node adds none to a HEAD answer). Only the
 //   chunked-gzip override sends none; stall and truncate declare a length they never send.
@@ -105,6 +108,10 @@ const LIST_ROUTE = '/storage/v1/object/list/'
 const BUCKETS: ReadonlySet<string> = new Set(['content', 'masters'])
 const LOGGED_VALUES = ['content-type', 'cache-control', 'x-upsert', 'accept-encoding'] as const
 const SEGMENT = /^[A-Za-z0-9._-]+$/
+/** The bucket and path of the two pointers on the read route (stub-local, not the client's). */
+const POINTER_READ_PATH = /^content\/catalogue\/(?:production|staging)\.json$/
+/** The raw query of a pointer read's cache nonce, compared as sent (no decoding). */
+const NONCE_QUERY = /^\?cacheNonce=[1-9][0-9]{0,15}$/
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 const UPDATED_AT = '2026-11-21T00:00:00.000Z'
 
@@ -137,6 +144,16 @@ function isModelledPath(path: string): boolean {
   return (
     path !== '' &&
     path.split('/').every((segment) => SEGMENT.test(segment) && segment !== '.' && segment !== '..')
+  )
+}
+
+/** A GET of a pointer on the read route with exactly the nonce query: the one modelled search. */
+function isPointerNonceRead(method: string, pathname: string, search: string): boolean {
+  return (
+    method === 'GET' &&
+    pathname.startsWith(READ_ROUTE) &&
+    POINTER_READ_PATH.test(pathname.slice(READ_ROUTE.length)) &&
+    NONCE_QUERY.test(search)
   )
 }
 
@@ -333,7 +350,7 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
     req: IncomingMessage,
     body: Uint8Array,
   ): (() => Answer | null) | null {
-    if (search !== '') return null
+    if (search !== '' && !isPointerNonceRead(method, pathname, search)) return null
     if (method === 'POST' && pathname.startsWith(LIST_ROUTE)) {
       const bucket = pathname.slice(LIST_ROUTE.length)
       return BUCKETS.has(bucket) ? () => list(bucket, body) : null

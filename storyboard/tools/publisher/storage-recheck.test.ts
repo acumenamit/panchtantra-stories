@@ -16,6 +16,7 @@ vi.mock('./storage-layout', async (importOriginal) => {
     ...real,
     targetOf: vi.fn(real.targetOf),
     pointerTarget: vi.fn(real.pointerTarget),
+    contentReadTarget: vi.fn(real.contentReadTarget),
     recheckTarget: vi.fn(real.recheckTarget),
     recheckUrl: vi.fn(real.recheckUrl),
   }
@@ -103,6 +104,7 @@ async function refusalOf(attempt: Promise<unknown>): Promise<string> {
 beforeEach(() => {
   vi.mocked(layout.targetOf).mockReset()
   vi.mocked(layout.pointerTarget).mockReset()
+  vi.mocked(layout.contentReadTarget).mockReset()
   vi.mocked(layout.recheckTarget).mockReset()
   vi.mocked(layout.recheckUrl).mockReset()
 })
@@ -371,5 +373,197 @@ describe('storage.ts calls each layout check', () => {
     )
     expect.soft(message, '(g1) class-fields').toBe('refused: approval class-pattern class-fields')
     expect.soft(calls.length, '(g1) 0 requests').toBe(0)
+  })
+})
+
+// ---- Step 14 (P1-8c): readContent (design p1-step14-design.md §3.4, §14.10) ----
+
+const content = (
+  kind: 'pointer' | 'snapshot' | 'package',
+  path: string,
+  fields: Record<string, string | number>,
+): Target => ({
+  kind,
+  bucket: 'content',
+  path,
+  contentType: 'application/json',
+  cacheSeconds: kind === 'pointer' ? 0 : 3600,
+  maxBytes: layout.MAX_JSON_BYTES,
+  fields: Object.freeze({ ...fields }),
+})
+const STAGING_REF = { kind: 'pointer', mode: 'staging' } as const
+const SNAPSHOT_TARGET = (tail = '') =>
+  content('snapshot', `catalogue/snapshots/7.json${tail}`, { seq: 7 })
+const STAGING_TARGET = (tail = '') =>
+  content('pointer', `catalogue/staging.json${tail}`, { mode: 'staging' })
+const searchOf = (url: string | undefined) => (url === undefined ? 'no call' : new URL(url).search)
+const pathnameOf = (url: string | undefined) =>
+  url === undefined ? 'no call' : new URL(url).pathname
+
+describe('readContent calls each layout check (Step 14)', () => {
+  it('T14-79 readContent calls contentReadTarget, re-check 1 and re-check 2 as separate imports, in that order (A11)', async () => {
+    const { storage, calls } = client()
+    expect(
+      await refusalOf(storage.readContent(STAGING_REF)),
+      'precondition: a valid read resolves',
+    ).toBe('resolved')
+    expect(calls.length, 'precondition: one request').toBe(1)
+    // (g1) a refusal injected once into each check is the thrown text, with 0 requests
+    const injections: [string, () => void, string][] = [
+      [
+        'contentReadTarget',
+        () =>
+          vi.mocked(layout.contentReadTarget).mockReturnValueOnce({
+            ok: false,
+            refusal: { cls: 'pointer', stage: 'field', rule: 'injected-zero' },
+          }),
+        'refused: pointer field injected-zero',
+      ],
+      [
+        're-check 1',
+        () =>
+          vi.mocked(layout.recheckTarget).mockReturnValueOnce({
+            ok: false,
+            refusal: { cls: 'pointer', stage: 'class-pattern', rule: 'injected-one' },
+          }),
+        'refused: pointer class-pattern injected-one',
+      ],
+      [
+        're-check 2',
+        () =>
+          vi.mocked(layout.recheckUrl).mockReturnValueOnce({
+            ok: false,
+            refusal: { cls: 'ref', stage: 'url', rule: 'injected-two' },
+          }),
+        'refused: pointer url injected-two',
+      ],
+    ]
+    for (const [name, inject, want] of injections) {
+      inject()
+      const before = calls.length
+      expect.soft(await refusalOf(storage.readContent(STAGING_REF)), `(g1) ${name}`).toBe(want)
+      expect.soft(calls.length - before, `(g1) ${name} 0 requests`).toBe(0)
+    }
+    // (g2) one call each, in the order contentReadTarget, re-check 1, re-check 2
+    vi.mocked(layout.contentReadTarget).mockClear()
+    vi.mocked(layout.recheckTarget).mockClear()
+    vi.mocked(layout.recheckUrl).mockClear()
+    await storage.readContent(STAGING_REF)
+    const order = [layout.contentReadTarget, layout.recheckTarget, layout.recheckUrl].map(
+      (fn) => vi.mocked(fn).mock.invocationCallOrder[0] ?? Number.NaN,
+    )
+    for (const [name, fn] of [
+      ['contentReadTarget', layout.contentReadTarget],
+      ['re-check 1', layout.recheckTarget],
+      ['re-check 2', layout.recheckUrl],
+    ] as const) {
+      expect.soft(vi.mocked(fn).mock.calls.length, `(g2) ${name} called once`).toBe(1)
+    }
+    expect
+      .soft(order[0]! < order[1]! && order[1]! < order[2]!, `(g2) order ${order.join(' < ')}`)
+      .toBe(true)
+  })
+
+  it("T14-80 send()'s search rule, client half: only a pointer GET carries a nonce (L10, CRIT-10)", async () => {
+    const { storage, calls } = client()
+    const passBoth = () => {
+      vi.mocked(layout.recheckTarget).mockImplementationOnce((target) => ({
+        ok: true,
+        value: target,
+      }))
+      vi.mocked(layout.recheckUrl).mockImplementationOnce((url) => ({ ok: true, value: url }))
+    }
+    const readAs = (target: Target) => {
+      vi.mocked(layout.contentReadTarget).mockReturnValueOnce(ok(target))
+      passBoth()
+      return storage.readContent(STAGING_REF)
+    }
+    // positive control: with both re-checks mocked to pass, a valid target reaches the transport
+    expect(await refusalOf(readAs(STAGING_TARGET())), 'precondition: a valid read is sent').toBe(
+      'resolved',
+    )
+    expect(calls.length, 'precondition: one request').toBe(1)
+    const rows: [string, () => Promise<unknown>, string][] = [
+      ...(['?cacheNonce=1', '?x=1', '?'] as const).map(
+        (tail): [string, () => Promise<unknown>, string] => [
+          `snapshot target ending ${tail}`,
+          () => readAs(SNAPSHOT_TARGET(tail)),
+          'refused: snapshot url url-mismatch',
+        ],
+      ),
+      [
+        'waiver target ending ?cacheNonce=1',
+        () => {
+          vi.mocked(layout.targetOf).mockReturnValueOnce(
+            ok(masters('waiver', `waivers/two-paths/${SHA_A}.json?cacheNonce=1`)),
+          )
+          passBoth()
+          return storage.readMaster(WAIVER_REF)
+        },
+        'refused: waiver url url-mismatch',
+      ],
+      ...(['?cacheNonce=1', '?', '#'] as const).map(
+        (tail): [string, () => Promise<unknown>, string] => [
+          `writePointer target ending ${tail}`,
+          () => {
+            vi.mocked(layout.pointerTarget).mockReturnValueOnce(
+              ok(pointer(`catalogue/production.json${tail}`)),
+            )
+            passBoth()
+            return storage.writePointer('production', POINTER)
+          },
+          'refused: pointer url url-mismatch',
+        ],
+      ),
+      [
+        'readContent pointer target ending #x',
+        () => readAs(STAGING_TARGET('#x')),
+        'refused: pointer url url-mismatch',
+      ],
+    ]
+    for (const [name, attempt, want] of rows) {
+      vi.mocked(layout.recheckUrl).mockClear()
+      const before = calls.length
+      const message = await refusalOf(attempt())
+      expect(
+        vi.mocked(layout.recheckUrl),
+        `precondition: ${name} re-check 2 called once`,
+      ).toHaveBeenCalledTimes(1)
+      expect.soft(message, `(g1) ${name}`).toBe(want)
+      expect.soft(calls.length - before, `(g1) ${name} 0 requests`).toBe(0)
+    }
+    // (g2) the nonce assignment replaces a search the target carried; it never appends
+    const beforeG2 = calls.length
+    expect.soft(await refusalOf(readAs(STAGING_TARGET('?x=1'))), '(g2) sent').toBe('resolved')
+    expect.soft(calls.length - beforeG2, '(g2) one request').toBe(1)
+    expect
+      .soft(searchOf(calls[beforeG2]), '(g2) the search is exactly the nonce')
+      .toMatch(/^\?cacheNonce=[1-9][0-9]{0,15}$/)
+    // (g3) the nonce follows the target's kind, never the ref's
+    const beforeG3 = calls.length
+    expect
+      .soft(await refusalOf(readAs(SNAPSHOT_TARGET())), '(g3) a pointer ref with a snapshot target')
+      .toBe('resolved')
+    expect.soft(calls.length - beforeG3, '(g3) one request').toBe(1)
+    expect
+      .soft(pathnameOf(calls[beforeG3]), '(g3) the snapshot path')
+      .toBe('/storage/v1/object/authenticated/content/catalogue/snapshots/7.json')
+    expect.soft(searchOf(calls[beforeG3]), '(g3) no search on the snapshot read').toBe('')
+    // (g4) routeClass's content branch is pointer and snapshot only
+    const beforeG4 = calls.length
+    expect
+      .soft(
+        await refusalOf(
+          readAs(
+            content('package', `packages/two-paths/${SHA_A}.json`, {
+              storyId: 'two-paths',
+              packageSha256: SHA_A,
+            }),
+          ),
+        ),
+        '(g4) a content package target',
+      )
+      .toBe('refused: package url url-mismatch')
+    expect.soft(calls.length - beforeG4, '(g4) 0 requests').toBe(0)
   })
 })
