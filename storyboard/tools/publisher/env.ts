@@ -93,6 +93,20 @@ const SECRET_KEY_PREFIX = 'sb_secret_'
 const PUBLISHABLE_KEY_PREFIX = 'sb_publishable_'
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/
 
+/**
+ * True when `raw` has the shape of a Supabase secret API key: the secret prefix, at least one more
+ * character, and visible ASCII only. Pure; readSecretKey and the Storage client share it (P1-8b,
+ * lead decision 4), so no other module needs to hold the prefix.
+ */
+export function isSecretKeyShape(raw: string): boolean {
+  return (
+    typeof raw === 'string' &&
+    raw.startsWith(SECRET_KEY_PREFIX) &&
+    raw.length > SECRET_KEY_PREFIX.length &&
+    VISIBLE_ASCII.test(raw)
+  )
+}
+
 // The messages below never spell out a key prefix: the S-1 leak check searches all output for it.
 /** SUPABASE_SECRET_KEY: a Supabase secret API key. Publishable and legacy JWT keys are refused. */
 export function readSecretKey(env: Env): EnvResult<Secret> {
@@ -107,7 +121,7 @@ export function readSecretKey(env: Env): EnvResult<Secret> {
   if (!raw.startsWith(SECRET_KEY_PREFIX) || raw.length === SECRET_KEY_PREFIX.length) {
     return fail('SUPABASE_SECRET_KEY must be a Supabase secret key (Project Settings > API Keys)')
   }
-  if (!VISIBLE_ASCII.test(raw)) {
+  if (!isSecretKeyShape(raw)) {
     return fail('SUPABASE_SECRET_KEY must be one line with no spaces or control characters')
   }
   return ok(new Secret(raw))

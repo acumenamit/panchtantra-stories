@@ -1,60 +1,85 @@
-// Supabase Storage REST client for the publisher (spec §3.3, §4.4, §8). Plain fetch, no SDK.
-// - The secret key goes on the `apikey` header only. `bearerFallback` (off by default) also sends
-//   `Authorization: Bearer <key>`; it is used only with the owner's OK if the apikey header alone is
-//   refused (P0-13 plan, O4 step 1).
-// - Guards, set by the caller, are checked before any request: an allowed bucket list, write
-//   prefixes, an exact list of overwritable paths, and safe paths. `masters` is never written or
-//   deleted, whatever the caller allows. A refusal throws StorageRefusedError and sends nothing.
-// - Results are typed. An upload is never retried, and never retried with upsert.
-// - Errors and results never contain the key or any header.
+// Supabase Storage REST client for the publisher (spec §3.3, §4.4, §8; design p1-step13-design.md,
+// P1-8b). Plain fetch, no SDK.
+// - Callers name objects by typed refs (storage-layout.ts). Bucket, path, content type, cache and
+//   the upsert flag come from the class table, never from a caller. Re-check 1 (the target) and
+//   re-check 2 (the request URL) run before any request.
+// - Four methods only: create (create-only, x-upsert false), writePointer (the two pointers, the
+//   only overwrites), readMaster (approvals and waivers, the authenticated GET) and listContent.
+//   The transport sends GET and POST only, to routes built from three fixed literals; this module
+//   has no delete, move, copy, sign or bucket route.
+// - A body is type-checked and copied at entry, before any await; size, the build's own gates, the
+//   hash and the request all use the copy.
+// - The secret key goes on the `apikey` header only. `bearerFallback` (a boolean, off by default)
+//   also sends `Authorization: Bearer <key>`; it is used only with the owner's OK.
+// - A refusal throws StorageRefusedError with the fixed text `refused: <class> <stage> <rule>` and
+//   sends nothing; a construction refusal is a TypeError `refused: client option <rule>`.
+// - Results are typed. Nothing is retried and nothing is printed. Errors and results never carry the
+//   key, a header or server message text: failure codes are whole sanitised tokens or "unknown".
 import { z } from 'zod'
-import { isSafeStoragePath } from '../../src/core/content/gates'
-import type { Secret } from './env'
-import { checkServiceUrl, describeNetworkError, parseJsonBytes, readCapped } from './http'
-
-/** Buckets this client never writes to or deletes from. */
-export const PROTECTED_BUCKETS: readonly string[] = ['masters']
+import {
+  checkPackagePaths,
+  checkPointer,
+  decodeJson,
+  isCanonicalJcs,
+  isSafeStoragePath,
+  parseStrictJson,
+} from '../../src/core/content/gates'
+import { checkUniqueStoryIds } from '../../src/core/content/packages'
+import { sha256Hex } from '../../src/core/hashing'
+import { CatalogueSnapshot } from '../../src/core/package/catalogue'
+import { hasOwnProtoKey, StoryPackageV1 } from '../../src/core/package/v1'
+import { isSecretKeyShape, Secret } from './env'
+import { describeNetworkError, parseJsonBytes, readCapped } from './http'
+import {
+  classOfPath,
+  MAX_JSON_BYTES,
+  pointerTarget,
+  recheckTarget,
+  recheckUrl,
+  targetOf,
+  type CreateRef,
+  type LayoutResult,
+  type MasterReadRef,
+  type PointerMode,
+  type Refusal,
+  type Target,
+} from './storage-layout'
 
 export const DEFAULT_TIMEOUT_MS = 60_000
 export const LIST_PAGE_SIZE = 100
-/** Our own bound per remove call, so one mistaken call cannot delete a large set; callers chunk. */
-export const MAX_REMOVE_PATHS = 100
 export const MAX_LIST_DEPTH = 16
 export const MAX_LIST_ENTRIES = 10_000
-const MAX_CACHE_SECONDS = 31_536_000 // one year
-const MAX_RESPONSE_BYTES = 1024 * 1024
+const MAX_TIMEOUT_MS = 600_000
+const MIN_KEY_LENGTH = 8
+const MAX_RESPONSE_BYTES = MAX_JSON_BYTES
 
-export interface StorageGuards {
-  /** Buckets any call may name. PROTECTED_BUCKETS stay read-only even when listed here. */
-  readonly allowedBuckets: readonly string[]
-  /** Uploads and removes must sit under one of these folders, each ending with '/'. */
-  readonly writePrefixes: readonly string[]
-  /** The only paths an upload may overwrite (upsert). Exact paths; no patterns. */
-  readonly overwritablePaths: readonly string[]
-}
+// The closed route list (§4.1): every request URL is built from one of these three literals.
+const OBJECT_ROUTE = '/storage/v1/object/'
+const MASTERS_READ_ROUTE = '/storage/v1/object/authenticated/masters/'
+const LIST_ROUTE = '/storage/v1/object/list/content'
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+const SUPABASE_HOST = /^[a-z0-9]{20}\.supabase\.co$/
+const OPTION_KEYS: ReadonlySet<string> = new Set([
+  'supabaseUrl',
+  'secretKey',
+  'fetchImpl',
+  'timeoutMs',
+  'listPageSize',
+  'bearerFallback',
+])
 
 export interface StorageClientOptions {
-  /** https://<ref>.supabase.co (http is accepted only on a loopback host, for tests). */
+  /** https://<20 lowercase alnum>.supabase.co, or http on a loopback host with a port (tests). */
   readonly supabaseUrl: URL
   readonly secretKey: Secret
-  readonly guards: StorageGuards
+  /** Accepted only with a loopback origin. */
   readonly fetchImpl?: typeof fetch
+  /** 1 to 600,000 ms; covers headers and body. */
   readonly timeoutMs?: number
   readonly listPageSize?: number
   /** Off by default; see the file header. */
   readonly bearerFallback?: boolean
-}
-
-export interface UploadRequest {
-  readonly bucket: string
-  readonly path: string
-  readonly body: Uint8Array<ArrayBuffer>
-  /** A bare media type such as "audio/mpeg" (no parameters). */
-  readonly contentType: string
-  /** Seconds, sent as `cache-control: max-age=<n>`. */
-  readonly cacheControl: number
-  /** Default false. True only for a path in guards.overwritablePaths. */
-  readonly upsert?: boolean
 }
 
 /** Storage answered with an authentication or permission error, or the request failed. */
@@ -62,21 +87,40 @@ export type StorageFailure =
   | { readonly kind: 'unauthorized'; readonly status: number }
   | { readonly kind: 'failed'; readonly status: number | null; readonly code: string }
 
-export type UploadResult =
+/** What one upload answer means, before the client adds its read-back verdict. */
+export type UploadOutcome =
   | { readonly kind: 'created' }
   | { readonly kind: 'duplicate' }
   | { readonly kind: 'too-large' }
   | { readonly kind: 'mime-refused' }
   | StorageFailure
 
-export type RemoveResult =
-  | { readonly kind: 'removed'; readonly paths: readonly string[] }
+export type StoredVerdict = 'identical' | 'different' | 'unchecked'
+
+export type CreateResult =
+  | { readonly kind: 'created' }
+  | { readonly kind: 'duplicate'; readonly stored: StoredVerdict }
+  | { readonly kind: 'too-large' }
+  | { readonly kind: 'mime-refused' }
+  | StorageFailure
+
+export type PointerResult =
+  | { readonly kind: 'written' }
+  | { readonly kind: 'too-large' }
+  | { readonly kind: 'mime-refused' }
+  | StorageFailure
+
+/** `not-found` means absent, or not visible to this key; callers stop on it (§1.3). */
+export type ReadResult =
   | {
-      readonly kind: 'count-mismatch'
-      readonly removed: readonly string[]
-      readonly notRemoved: readonly string[]
-      readonly unexpected: readonly string[]
+      readonly kind: 'found'
+      readonly bytes: Uint8Array<ArrayBuffer>
+      readonly size: number
+      readonly sha256: string
     }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'too-large'; readonly limit: number }
+  | { readonly kind: 'hash-mismatch'; readonly sha256: string }
   | StorageFailure
 
 export interface StoredObject {
@@ -91,30 +135,26 @@ export type ListResult =
   { readonly kind: 'listed'; readonly objects: readonly StoredObject[] } | StorageFailure
 
 export interface StorageClient {
-  upload(request: UploadRequest): Promise<UploadResult>
-  /** Deletes exact paths and checks that Storage reports each one deleted. */
-  remove(bucket: string, paths: readonly string[]): Promise<RemoveResult>
-  /** Every object under a folder ('' or 'a/b/'), recursively, all pages, sorted by path. */
-  list(bucket: string, folder: string): Promise<ListResult>
+  /** Create-only write of a package, media item, snapshot or masters approval record. */
+  create(ref: CreateRef, body: Uint8Array): Promise<CreateResult>
+  /** Overwrites catalogue/production.json or catalogue/staging.json with a gated pointer. */
+  writePointer(mode: PointerMode, body: Uint8Array): Promise<PointerResult>
+  /** Reads an approval or waiver from masters by exact name. */
+  readMaster(ref: MasterReadRef): Promise<ReadResult>
+  /** Every content object under a folder ('' or 'a/b/'), recursively, all pages, sorted by path. */
+  listContent(folder: string): Promise<ListResult>
 }
 
-/** A guard or argument check failed; no request was sent. */
+/** A ref, body, URL or folder check failed; no request was sent. */
 export class StorageRefusedError extends Error {
   override readonly name = 'StorageRefusedError'
 }
 
 // ---- pure helpers ----
 
-const BUCKET_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/
-const MEDIA_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/
-
 /** '' (the bucket root) or a safe path followed by exactly one '/'. */
 export function isFolderPrefix(folder: string): boolean {
   return folder === '' || (folder.endsWith('/') && isSafeStoragePath(folder.slice(0, -1)))
-}
-
-export function isUnderPrefix(path: string, prefixes: readonly string[]): boolean {
-  return prefixes.some((prefix) => path.startsWith(prefix) && path.length > prefix.length)
 }
 
 /**
@@ -131,7 +171,7 @@ export function effectiveStatus(httpStatus: number, body: unknown): number {
 
 /** Storage codes are short words ("KeyAlreadyExists", "Not Found"); anything else is never repeated. */
 const ERROR_CODE = /^[A-Za-z][A-Za-z0-9 _.-]{0,39}$/
-/** The start of every Supabase API key (sb_secret_, sb_publishable_). */
+/** The `sb_` start of every Supabase API key, secret and publishable alike. */
 const KEY_MARKER = /sb_/i
 /** The shortest run of key characters treated as a leak when it shows up in a failure code. */
 const KEY_RUN_LENGTH = 8
@@ -169,7 +209,7 @@ export function classifyFailure(httpStatus: number, body: unknown): StorageFailu
   return { kind: 'failed', status, code: storageErrorCode(body) }
 }
 
-export function classifyUpload(httpStatus: number, body: unknown): UploadResult {
+export function classifyUpload(httpStatus: number, body: unknown): UploadOutcome {
   if (httpStatus >= 200 && httpStatus < 300) return { kind: 'created' }
   switch (effectiveStatus(httpStatus, body)) {
     case 409:
@@ -183,25 +223,22 @@ export function classifyUpload(httpStatus: number, body: unknown): UploadResult 
   }
 }
 
-const DeletedRows = z.array(z.object({ name: z.string() }))
-
-/** Compares the rows Storage says it deleted with the paths that were asked for. */
-export function checkRemoved(
-  requested: readonly string[],
-  status: number,
+/**
+ * A read answer that is not 2xx (lead decision 5): 401/403 first; then `not-found` only on an
+ * effective status of 400 or 404 with the raw `code` exactly NoSuchKey, or, with no string `code`,
+ * the raw `error` exactly not_found; anything else is failed.
+ */
+export function classifyRead(
+  httpStatus: number,
   body: unknown,
-): RemoveResult {
-  const rows = DeletedRows.safeParse(body)
-  if (!rows.success) return { kind: 'failed', status, code: 'unreadable-response' }
-  const deleted = new Set(rows.data.map((row) => row.name))
-  const wanted = new Set(requested)
-  const removed = requested.filter((path) => deleted.has(path))
-  const notRemoved = requested.filter((path) => !deleted.has(path))
-  const unexpected = [...deleted].filter((name) => !wanted.has(name))
-  if (notRemoved.length === 0 && unexpected.length === 0 && rows.data.length === requested.length) {
-    return { kind: 'removed', paths: removed }
-  }
-  return { kind: 'count-mismatch', removed, notRemoved, unexpected }
+): StorageFailure | { readonly kind: 'not-found' } {
+  const failure = classifyFailure(httpStatus, body)
+  if (failure.kind === 'unauthorized') return failure
+  const status = effectiveStatus(httpStatus, body)
+  const signal =
+    isRecord(body) &&
+    (body.code === 'NoSuchKey' || (typeof body.code !== 'string' && body.error === 'not_found'))
+  return (status === 400 || status === 404) && signal ? { kind: 'not-found' } : failure
 }
 
 const ListedEntry = z.object({
@@ -234,110 +271,289 @@ function toStoredObject(path: string, entry: ListedEntry): StoredObject {
   }
 }
 
-function describePath(path: string): string {
-  return JSON.stringify(path.length > 120 ? `${path.slice(0, 120)}...` : path)
+function refuse(cls: string, refusal: Refusal): never {
+  throw new StorageRefusedError(`refused: ${cls} ${refusal.stage} ${refusal.rule}`)
 }
 
-function checkGuards(guards: StorageGuards): StorageGuards {
-  if (guards.allowedBuckets.length === 0) throw new TypeError('allowedBuckets must not be empty')
-  for (const bucket of guards.allowedBuckets) {
-    if (!BUCKET_NAME.test(bucket))
-      throw new TypeError(`invalid bucket name ${describePath(bucket)}`)
+function refuseRule(cls: string, stage: Refusal['stage'], rule: string): never {
+  refuse(cls, { cls, stage, rule })
+}
+
+function expectTarget(result: LayoutResult<Target>): Target {
+  if (!result.ok) refuse(result.refusal.cls, result.refusal)
+  return result.value
+}
+
+/** The body checked and copied before any await (CRIT-6): a Uint8Array over a plain ArrayBuffer. */
+function copyBody(cls: string, body: unknown, maxBytes: number): Uint8Array<ArrayBuffer> {
+  if (
+    !ArrayBuffer.isView(body) ||
+    !(body instanceof Uint8Array) ||
+    !(body.buffer instanceof ArrayBuffer)
+  ) {
+    refuseRule(cls, 'body-gate', 'body-type')
   }
-  if (guards.writePrefixes.length === 0) throw new TypeError('writePrefixes must not be empty')
-  for (const prefix of guards.writePrefixes) {
-    if (prefix === '' || !isFolderPrefix(prefix)) {
-      throw new TypeError(
-        `write prefix ${describePath(prefix)} must be a safe folder ending in '/'`,
-      )
+  const copy = new Uint8Array(new ArrayBuffer(body.byteLength))
+  copy.set(body)
+  if (copy.byteLength === 0 || copy.byteLength > maxBytes) refuseRule(cls, 'body-gate', 'body-size')
+  return copy
+}
+
+/** hasOwnProtoKey (src/core/package/v1.ts) looks no deeper than this many levels. */
+const PROTO_CHECK_DEPTH = 64
+
+/**
+ * True when an object or array sits deeper than hasOwnProtoKey looks, so the record cannot be cleared
+ * of `__proto__` keys "at any depth" (§3.3) and the approval gate refuses it (review fix SEC-4).
+ */
+function nestsBelowProtoCheck(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value !== 'object') return false
+  if (depth > PROTO_CHECK_DEPTH) return true
+  return Object.values(value).some((child) => nestsBelowProtoCheck(child, depth + 1))
+}
+
+/**
+ * The class's body gate on the copy (§3.3, §3.7): the build's own checks that can run from the ref
+ * and the body alone. Returns the failing rule or null; a src/core reason is never forwarded.
+ */
+async function bodyGateRule(
+  target: Target,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<string | null> {
+  const fields = target.fields
+  switch (target.kind) {
+    case 'package': {
+      if ((await sha256Hex(bytes)) !== fields.packageSha256) return 'sha256-mismatch'
+      const decoded = decodeJson(bytes, 'package')
+      if (!decoded.ok || !isCanonicalJcs(decoded.value, bytes)) return 'not-jcs'
+      const parsed = parseStrictJson(bytes, StoryPackageV1, 'package')
+      if (!parsed.ok) return 'strict-parse'
+      if (parsed.value.data.storyId !== fields.storyId) return 'story-id-mismatch'
+      return null
     }
-  }
-  for (const path of guards.overwritablePaths) {
-    if (!isSafeStoragePath(path) || !isUnderPrefix(path, guards.writePrefixes)) {
-      throw new TypeError(`overwritable path ${describePath(path)} must be safe and under a prefix`)
+    case 'snapshot': {
+      const parsed = parseStrictJson(bytes, CatalogueSnapshot, 'snapshot')
+      if (!parsed.ok) return 'strict-parse'
+      if (!isCanonicalJcs(parsed.value.raw, bytes)) return 'not-jcs'
+      const { seq, stories } = parsed.value.data
+      if (seq !== fields.seq) return 'seq-mismatch'
+      if (!checkPackagePaths(stories, 'production', '').ok) return 'package-path'
+      if (!checkUniqueStoryIds(stories).ok) return 'story-id-unique'
+      return null
     }
+    case 'pointer': {
+      const mode = fields.mode
+      const checked =
+        mode === 'production' || mode === 'staging' ? checkPointer(bytes, { mode, root: '' }) : null
+      if (checked === null || !checked.ok) return 'pointer-gate'
+      if (checked.value.seq < 1) return 'pointer-seq'
+      return null
+    }
+    case 'approval': {
+      const decoded = decodeJson(bytes, 'approval')
+      if (!decoded.ok || !isRecord(decoded.value)) return 'record-json'
+      const record = decoded.value
+      if (nestsBelowProtoCheck(record) || hasOwnProtoKey(record)) return 'proto-key'
+      if (!Object.hasOwn(record, 'storyId') || record.storyId !== fields.storyId) {
+        return 'record-story-id'
+      }
+      if (
+        !Object.hasOwn(record, 'packageSha256') ||
+        record.packageSha256 !== fields.packageSha256
+      ) {
+        return 'record-sha256'
+      }
+      return null
+    }
+    default:
+      return null // media: the size bound only
   }
-  return {
-    allowedBuckets: [...guards.allowedBuckets],
-    writePrefixes: [...guards.writePrefixes],
-    overwritablePaths: [...guards.overwritablePaths],
+}
+
+/**
+ * The class a request path belongs to under the closed route list (§4.1), or null: the list route
+ * (POST), an approval or waiver under the authenticated masters route (GET), or a creatable class's
+ * object path (POST). send() refuses any other URL, so a later call site that builds a URL another
+ * way (OBJECT_ROUTE + 'move', a relative URL) cannot send it (review fix SEC-6).
+ */
+function routeClass(method: 'GET' | 'POST', pathname: string): string | null {
+  if (method === 'POST' && pathname === LIST_ROUTE) return 'listing'
+  if (method === 'GET') {
+    if (!pathname.startsWith(MASTERS_READ_ROUTE)) return null
+    const kind = classOfPath('masters', pathname.slice(MASTERS_READ_ROUTE.length))?.kind
+    return kind === 'approval' || kind === 'waiver' ? kind : null
   }
+  if (method !== 'POST' || !pathname.startsWith(OBJECT_ROUTE)) return null
+  const rest = pathname.slice(OBJECT_ROUTE.length)
+  const slash = rest.indexOf('/')
+  const kind =
+    slash < 0 ? undefined : classOfPath(rest.slice(0, slash), rest.slice(slash + 1))?.kind
+  return kind === undefined || kind === 'waiver' ? null : kind
+}
+
+/**
+ * The URL the options name, re-parsed from its own href (review fix SEC2-2). `URL.prototype.toString`
+ * reads the URL's internal state and throws on an object that only has URL.prototype, so a subclass
+ * or a forgery whose getters show an allowed host cannot steer the checks and the requests apart.
+ * null when the value is not a real URL.
+ */
+function realUrl(value: unknown): URL | null {
+  if (!(value instanceof URL)) return null
+  try {
+    return new URL(URL.prototype.toString.call(value))
+  } catch {
+    return null
+  }
+}
+
+function isAllowedOrigin(url: URL): boolean {
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false
+  if (url.protocol === 'https:') return SUPABASE_HOST.test(url.hostname) && url.port === ''
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) && url.port !== ''
+}
+
+function optionRefused(rule: string): never {
+  throw new TypeError(`refused: client option ${rule}`)
+}
+
+/** The options read once from own data descriptors: exact known keys, no accessors (A22). */
+function readOptions(options: unknown): ReadonlyMap<string, unknown> {
+  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+    optionRefused('option-keys')
+  }
+  const proto: unknown = Object.getPrototypeOf(options)
+  if (proto !== Object.prototype && proto !== null) optionRefused('option-keys')
+  const values = new Map<string, unknown>()
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !OPTION_KEYS.has(key)) optionRefused('option-keys')
+    const descriptor = Reflect.getOwnPropertyDescriptor(options, key)
+    if (descriptor === undefined || !descriptor.enumerable) optionRefused('option-keys')
+    if (!('value' in descriptor)) optionRefused('option-accessor')
+    values.set(key, descriptor.value)
+  }
+  return values
 }
 
 // ---- client ----
 
 type Exchange =
-  | { readonly kind: 'response'; readonly status: number; readonly body: unknown }
+  | {
+      readonly kind: 'response'
+      readonly status: number
+      /** The body under the 1 MiB cap, or null when it was larger. */
+      readonly bytes: Uint8Array<ArrayBuffer> | null
+    }
   | { readonly kind: 'network'; readonly code: string }
+  /** Headers arrived, then reading the body failed (a stall past the timeout, a cut connection). */
+  | { readonly kind: 'unreadable'; readonly status: number; readonly code: string }
+
+const jsonOf = (bytes: Uint8Array | null): unknown => {
+  if (bytes === null) return undefined
+  const parsed = parseJsonBytes(bytes)
+  return parsed.ok ? parsed.value : undefined
+}
+
+/**
+ * An answer's JSON body, or undefined when it was over the cap, broke off or is not JSON. A known
+ * status is then classified with the body undefined on every route, so 401 and 403 stay
+ * `unauthorized` and the status is kept (review fix FID-1, design §17).
+ */
+const bodyOf = (exchange: Exchange): unknown =>
+  exchange.kind === 'response' ? jsonOf(exchange.bytes) : undefined
 
 export function createStorageClient(options: StorageClientOptions): StorageClient {
-  checkServiceUrl(options.supabaseUrl, 'supabaseUrl')
-  const origin = options.supabaseUrl.origin
-  const guards = checkGuards(options.guards)
-  const overwritable = new Set(guards.overwritablePaths)
-  const { secretKey } = options
-  if (secretKey.reveal().length < 8) throw new TypeError('secretKey is too short')
-  const fetchImpl = options.fetchImpl ?? fetch
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const pageSize = options.listPageSize ?? LIST_PAGE_SIZE
-  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
-    throw new TypeError('listPageSize must be a positive integer')
+  const values = readOptions(options)
+  const supabaseUrl = realUrl(values.get('supabaseUrl'))
+  if (supabaseUrl === null || !isAllowedOrigin(supabaseUrl)) optionRefused('url-origin')
+  const loopback = supabaseUrl.protocol === 'http:'
+  const fetchOption = values.get('fetchImpl')
+  if (fetchOption !== undefined && (!loopback || typeof fetchOption !== 'function')) {
+    optionRefused('fetch-impl')
   }
+  const secretKey = values.get('secretKey')
+  if (!(secretKey instanceof Secret) || secretKey.reveal().length < MIN_KEY_LENGTH) {
+    optionRefused('key-short')
+  }
+  if (!loopback && !isSecretKeyShape(secretKey.reveal())) optionRefused('key-shape')
+  const rawPage = values.get('listPageSize')
+  const pageOption = rawPage === undefined ? LIST_PAGE_SIZE : rawPage
+  if (typeof pageOption !== 'number' || !Number.isSafeInteger(pageOption) || pageOption < 1) {
+    optionRefused('page-size')
+  }
+  const pageSize: number = pageOption
+  const rawTimeout = values.get('timeoutMs')
+  const timeoutOption = rawTimeout === undefined ? DEFAULT_TIMEOUT_MS : rawTimeout
+  if (
+    typeof timeoutOption !== 'number' ||
+    !Number.isSafeInteger(timeoutOption) ||
+    timeoutOption < 1 ||
+    timeoutOption > MAX_TIMEOUT_MS
+  ) {
+    optionRefused('timeout')
+  }
+  const timeoutMs: number = timeoutOption
+  const bearerOption = values.get('bearerFallback')
+  if (bearerOption !== undefined && typeof bearerOption !== 'boolean') {
+    optionRefused('bearer-fallback')
+  }
+  const bearer = bearerOption === true
+  const fetchImpl = (fetchOption as typeof fetch | undefined) ?? fetch
+  const origin = supabaseUrl.origin
+  const key: Secret = secretKey
 
-  /** Belt and braces: no text leaves this client with the key in it. */
-  const scrub = (text: string) => text.split(secretKey.reveal()).join('[redacted]')
-  const refuse = (message: string): never => {
-    throw new StorageRefusedError(scrub(`refused: ${message}`))
-  }
   /** A failure code that repeats any run of the key, whole or partial, becomes "unknown". */
-  const safeCode = (code: string) => (repeatsSecretRun(code, secretKey.reveal()) ? 'unknown' : code)
+  const safeCode = (code: string) => (repeatsSecretRun(code, key.reveal()) ? 'unknown' : code)
 
   const authHeaders = (): Record<string, string> => {
-    const key = secretKey.reveal()
-    return options.bearerFallback
-      ? { apikey: key, authorization: `Bearer ${key}` }
-      : { apikey: key }
+    const value = key.reveal()
+    return bearer ? { apikey: value, authorization: `Bearer ${value}` } : { apikey: value }
   }
 
-  function checkBucket(bucket: string, access: 'read' | 'write'): void {
-    if (access === 'write' && PROTECTED_BUCKETS.includes(bucket)) {
-      refuse(`bucket ${describePath(bucket)} is never written to or deleted from`)
-    }
-    if (!guards.allowedBuckets.includes(bucket)) {
-      refuse(`bucket ${describePath(bucket)} is not in the allowed bucket list`)
-    }
-  }
-
-  function checkWritablePath(path: string): void {
-    if (!isSafeStoragePath(path)) refuse(`unsafe path ${describePath(path)}`)
-    if (!isUnderPrefix(path, guards.writePrefixes)) {
-      refuse(`path ${describePath(path)} is outside the write prefixes`)
-    }
+  /** Re-check 1 on the target, then re-check 2 on the URL built from one of the three routes. */
+  function checkedUrl(target: Target, route: string): URL {
+    const first = recheckTarget(target)
+    if (!first.ok) refuse(target.kind, first.refusal)
+    const url = new URL(route, origin)
+    const second = recheckUrl(url, origin, route)
+    if (!second.ok) refuse(target.kind, second.refusal)
+    return url
   }
 
   async function send(
-    method: 'POST' | 'DELETE',
-    path: string,
+    cls: string,
+    method: 'GET' | 'POST',
+    url: URL,
     headers: Record<string, string>,
-    body: Uint8Array<ArrayBuffer> | string,
+    body?: Uint8Array<ArrayBuffer> | string,
   ): Promise<Exchange> {
+    if (url.origin !== origin || url.search !== '' || url.hash !== '') {
+      refuseRule(cls, 'url', 'url-mismatch')
+    }
+    if (routeClass(method, url.pathname) !== cls) refuseRule(cls, 'url', 'url-mismatch')
+    let response: Response
     try {
-      const response = await fetchImpl(new URL(path, origin), {
+      response = await fetchImpl(url, {
         method,
         headers: { ...authHeaders(), ...headers },
         body,
         redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
-      const bytes = await readCapped(response, MAX_RESPONSE_BYTES)
-      const parsed = bytes ? parseJsonBytes(bytes) : { ok: false as const }
+    } catch (error) {
+      return { kind: 'network', code: safeCode(describeNetworkError(error)) }
+    }
+    try {
       return {
         kind: 'response',
         status: response.status,
-        body: parsed.ok ? parsed.value : undefined,
+        bytes: await readCapped(response, MAX_RESPONSE_BYTES),
       }
     } catch (error) {
-      return { kind: 'network', code: safeCode(describeNetworkError(error)) }
+      return {
+        kind: 'unreadable',
+        status: response.status,
+        code: safeCode(describeNetworkError(error)),
+      }
     }
   }
 
@@ -350,60 +566,86 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
   const scrubFailure = (failure: StorageFailure): StorageFailure =>
     failure.kind === 'failed' ? { ...failure, code: safeCode(failure.code) } : failure
 
-  async function upload(request: UploadRequest): Promise<UploadResult> {
-    checkBucket(request.bucket, 'write')
-    checkWritablePath(request.path)
-    if (!MEDIA_TYPE.test(request.contentType)) {
-      refuse('contentType must be a bare lowercase media type such as "audio/mpeg"')
-    }
-    const seconds = request.cacheControl
-    if (!Number.isSafeInteger(seconds) || seconds < 0 || seconds > MAX_CACHE_SECONDS) {
-      refuse(`cacheControl must be whole seconds from 0 to ${MAX_CACHE_SECONDS}`)
-    }
-    const upsert = request.upsert ?? false
-    if (upsert && !overwritable.has(request.path)) {
-      refuse(
-        `upsert is not allowed on ${describePath(request.path)}; it is not an overwritable path`,
-      )
-    }
-    const exchange = await send(
-      'POST',
-      `/storage/v1/object/${request.bucket}/${request.path}`,
-      {
-        'content-type': request.contentType,
-        'cache-control': `max-age=${seconds}`,
-        'x-upsert': upsert ? 'true' : 'false',
-      },
-      request.body,
-    )
-    if (exchange.kind === 'network') return networkFailure(exchange)
-    const result = classifyUpload(exchange.status, exchange.body)
-    return result.kind === 'unauthorized' || result.kind === 'failed'
-      ? scrubFailure(result)
-      : result
+  /** A non-2xx read answer through classifyRead, its failure code scrubbed. */
+  const classifiedRead = (status: number, body: unknown): ReadResult => {
+    const result = classifyRead(status, body)
+    return result.kind === 'failed' ? scrubFailure(result) : result
   }
 
-  async function remove(bucket: string, paths: readonly string[]): Promise<RemoveResult> {
-    checkBucket(bucket, 'write')
-    if (paths.length === 0) refuse('remove needs at least one path')
-    if (paths.length > MAX_REMOVE_PATHS) refuse(`remove takes at most ${MAX_REMOVE_PATHS} paths`)
-    if (new Set(paths).size !== paths.length) refuse('remove paths must be unique')
-    for (const path of paths) checkWritablePath(path)
+  async function readTarget(target: Target): Promise<ReadResult> {
+    const url = checkedUrl(target, MASTERS_READ_ROUTE + target.path)
+    const exchange = await send(target.kind, 'GET', url, { 'accept-encoding': 'identity' })
+    if (exchange.kind === 'network') return networkFailure(exchange)
+    const success = exchange.status >= 200 && exchange.status < 300
+    // A 2xx body is the object: one that breaks off is like a network error (§3.4). An error body
+    // that breaks off or is over the cap is classified with the body undefined (FID-1).
+    if (exchange.kind === 'unreadable') {
+      return success ? networkFailure(exchange) : classifiedRead(exchange.status, undefined)
+    }
+    if (success) {
+      if (exchange.bytes === null) return { kind: 'too-large', limit: MAX_JSON_BYTES }
+      const sha256 = await sha256Hex(exchange.bytes)
+      if (target.kind === 'waiver' && sha256 !== target.fields.waiverSha256) {
+        return { kind: 'hash-mismatch', sha256 }
+      }
+      return { kind: 'found', bytes: exchange.bytes, size: exchange.bytes.byteLength, sha256 }
+    }
+    return classifiedRead(exchange.status, bodyOf(exchange))
+  }
+
+  /** One POST of the copy; the answer classified as an upload. */
+  async function upload(target: Target, copy: Uint8Array<ArrayBuffer>, upsert: 'true' | 'false') {
+    const url = checkedUrl(target, OBJECT_ROUTE + target.bucket + '/' + target.path)
     const exchange = await send(
-      'DELETE',
-      `/storage/v1/object/${bucket}`,
-      { 'content-type': 'application/json' },
-      JSON.stringify({ prefixes: paths }),
+      target.kind,
+      'POST',
+      url,
+      {
+        'content-type': target.contentType ?? '',
+        'cache-control': `max-age=${target.cacheSeconds ?? 0}`,
+        'x-upsert': upsert,
+        'accept-encoding': 'identity',
+      },
+      copy,
     )
     if (exchange.kind === 'network') return networkFailure(exchange)
-    if (exchange.status < 200 || exchange.status >= 300) {
-      return scrubFailure(classifyFailure(exchange.status, exchange.body))
-    }
-    return checkRemoved(paths, exchange.status, exchange.body)
+    const outcome = classifyUpload(exchange.status, bodyOf(exchange))
+    return outcome.kind === 'unauthorized' || outcome.kind === 'failed'
+      ? scrubFailure(outcome)
+      : outcome
+  }
+
+  async function create(ref: CreateRef, body: Uint8Array): Promise<CreateResult> {
+    const target = expectTarget(targetOf(ref, 'create'))
+    const copy = copyBody(target.kind, body, target.maxBytes)
+    const rule = await bodyGateRule(target, copy)
+    if (rule !== null) refuseRule(target.kind, 'body-gate', rule)
+    const outcome = await upload(target, copy, 'false')
+    if (outcome.kind !== 'duplicate') return outcome
+    if (target.kind !== 'approval') return { kind: 'duplicate', stored: 'unchecked' }
+    const stored = await readTarget(target)
+    if (stored.kind !== 'found') return { kind: 'duplicate', stored: 'unchecked' }
+    const same = stored.sha256 === (await sha256Hex(copy))
+    return { kind: 'duplicate', stored: same ? 'identical' : 'different' }
+  }
+
+  async function writePointer(mode: PointerMode, body: Uint8Array): Promise<PointerResult> {
+    const target = expectTarget(pointerTarget(mode))
+    const copy = copyBody('pointer', body, target.maxBytes)
+    const rule = await bodyGateRule(target, copy)
+    if (rule !== null) refuseRule('pointer', 'body-gate', rule)
+    const outcome = await upload(target, copy, 'true')
+    if (outcome.kind === 'created') return { kind: 'written' }
+    if (outcome.kind === 'duplicate') return { kind: 'failed', status: 409, code: 'duplicate' }
+    return outcome
+  }
+
+  async function readMaster(ref: MasterReadRef): Promise<ReadResult> {
+    return readTarget(expectTarget(targetOf(ref, 'read')))
   }
 
   async function listPage(
-    bucket: string,
+    url: URL,
     folder: string,
     offset: number,
   ): Promise<{ ok: true; entries: ListedEntry[] } | { ok: false; failure: StorageFailure }> {
@@ -414,16 +656,18 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
       sortBy: { column: 'name', order: 'asc' },
     })
     const exchange = await send(
+      'listing',
       'POST',
-      `/storage/v1/object/list/${bucket}`,
-      { 'content-type': 'application/json' },
+      url,
+      { 'content-type': 'application/json', 'accept-encoding': 'identity' },
       body,
     )
     if (exchange.kind === 'network') return { ok: false, failure: networkFailure(exchange) }
+    const parsedBody = bodyOf(exchange)
     if (exchange.status < 200 || exchange.status >= 300) {
-      return { ok: false, failure: scrubFailure(classifyFailure(exchange.status, exchange.body)) }
+      return { ok: false, failure: scrubFailure(classifyFailure(exchange.status, parsedBody)) }
     }
-    const page = ListedPage.safeParse(exchange.body)
+    const page = ListedPage.safeParse(parsedBody)
     if (!page.success) {
       return {
         ok: false,
@@ -433,9 +677,12 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     return { ok: true, entries: page.data }
   }
 
-  async function list(bucket: string, folder: string): Promise<ListResult> {
-    checkBucket(bucket, 'read')
-    if (!isFolderPrefix(folder)) refuse(`folder ${describePath(folder)} must be '' or end in '/'`)
+  async function listContent(folder: string): Promise<ListResult> {
+    if (typeof folder !== 'string' || !isFolderPrefix(folder))
+      refuseRule('listing', 'field', 'folder')
+    const url = new URL(LIST_ROUTE, origin)
+    const checked = recheckUrl(url, origin, LIST_ROUTE)
+    if (!checked.ok) refuse('listing', checked.refusal)
     const objects: StoredObject[] = []
     const pending: { folder: string; depth: number }[] = [{ folder, depth: 0 }]
     let entriesSeen = 0 // files and folders, which bounds the number of requests too
@@ -444,7 +691,7 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
         return { kind: 'failed', status: null, code: 'list-depth-exceeded' }
       }
       for (let offset = 0; ; offset += pageSize) {
-        const page = await listPage(bucket, next.folder, offset)
+        const page = await listPage(url, next.folder, offset)
         if (!page.ok) return page.failure
         entriesSeen += page.entries.length
         if (entriesSeen > MAX_LIST_ENTRIES) {
@@ -452,6 +699,10 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
         }
         for (const entry of page.entries) {
           const path = `${next.folder}${entry.name}`
+          // A server-chosen name is never followed somewhere else (CRIT-16).
+          if (entry.name.includes('/') || !isSafeStoragePath(path)) {
+            return { kind: 'failed', status: null, code: 'unsafe-name' }
+          }
           if (entry.id === null) pending.push({ folder: `${path}/`, depth: next.depth + 1 })
           else objects.push(toStoredObject(path, entry))
         }
@@ -462,5 +713,5 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     return { kind: 'listed', objects }
   }
 
-  return { upload, remove, list }
+  return { create, writePointer, readMaster, listContent }
 }

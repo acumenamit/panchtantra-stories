@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   checkPublisherEnv,
   ENV_FILE,
+  isSecretKeyShape,
   loadEnvFile,
   PUBLISHER_ENV_NAMES,
   readDeployHookUrl,
@@ -121,6 +122,26 @@ describe('readSecretKey', () => {
         expect(result.reason).not.toContain(['sb', 'secret', ''].join('_'))
         expect(result.reason).not.toContain(['sb', 'publishable', ''].join('_'))
       }
+    }
+  })
+
+  it('T13-E1 isSecretKeyShape agrees with readSecretKey on every input row, and gives the expected verdict', () => {
+    const rows: [string, string, boolean][] = [
+      ['secret key', FAKE_SECRET, true],
+      ['publishable key', FAKE_PUBLISHABLE, false],
+      ['legacy JWT', FAKE_JWT, false],
+      ['other string', 'service-role-value', false],
+      ['bare prefix', ['sb', 'secret', ''].join('_'), false],
+      ['space', `${FAKE_SECRET} x`, false],
+      ['newline', `${FAKE_SECRET}\n`, false],
+      ['other', 'other', false],
+      ['empty', '', false],
+    ]
+    for (const [name, raw, verdict] of rows) {
+      expect
+        .soft(isSecretKeyShape(raw), `(g1) ${name} agrees with readSecretKey`)
+        .toBe(readSecretKey({ SUPABASE_SECRET_KEY: raw }).ok)
+      expect.soft(isSecretKeyShape(raw), `(g2) ${name} verdict`).toBe(verdict)
     }
   })
 })
