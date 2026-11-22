@@ -3,9 +3,22 @@
 // T14-6 and T14-88). Titles start with their id. One expect.soft per claim, messages
 // "(gN) <claim> <sample>"; preconditions are hard expects starting "precondition:". args.ts is pure:
 // nothing in this file reads or writes a file.
-import { isAbsolute, resolve } from 'node:path'
+//
+// Step 15a (P1-8d part a, design migration-input/p1-step15a-design.md §3.1, §3.7, §3.23, §3.29,
+// D15-1, D15-7, D15-23, D15-28; test plan §14.2: T15A-1 to T15A-5 and T15A-68): approve and
+// publish, the new flags and their scope texts, the report-dir refusal order and the win32 segment
+// rule and fold. Nothing is written: every path below is a string only.
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { USAGE_TEXT, captureRunContext, parseArgs, type ParsedArgs } from './args'
+import {
+  USAGE_TEXT,
+  captureRunContext,
+  isDeviceOrNetworkPath,
+  parseArgs,
+  reportDirFormRefusal,
+  type ParsedArgs,
+} from './args'
 
 const ROOT = resolve('s14-args-never-read', 'storyboard')
 const CWD = resolve('s14-args-never-read', 'elsewhere')
@@ -21,15 +34,42 @@ const PINNED_USAGE = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
   '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
-const FLAGS = ['packages', 'media', 'waivers', 'report-dir', 'dry-run', 'all', 'timeout-ms']
+const FLAGS = [
+  'packages',
+  'media',
+  'waivers',
+  'report-dir',
+  'dry-run',
+  'all',
+  'timeout-ms',
+  'answers-stdin',
+  'feature',
+  'snapshot',
+  'package',
+]
+/** Step 15a (TP-1): each flag outside its commands names the commands it is for. */
+const SCOPE_TEXTS: readonly string[] = [
+  ...['packages', 'media', 'waivers'].map(
+    (flag) => `usage: --${flag} is for validate and stage only`,
+  ),
+  ...['dry-run', 'timeout-ms'].map(
+    (flag) => `usage: --${flag} is for stage, approve and publish only`,
+  ),
+  ...['answers-stdin', 'package'].map((flag) => `usage: --${flag} is for approve only`),
+  ...['feature', 'snapshot'].map((flag) => `usage: --${flag} is for publish only`),
+]
 /** Every usage message args.ts may give, typed here so a changed text turns T14-6 red. */
 const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: an argument is empty or holds a NUL character',
-  'usage: no command (validate, stage or help)',
-  'usage: unknown command (validate, stage or help)',
+  'usage: no command (validate, stage, approve, publish or help)',
+  'usage: unknown command (validate, stage, approve, publish or help)',
   'usage: help takes no arguments',
   'usage: a bare -- is not allowed',
   'usage: single-dash flags are not supported',
@@ -43,17 +83,26 @@ const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: --timeout-ms must be a whole number from 1 to 600000',
   'usage: --report-dir may not be at or under public/ or app/ of the storyboard folder',
   'usage: --report-dir may not be a device or network path',
+  'usage: approve takes exactly one story id',
+  'usage: --package must be 12 to 64 lowercase hex characters',
+  'usage: publish needs story ids, --feature or --snapshot',
+  'usage: --snapshot cannot be combined with story ids',
+  'usage: --snapshot must be a whole number from 1',
+  'usage: --feature takes a story id or none',
+  'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
+  'usage: --report-dir has a segment Windows cannot store as written',
+  'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
   ...FLAGS.map((flag) => `usage: --${flag} is given more than once`),
   ...FLAGS.map((flag) => `usage: --${flag} takes no value`),
   ...FLAGS.map(
     (flag) => `usage: --${flag} needs a value that is not empty and does not start with --`,
   ),
-  ...FLAGS.map((flag) => `usage: --${flag} is for stage only`),
-  ...FLAGS.map((flag) => `usage: --${flag} is required`),
+  ...SCOPE_TEXTS,
+  ...['packages', 'media', 'package'].map((flag) => `usage: --${flag} is required`),
 ])
 
 describe('args: commands and flags', () => {
-  it('T14-1 commands: help, validate and stage; anything else is usage', () => {
+  it('T14-1 commands: help, validate, stage, approve and publish; anything else is usage', () => {
     const help = parse(['help'])
     expect(
       typeof help === 'object' && help !== null && USAGE_TEXT === PINNED_USAGE,
@@ -70,7 +119,7 @@ describe('args: commands and flags', () => {
     const samples: [string, string[]][] = [
       ['no command', []],
       ['Validate', ['Validate', 'a-b', ...IO]],
-      ['publish', ['publish', 'a-b', ...IO]],
+      ['unpublish', ['unpublish', 'a-b', ...IO]],
       ['stage2', ['stage2', 'a-b', ...IO]],
       ['--all alone', ['--all']],
     ]
@@ -350,6 +399,483 @@ describe('args: commands and flags', () => {
         .soft(PINNED_MESSAGES.has(messageOf(result)), `(g2) message ${i} is a pinned text`)
         .toBe(true)
     }
+  })
+})
+
+// ---- Step 15a ----
+
+const P12 = '0123456789ab'
+const P64 = '0123456789abcdef'.repeat(4)
+/** A temp-shaped base that is never created: args.ts is pure. */
+const TMP = join(tmpdir(), 's15a-args-never-written')
+const DEFAULT_REPORTS = resolve(ROOT, 'migration-input', 'reports')
+const MSG = {
+  oneId: 'usage: approve takes exactly one story id',
+  packageRequired: 'usage: --package is required',
+  packageForm: 'usage: --package must be 12 to 64 lowercase hex characters',
+  publishNeeds: 'usage: publish needs story ids, --feature or --snapshot',
+  snapshotWithIds: 'usage: --snapshot cannot be combined with story ids',
+  snapshotForm: 'usage: --snapshot must be a whole number from 1',
+  featureForm: 'usage: --feature takes a story id or none',
+  idCount: 'usage: give 1 to 64 story ids',
+  idTwice: 'usage: a story id is given more than once',
+  unknownFlag: 'usage: unknown flag',
+  allForValidate: 'usage: --all is for validate only',
+  inSite: 'usage: --report-dir may not be at or under public/ or app/ of the storyboard folder',
+  device: 'usage: --report-dir may not be a device or network path',
+  deviceDefault:
+    'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
+  segment: 'usage: --report-dir has a segment Windows cannot store as written',
+  segmentDefault:
+    'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
+} as const
+const scopeText = (flag: string, commands: string) => `usage: --${flag} is for ${commands} only`
+
+if (process.platform !== 'win32') {
+  console.log('skipped: T15A-5 device and network forms need a win32 host')
+}
+
+describe('args: Step 15a approve, publish and the report-dir forms', () => {
+  it('T15A-1 approve: exactly one id and --package as 12 to 64 lowercase hex; --answers-stdin, --dry-run, --timeout-ms and --report-dir; defaults (A1, D15-1, CRIT-5)', () => {
+    const base = parse(['approve', 'a-b', '--package', P12])
+    expect(base.ok, 'precondition: approve a-b --package 0123456789ab is ok').toBe(true)
+    expect.soft(base, '(g1) the defaults').toEqual({
+      ok: true,
+      command: 'approve',
+      storyId: 'a-b',
+      packagePrefix: P12,
+      answersStdin: false,
+      dryRun: false,
+      timeoutMs: 180000,
+      reportDir: DEFAULT_REPORTS,
+      reportDirGiven: false,
+    })
+    expect
+      .soft(
+        parse([
+          'approve',
+          'a-b',
+          '--package',
+          P64,
+          '--answers-stdin',
+          '--dry-run',
+          '--timeout-ms',
+          '5000',
+          '--report-dir',
+          'r',
+        ]),
+        '(g1) every flag set, a 64-hex prefix',
+      )
+      .toEqual({
+        ok: true,
+        command: 'approve',
+        storyId: 'a-b',
+        packagePrefix: P64,
+        answersStdin: true,
+        dryRun: true,
+        timeoutMs: 5000,
+        reportDir: resolve(CWD, 'r'),
+        reportDirGiven: true,
+      })
+    const dryOnly = parse(['approve', 'a-b', '--package', P12, '--dry-run'])
+    expect
+      .soft(
+        dryOnly.ok && dryOnly.command === 'approve' && [dryOnly.dryRun, dryOnly.answersStdin],
+        '(g1) --dry-run alone sets dryRun only',
+      )
+      .toEqual([true, false])
+
+    const refused: [string, string[], string][] = [
+      ['no id', ['approve', '--package', P12], MSG.oneId],
+      ['two ids', ['approve', 'a-b', 'c-d', '--package', P12], MSG.oneId],
+      ['no --package', ['approve', 'a-b'], MSG.packageRequired],
+      ['11 hex', ['approve', 'a-b', '--package', P12.slice(0, 11)], MSG.packageForm],
+      ['65 hex', ['approve', 'a-b', '--package', `${P64}0`], MSG.packageForm],
+      ['upper-case 12 hex', ['approve', 'a-b', '--package', 'ABCDEF012345'], MSG.packageForm],
+      ['0x0123456789', ['approve', 'a-b', '--package', '0x0123456789'], MSG.packageForm],
+      ['0123456789ag', ['approve', 'a-b', '--package', '0123456789ag'], MSG.packageForm],
+      ["' 0123456789ab'", ['approve', 'a-b', '--package', ` ${P12}`], MSG.packageForm],
+      [
+        '--package=',
+        ['approve', 'a-b', '--package='],
+        'usage: --package needs a value that is not empty and does not start with --',
+      ],
+      [
+        '--answers-stdin=yes',
+        ['approve', 'a-b', '--package', P12, '--answers-stdin=yes'],
+        'usage: --answers-stdin takes no value',
+      ],
+    ]
+    for (const [id, argv, text] of refused) {
+      expect.soft(messageOf(parse(argv)), `(g2) refused with its text: ${id}`).toBe(text)
+    }
+  })
+
+  it('T15A-2 publish: ids, --feature and --snapshot in their combinations; every other form is usage with its message (A1, D15-7)', () => {
+    const one = parse(['publish', 'a-b'])
+    expect(one.ok, 'precondition: publish a-b is ok').toBe(true)
+    expect.soft(one, '(g1) publish a-b in full').toEqual({
+      ok: true,
+      command: 'publish',
+      ids: ['a-b'],
+      featureGiven: false,
+      feature: null,
+      snapshot: null,
+      dryRun: false,
+      timeoutMs: 180000,
+      reportDir: DEFAULT_REPORTS,
+      reportDirGiven: false,
+    })
+    const pick = (result: ParsedArgs) =>
+      result.ok && result.command === 'publish'
+        ? {
+            ids: result.ids,
+            featureGiven: result.featureGiven,
+            feature: result.feature,
+            snapshot: result.snapshot,
+          }
+        : messageOf(result)
+    const ids64 = Array.from({ length: 64 }, (_, i) => `story-${i}`)
+    const accepted: [string, string[], unknown][] = [
+      [
+        'publish a-b c-d',
+        ['publish', 'a-b', 'c-d'],
+        { ids: ['a-b', 'c-d'], featureGiven: false, feature: null, snapshot: null },
+      ],
+      [
+        'publish --feature a-b',
+        ['publish', '--feature', 'a-b'],
+        { ids: [], featureGiven: true, feature: 'a-b', snapshot: null },
+      ],
+      [
+        'publish --feature none',
+        ['publish', '--feature', 'none'],
+        { ids: [], featureGiven: true, feature: null, snapshot: null },
+      ],
+      [
+        'publish a-b --feature none',
+        ['publish', 'a-b', '--feature', 'none'],
+        { ids: ['a-b'], featureGiven: true, feature: null, snapshot: null },
+      ],
+      [
+        'publish --snapshot 3',
+        ['publish', '--snapshot', '3'],
+        { ids: [], featureGiven: false, feature: null, snapshot: 3 },
+      ],
+      [
+        'publish --snapshot 3 --feature a-b',
+        ['publish', '--snapshot', '3', '--feature', 'a-b'],
+        { ids: [], featureGiven: true, feature: 'a-b', snapshot: 3 },
+      ],
+      [
+        '--snapshot 9007199254740991',
+        ['publish', '--snapshot', '9007199254740991'],
+        { ids: [], featureGiven: false, feature: null, snapshot: 9007199254740991 },
+      ],
+      [
+        '64 ids',
+        ['publish', ...ids64],
+        { ids: ids64, featureGiven: false, feature: null, snapshot: null },
+      ],
+    ]
+    for (const [id, argv, want] of accepted) {
+      expect.soft(pick(parse(argv)), `(g1) accepted: ${id}`).toEqual(want)
+    }
+
+    const refused: [string, string[], string][] = [
+      ['publish', ['publish'], MSG.publishNeeds],
+      ['publish --dry-run', ['publish', '--dry-run'], MSG.publishNeeds],
+      ['publish a-b --snapshot 3', ['publish', 'a-b', '--snapshot', '3'], MSG.snapshotWithIds],
+      ...['0', '03', '1e3', '-1', '+1', '0x3', ' 3', '３', '9007199254740992'].map(
+        (value): [string, string[], string] => [
+          `--snapshot ${JSON.stringify(value)}`,
+          ['publish', '--snapshot', value],
+          MSG.snapshotForm,
+        ],
+      ),
+      ...['None', 'NONE', 'Blue-Jackal', 'a/b', 'ab'].map((value): [string, string[], string] => [
+        `--feature ${value}`,
+        ['publish', '--feature', value],
+        MSG.featureForm,
+      ]),
+      ['65 ids', ['publish', ...ids64, 'story-64'], MSG.idCount],
+      ['a-b a-b', ['publish', 'a-b', 'a-b'], MSG.idTwice],
+    ]
+    for (const [id, argv, text] of refused) {
+      expect.soft(messageOf(parse(argv)), `(g2) refused with its text: ${id}`).toBe(text)
+    }
+  })
+
+  it('T15A-3 flag scope: each flag outside its commands is usage naming its commands; --unpublish and --takedown are unknown flags (A1, CRIT-2)', () => {
+    const approveBase = ['approve', 'a-b', '--package', P12]
+    const inScope: [string, string[]][] = [
+      ['validate', ['validate', '--all', ...IO, '--waivers', 'w', '--report-dir', 'r']],
+      ['stage', ['stage', 'a-b', ...IO, '--waivers', 'w', '--report-dir', 'r', '--dry-run']],
+      ['stage --timeout-ms', ['stage', 'a-b', ...IO, '--timeout-ms', '5']],
+      [
+        'approve',
+        [...approveBase, '--answers-stdin', '--dry-run', '--timeout-ms', '5', '--report-dir', 'r'],
+      ],
+      [
+        'publish',
+        ['publish', '--snapshot', '3', '--feature', 'a-b', '--dry-run', '--timeout-ms', '5'],
+      ],
+      ['publish --report-dir', ['publish', 'a-b', '--report-dir', 'r']],
+    ]
+    for (const [id, argv] of inScope) {
+      expect(parse(argv).ok, `precondition: ${id} parses with the flags of its scope`).toBe(true)
+    }
+    const g1: [string, string[], string][] = []
+    for (const flag of ['packages', 'media', 'waivers']) {
+      const text = scopeText(flag, 'validate and stage')
+      g1.push([`--${flag} on approve`, [...approveBase, `--${flag}`, 'x'], text])
+      g1.push([`--${flag} on publish`, ['publish', 'a-b', `--${flag}`, 'x'], text])
+    }
+    g1.push([
+      '--dry-run on validate',
+      ['validate', 'a-b', ...IO, '--dry-run'],
+      scopeText('dry-run', 'stage, approve and publish'),
+    ])
+    g1.push([
+      '--timeout-ms on validate',
+      ['validate', 'a-b', ...IO, '--timeout-ms', '5'],
+      scopeText('timeout-ms', 'stage, approve and publish'),
+    ])
+    g1.push(['--all on stage', ['stage', 'a-b', ...IO, '--all'], MSG.allForValidate])
+    g1.push(['--all on approve', [...approveBase, '--all'], MSG.allForValidate])
+    g1.push(['--all on publish', ['publish', 'a-b', '--all'], MSG.allForValidate])
+    const others: Record<string, string[]> = {
+      validate: ['validate', 'a-b', ...IO],
+      stage: ['stage', 'a-b', ...IO],
+      approve: approveBase,
+      publish: ['publish', 'a-b'],
+    }
+    for (const [flag, value, commands, scope] of [
+      ['answers-stdin', null, ['validate', 'stage', 'publish'], 'approve'],
+      ['package', P12, ['validate', 'stage', 'publish'], 'approve'],
+      ['feature', 'a-b', ['validate', 'stage', 'approve'], 'publish'],
+      ['snapshot', '3', ['validate', 'stage', 'approve'], 'publish'],
+    ] as const) {
+      for (const command of commands) {
+        const argv = [...(others[command] ?? []), `--${flag}`, ...(value === null ? [] : [value])]
+        g1.push([`--${flag} on ${command}`, argv, scopeText(flag, scope)])
+      }
+    }
+    for (const [id, argv, text] of g1) {
+      expect.soft(messageOf(parse(argv)), `(g1) ${id}`).toBe(text)
+    }
+
+    const g2: [string, string[], string][] = [
+      [
+        '--package on stage',
+        ['stage', 'a-b', ...IO, '--package', P12],
+        scopeText('package', 'approve'),
+      ],
+      [
+        '--packages on approve',
+        [...approveBase, '--packages', 'p'],
+        scopeText('packages', 'validate and stage'),
+      ],
+      ['--Package on approve', ['approve', 'a-b', '--Package', P12], MSG.unknownFlag],
+      ['--features on publish', ['publish', 'a-b', '--features', 'a-b'], MSG.unknownFlag],
+    ]
+    for (const [id, argv, text] of g2) {
+      expect.soft(messageOf(parse(argv)), `(g2) near miss: ${id}`).toBe(text)
+    }
+    for (const argv of [
+      ['publish', 'a-b', '--unpublish'],
+      ['publish', 'a-b', '--takedown'],
+      ['publish', 'a-b', '--takedown=x'],
+    ]) {
+      expect
+        .soft(messageOf(parse(argv)), `(g3) unknown flag: ${argv.join(' ')}`)
+        .toBe(MSG.unknownFlag)
+    }
+  })
+
+  it('T15A-4 report-dir segments Windows cannot store as written are usage at parse time, for the flag and for the default (A1, CRIT-4)', () => {
+    const flagDir = (dir: string, platform = 'win32', root = ROOT) =>
+      parse(['validate', 'a-b', ...IO, '--report-dir', dir], {
+        cwd: CWD,
+        storyboardRoot: root,
+        platform,
+      })
+    expect(
+      flagDir(`${TMP}/ok`).ok,
+      'precondition: --report-dir <tmp>/ok parses on platform win32',
+    ).toBe(true)
+    const g1 = [
+      `${TMP}/CON`,
+      `${TMP}/con.txt`,
+      `${TMP}/Nul`,
+      `${TMP}/COM0`,
+      `${TMP}/LPT9`,
+      `${TMP}/COM¹`,
+      `${TMP}/lpt³.txt`,
+      `${TMP}/conin$`,
+      `${TMP}/CONOUT$.log`,
+      `${TMP}/x.`,
+      `${TMP}/x `,
+      `${ROOT}/public.`,
+      `${ROOT}/public `,
+      `${ROOT}/app./x`,
+      `${TMP}/d:s`,
+      `${ROOT}/public::$INDEX_ALLOCATION`,
+      `${TMP}/f.txt:ads`,
+      `${TMP}/a?b`,
+      `${TMP}/a*b`,
+      `${TMP}/a<b`,
+      `${TMP}/a|b`,
+      `${TMP}/a"b`,
+      `${TMP}/a\u0001b`,
+      // Every other reserved name D15-28 lists, so the list's content is pinned (S15A-R1-SEC-3).
+      `${TMP}/PRN`,
+      `${TMP}/aux.log`,
+      ...['1', '2', '3', '4', '5', '6', '7', '8', '9', '²', '³'].map((d) => `${TMP}/COM${d}`),
+      ...['0', '1', '2', '3', '4', '5', '6', '7', '8', '¹', '²'].map((d) => `${TMP}/lpt${d}`),
+    ]
+    if (process.platform === 'win32') {
+      g1.push(`${TMP}\\CON\\y`, `${ROOT}\\public.`, '\\??\\C:\\x')
+    } else {
+      console.log('skipped: backslash form needs a win32 host')
+    }
+    for (const dir of g1) {
+      expect
+        .soft(messageOf(flagDir(dir)), `(g1) refused on platform win32: ${JSON.stringify(dir)}`)
+        .toBe(MSG.segment)
+    }
+    const near = [
+      `${TMP}/CONSOLE`,
+      `${TMP}/con-x`,
+      `${TMP}/COM10`,
+      `${TMP}/LPT`,
+      `${TMP}/x.y`,
+      `${TMP}/.hidden`,
+      `${TMP}/a..b`,
+    ]
+    if (process.platform === 'win32') near.push('C:\\s15a-drive-prefix')
+    for (const dir of near) {
+      expect.soft(flagDir(dir).ok, `(g2) near miss accepted on platform win32: ${dir}`).toBe(true)
+    }
+    for (const dir of [`${TMP}/CON`, `${TMP}/x.`]) {
+      expect.soft(flagDir(dir, 'linux').ok, `(g2) accepted on platform linux: ${dir}`).toBe(true)
+    }
+    for (const root of [`${TMP}/CON/sb`, `${TMP}/sb.`]) {
+      const ctx = { cwd: CWD, storyboardRoot: resolve(root), platform: 'win32' }
+      expect
+        .soft(messageOf(parse(['validate', 'a-b', ...IO], ctx)), `(g3) default dir under ${root}`)
+        .toBe(MSG.segmentDefault)
+      expect
+        .soft(
+          parse(['validate', 'a-b', ...IO, '--report-dir', `${TMP}/ok`], ctx).ok,
+          `(g3) a local --report-dir with the root ${root}`,
+        )
+        .toBe(true)
+    }
+    const canary = flagDir(`${TMP}/S15ACANARY./x`)
+    expect(isUsage(canary), 'precondition: the canary sample is refused').toBe(true)
+    expect
+      .soft(messageOf(canary).includes('S15ACANARY'), '(g4) no canary in the message')
+      .toBe(false)
+  })
+
+  it.skipIf(process.platform !== 'win32')(
+    'T15A-5 device and network report dirs: each flag form is the flag message, a default dir on such a root the default-dir message, and a local --report-dir with that root passes (A24, D15-23, R2-SEC-3)',
+    () => {
+      const local = `${TMP}\\r`
+      const at = (root: string, extra: string[] = []) =>
+        parse(['validate', 'a-b', ...IO, ...extra], {
+          cwd: CWD,
+          storyboardRoot: root,
+          platform: 'win32',
+        })
+      expect(
+        at(ROOT, ['--report-dir', local]).ok,
+        'precondition: --report-dir <tmp>\\r parses',
+      ).toBe(true)
+      for (const dir of [
+        '\\\\?\\UNC\\localhost\\share\\x',
+        '//localhost/share/x',
+        '\\\\.\\pipe\\x',
+        '\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\x',
+      ]) {
+        expect
+          .soft(messageOf(at(ROOT, ['--report-dir', dir])), `(g1) flag form ${dir}`)
+          .toBe(MSG.device)
+      }
+      const roots = ['\\\\localhost\\share\\sb', '\\\\?\\C:\\sb', '//localhost/share/sb']
+      for (const root of roots) {
+        expect.soft(messageOf(at(root)), `(g2) default dir under ${root}`).toBe(MSG.deviceDefault)
+        const given = at(root, ['--report-dir', local])
+        expect
+          .soft(
+            given.ok && given.command === 'validate' && given.reportDirGiven,
+            `(g3) a local --report-dir with ${root}`,
+          )
+          .toBe(true)
+      }
+      const relative = at(ROOT, ['--report-dir', 'C:x'])
+      expect
+        .soft(
+          relative.ok && relative.command === 'validate' && /^C:\\/i.test(relative.reportDir),
+          '(g3) C:x (drive-relative) parses to an absolute C:\\ path',
+        )
+        .toBe(true)
+    },
+  )
+
+  it('T15A-68 report-dir refusal order and the win32 fold on both hosts: device or network first, then the segment rule, then the in-site compare folded with toUpperCase().toLowerCase() (A24, A30, D15-23, D15-28, AUD-2, AUD-4)', () => {
+    expect(
+      reportDirFormRefusal('C:\\ok\\r', true, 'win32'),
+      "precondition: reportDirFormRefusal('C:\\\\ok\\\\r', true, 'win32') is null",
+    ).toBeNull()
+    for (const path of [
+      '\\\\?\\C:\\sb',
+      '//localhost/share/sb',
+      '\\\\.\\pipe\\x',
+      '\\\\?\\Volume{0}\\x',
+      '\\\\server\\share',
+    ]) {
+      expect.soft(isDeviceOrNetworkPath(path), `(g1) device or network: ${path}`).toBe(true)
+    }
+    for (const path of ['C:\\sb', '/sb', 'C:sb', 'sb']) {
+      expect.soft(isDeviceOrNetworkPath(path), `(g1) not device or network: ${path}`).toBe(false)
+    }
+    const devicePath = '\\\\?\\C:\\sb\\migration-input\\reports'
+    const g2: [string, string | null, string | null][] = [
+      ['device path, no flag', reportDirFormRefusal(devicePath, false, 'win32'), MSG.deviceDefault],
+      ['device path, the flag', reportDirFormRefusal(devicePath, true, 'win32'), MSG.device],
+      [
+        'C:\\sb.\\migration-input\\reports, no flag',
+        reportDirFormRefusal('C:\\sb.\\migration-input\\reports', false, 'win32'),
+        MSG.segmentDefault,
+      ],
+      ['C:\\x\\CON, the flag', reportDirFormRefusal('C:\\x\\CON', true, 'win32'), MSG.segment],
+      ['/tmp/CON on platform linux', reportDirFormRefusal('/tmp/CON', true, 'linux'), null],
+    ]
+    for (const [id, got, want] of g2) {
+      expect.soft(got, `(g2) ${id}`).toBe(want)
+    }
+    const canary = reportDirFormRefusal('C:\\S15ACANARY.\\r', true, 'win32')
+    expect(canary !== null, 'precondition: the canary segment is refused').toBe(true)
+    expect
+      .soft(String(canary).includes('S15ACANARY'), '(g3) no canary segment in the text')
+      .toBe(false)
+    const dotless = `${ROOT}/publ\u0131c`
+    for (const dir of [dotless, `${ROOT}/APP/x`]) {
+      expect
+        .soft(
+          messageOf(parse(['validate', 'a-b', ...IO, '--report-dir', dir], WIN32)),
+          `(g4) platform win32: ${dir}`,
+        )
+        .toBe(MSG.inSite)
+    }
+    expect
+      .soft(
+        parse(['validate', 'a-b', ...IO, '--report-dir', dotless], LINUX).ok,
+        '(g4) platform linux accepts <root>/publıc',
+      )
+      .toBe(true)
   })
 })
 

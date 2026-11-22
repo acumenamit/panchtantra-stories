@@ -6,7 +6,8 @@
 // - Five methods only: create (create-only, x-upsert false), writePointer (the two pointers, the
 //   only overwrites), readMaster (approvals and waivers, the authenticated GET), readContent (the
 //   two pointers, each with a fresh cache nonce, and snapshots, the authenticated GET; Step 14,
-//   p1-step14-design.md §3.4) and listContent. The transport sends GET and POST only, to routes
+//   p1-step14-design.md §3.4; and packages by content address, no nonce, Step 15a,
+//   p1-step15a-design.md §3.17) and listContent. The transport sends GET and POST only, to routes
 //   built from four fixed literals; this module has no delete, move, copy, sign or bucket route.
 // - A request URL carries no search and no hash, and its href is exactly origin, pathname and
 //   search; the one search sent is `?cacheNonce=<digits>` on a pointer read.
@@ -16,6 +17,8 @@
 //   also sends `Authorization: Bearer <key>`; it is used only with the owner's OK.
 // - A refusal throws StorageRefusedError with the fixed text `refused: <class> <stage> <rule>` and
 //   sends nothing; a construction refusal is a TypeError `refused: client option <rule>`.
+// - The approval body gate (Step 15a, D15-6) keeps the Step 13 checks and their order, then the strict
+//   ApprovalRecord schema (record-schema) and canonical JCS bytes (not-jcs).
 // - Results are typed. Nothing is retried and nothing is printed. Errors and results never carry the
 //   key, a header or server message text: failure codes are whole sanitised tokens or "unknown".
 import { z } from 'zod'
@@ -29,6 +32,7 @@ import {
 } from '../../src/core/content/gates'
 import { checkUniqueStoryIds } from '../../src/core/content/packages'
 import { sha256Hex } from '../../src/core/hashing'
+import { ApprovalRecord } from '../../src/core/package/approval'
 import { CatalogueSnapshot } from '../../src/core/package/catalogue'
 import { hasOwnProtoKey, StoryPackageV1 } from '../../src/core/package/v1'
 import { isSecretKeyShape, Secret } from './env'
@@ -154,7 +158,7 @@ export interface StorageClient {
   writePointer(mode: PointerMode, body: Uint8Array): Promise<PointerResult>
   /** Reads an approval or waiver from masters by exact name. */
   readMaster(ref: MasterReadRef): Promise<ReadResult>
-  /** Reads a pointer (with a fresh cache nonce) or a snapshot from content, authenticated. */
+  /** Reads a pointer (with a fresh cache nonce), a snapshot or a package from content, authenticated. */
   readContent(ref: ContentReadRef): Promise<ContentReadResult>
   /** Every content object under a folder ('' or 'a/b/'), recursively, all pages, sorted by path. */
   listContent(folder: string): Promise<ListResult>
@@ -378,6 +382,9 @@ async function bodyGateRule(
       ) {
         return 'record-sha256'
       }
+      const parsed = parseStrictJson(bytes, ApprovalRecord, 'approval')
+      if (!parsed.ok) return 'record-schema'
+      if (!isCanonicalJcs(parsed.value.raw, bytes)) return 'not-jcs'
       return null
     }
     default:
@@ -387,7 +394,8 @@ async function bodyGateRule(
 
 /**
  * The class a request path belongs to under the closed route list (§4.1), or null: the list route
- * (POST), a pointer or snapshot under the authenticated content route (GET; Step 14), an approval or
+ * (POST), a pointer, snapshot or package under the authenticated content route (GET; Step 14, Step
+ * 15a), an approval or
  * waiver under the authenticated masters route (GET), or a creatable class's object path (POST).
  * send() refuses any other URL, so a later call site that builds a URL another way (OBJECT_ROUTE +
  * 'move', a relative URL) cannot send it (review fix SEC-6).
@@ -397,7 +405,7 @@ function routeClass(method: 'GET' | 'POST', pathname: string): string | null {
   if (method === 'GET') {
     if (pathname.startsWith(CONTENT_READ_ROUTE)) {
       const kind = classOfPath('content', pathname.slice(CONTENT_READ_ROUTE.length))?.kind
-      return kind === 'pointer' || kind === 'snapshot' ? kind : null
+      return kind === 'pointer' || kind === 'snapshot' || kind === 'package' ? kind : null
     }
     if (!pathname.startsWith(MASTERS_READ_ROUTE)) return null
     const kind = classOfPath('masters', pathname.slice(MASTERS_READ_ROUTE.length))?.kind

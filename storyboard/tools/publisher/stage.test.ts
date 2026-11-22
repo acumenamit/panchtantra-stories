@@ -8,6 +8,8 @@
 // expectStageSafe (A25). vi.mock wraps composeStaging in a vi.fn around the real one (T14-89).
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 15a adds T15A-65 at the end (design migration-input/p1-step15a-design.md D15-22): the report
+// is written into the real dir checked at the start of the run.
 import { spawnSync } from 'node:child_process'
 import {
   existsSync,
@@ -15,6 +17,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -200,6 +203,22 @@ const dirFlags = (dirs: StageInputDirs) => [
 function fakeClock(iso = NOW) {
   let t = Date.parse(iso)
   return { now: () => new Date(t), advance: (ms: number) => void (t += ms) }
+}
+
+/** Step 15a's approve and publish CliDeps members (B15A-implC-6); stage never calls them. */
+const NOT_FOR_STAGE = (name: string) => (): never => {
+  throw new Error(`test: ${name} is not for stage or validate`)
+}
+const NO_APPROVE_OR_PUBLISH: Pick<
+  CliDeps,
+  'openStdin' | 'stdinIsTTY' | 'promptWrite' | 'stdinDeadline' | 'triggerHook' | 'verify'
+> = {
+  openStdin: NOT_FOR_STAGE('openStdin'),
+  stdinIsTTY: NOT_FOR_STAGE('stdinIsTTY'),
+  promptWrite: NOT_FOR_STAGE('promptWrite'),
+  stdinDeadline: NOT_FOR_STAGE('stdinDeadline'),
+  triggerHook: NOT_FOR_STAGE('triggerHook'),
+  verify: NOT_FOR_STAGE('verify'),
 }
 
 type Before = (url: URL, init: RequestInit) => Promise<Response | void> | Response | void
@@ -1465,6 +1484,7 @@ describe('stage', () => {
           createClient: () => {
             throw new Error('test: no client in a configuration stop')
           },
+          ...NO_APPROVE_OR_PUBLISH,
           ...over,
         })
       const stageArgv = ['stage', ...IDS, ...dirFlags(dirs), '--report-dir', reportDir()]
@@ -1545,10 +1565,13 @@ describe('stage', () => {
       })
       let real: unknown
       try {
+        // A media ref (a package is content-readable since Step 15a D15-17): still a real refusal.
         await probeClient.readContent({
-          kind: 'package',
+          kind: 'media',
           storyId: 'two-paths',
-          packageSha256: 'a'.repeat(64),
+          sha256: 'a'.repeat(64),
+          variant: 'w768',
+          mime: 'image/webp',
         } as never)
       } catch (error) {
         real = error
@@ -1755,6 +1778,7 @@ describe('stage', () => {
             ...(fetchImpl ? { fetchImpl } : {}),
           })
         },
+        ...NO_APPROVE_OR_PUBLISH,
       })
       results.push({
         label,
@@ -2070,6 +2094,133 @@ describe('stage', () => {
       await hostile('a fixtures-form packagePath', 'g2', (list) =>
         list.map((e, i) => (i === 0 ? { ...e, packagePath: `packages/${e.storyId}.json` } : e)),
       )
+      allStageSafe()
+    },
+  )
+})
+
+// ---- Step 15a (design migration-input/p1-step15a-design.md §3.22, D15-22, CRIT-13; test plan
+// §14.12: T15A-65) ----
+
+describe('Step 15a: reports go to the checked real dir', () => {
+  it(
+    'T15A-65 validate and stage write reports only into the checked real dir: a retargeted link on the input path is harmless, and a real dir replaced mid-run is refused (D15-22, CRIT-13)',
+    TIMEOUT,
+    async () => {
+      const { stories, dirs } = await inputs()
+      const publicDir = join(root, 'public')
+      mkdirSync(publicDir)
+      const publisherUnder = (dir: string): string[] =>
+        (readdirSync(dir, { recursive: true }) as string[]).filter((name) =>
+          name.split(/[\/]/).some((part) => part.startsWith('publisher-')),
+        )
+      const validateTo = (dir: string) => {
+        const parsed = parseArgs(
+          ['validate', ...IDS, ...dirFlags(dirs), '--report-dir', dir],
+          context(),
+        )
+        if (!parsed.ok || parsed.command !== 'validate')
+          throw new Error('test setup: validate args')
+        return parsed
+      }
+      /** runValidate whose second deps.now() call (the report's finishedAt) runs `change` once. */
+      async function validateWithChange(dir: string, reportFile: string, change: () => void) {
+        const out: string[] = []
+        const err: string[] = []
+        const clock = fakeClock()
+        const seen = { calls: 0, ran: 0, reportBefore: true }
+        const exit = await runValidate(validateTo(dir), {
+          storyboardRoot: root,
+          platform: process.platform,
+          now: () => {
+            seen.calls += 1
+            if (seen.calls === 2) {
+              seen.reportBefore = existsSync(reportFile)
+              change()
+              seen.ran += 1
+            }
+            return clock.now()
+          },
+          log: (line) => void out.push(line),
+          error: (line) => void err.push(line),
+        })
+        return { exit, out, err, seen }
+      }
+
+      const a = join(root, 'a')
+      const link = join(root, 'link')
+      mkdirSync(a)
+      symlinkSync(a, link, 'junction')
+      const g1 = await validateWithChange(
+        join(link, 'reports'),
+        join(a, 'reports', 'publisher-validate.json'),
+        () => {
+          rmSync(link, { force: true })
+          symlinkSync(publicDir, link, 'junction')
+        },
+      )
+      expect(
+        g1.seen.ran === 1 && !g1.seen.reportBefore,
+        'precondition: the retarget ran before the report write',
+      ).toBe(true)
+      expect.soft(g1.exit, '(g1) a retargeted link on the input path: exit 0').toBe(0)
+      expect
+        .soft(
+          existsSync(join(a, 'reports', 'publisher-validate.json')),
+          '(g1) the report is under <tmp>/a/reports',
+        )
+        .toBe(true)
+      expect.soft(publisherUnder(publicDir), '(g1) nothing under public').toEqual([])
+
+      const out = join(root, 'out')
+      mkdirSync(out)
+      const g2 = await validateWithChange(
+        join(out, 'reports'),
+        join(out, 'reports', 'publisher-validate.json'),
+        () => {
+          renameSync(out, join(root, 'out-away'))
+          symlinkSync(publicDir, out, 'junction')
+        },
+      )
+      expect(
+        g2.seen.ran === 1 && !g2.seen.reportBefore,
+        'precondition: the retarget ran before the report write',
+      ).toBe(true)
+      expect.soft(g2.exit, '(g2) the real dir replaced mid-run: exit 2 (no write)').toBe(2)
+      expect
+        .soft(g2.err, '(g2) the refused line, then report-unwritten')
+        .toEqual([reportDirRefused('validate'), 'validate: report-unwritten'])
+      expect.soft(publisherUnder(publicDir), '(g2) no publisher-* file under public').toEqual([])
+
+      const out3 = join(root, 'out3')
+      mkdirSync(out3)
+      const stageTo = parseArgs(
+        ['stage', ...IDS, ...dirFlags(dirs), '--report-dir', join(out3, 'reports')],
+        context(),
+      )
+      if (!stageTo.ok || stageTo.command !== 'stage') throw new Error('test setup: stage args')
+      const s = await newStub()
+      seedMasters(s, stories)
+      const replaced = { count: 0, reportBefore: true }
+      const g3 = await stage(s, stageTo, {
+        fetchImpl: wrapFetch((url, init) => {
+          if (isObjectPost(init, url, 'catalogue/snapshots/') && replaced.count === 0) {
+            replaced.reportBefore = existsSync(join(out3, 'reports', 'publisher-stage.json'))
+            renameSync(out3, join(root, 'out3-away'))
+            symlinkSync(publicDir, out3, 'junction')
+            replaced.count += 1
+          }
+        }),
+      })
+      expect(
+        replaced.count === 1 && !replaced.reportBefore,
+        'precondition: the replacement ran before the report write',
+      ).toBe(true)
+      expect.soft(g3.exit, '(g3) stage: the exit kept after writes: 0').toBe(0)
+      expect
+        .soft(g3.err, '(g3) the refused line, then report-unwritten')
+        .toEqual([reportDirRefused('stage'), 'stage: report-unwritten'])
+      expect.soft(publisherUnder(publicDir), '(g3) nothing under public').toEqual([])
       allStageSafe()
     },
   )

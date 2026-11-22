@@ -5,6 +5,9 @@
 // global fetch refuses and counts any other host (13.1 D, guard G5).
 // Step 14 (P1-8c, design p1-step14-design.md §14.10) adds readContent: T14-76 to T14-78, and the
 // listed edits of T13-C6, T13-H3, T13-R26 (g5) and T13-W14.
+// Step 15a (P1-8d part a, design p1-step15a-design.md §14.12) adds T15A-60 (the approval gate's
+// record-schema and not-jcs) and T15A-61 (readContent of a package), and the listed edits: APPROVAL
+// is a full valid record, T13-R14 g5's positive half, T13-R10b g3, T13-R26 g5 and T13-W14.
 import { createServer, type Server } from 'node:http'
 import { connect, type AddressInfo } from 'node:net'
 import { inspect } from 'node:util'
@@ -21,8 +24,10 @@ import {
 import { MEDIA_MAX_BYTES } from '../../src/core/content/media'
 import { checkUniqueStoryIds } from '../../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import { APPROVAL_CHECKLIST_TEXT, APPROVAL_PRESCREEN_LEGACY } from '../../src/core/package/approval'
 import { CatalogueSnapshot } from '../../src/core/package/catalogue'
 import { hasOwnProtoKey, StoryPackageV1 } from '../../src/core/package/v1'
+import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { Secret } from './env'
 import {
   classifyRead,
@@ -108,8 +113,27 @@ const POINTER_VALUE = (seq: number, over: Record<string, unknown> = {}) => ({
   ...over,
 })
 const POINTER = (seq: number) => jcsBytes(POINTER_VALUE(seq))
-const APPROVAL = (on: string) =>
-  jcsBytes({ storyId: 'two-paths', packageSha256: SHA_A, approvedOn: on })
+/** A full valid approval record for two-paths and SHA_A (Step 15a, D15-6), as a value. */
+const APPROVAL_VALUE = (on: string): Record<string, unknown> => ({
+  storyId: 'two-paths',
+  packageSha256: SHA_A,
+  ruleSetRef: PANCHATANTRA_RULESET.ref,
+  waiversSha256: SHA_B,
+  review: {
+    languagesRead: ['en', 'hi'],
+    allNodesRead: true,
+    imagesViewed: 1,
+    narrationCheck: 'checked',
+    devices: ['phone'],
+    reviewerChecklist: APPROVAL_CHECKLIST_TEXT,
+  },
+  prescreen: APPROVAL_PRESCREEN_LEGACY,
+  decision: 'approved',
+  approvedOn: on,
+  approvedBy: 'owner',
+})
+/** Its canonical JCS bytes, as approve writes them. */
+const APPROVAL = (on: string) => jcsBytes(APPROVAL_VALUE(on))
 const MEDIA = () => Uint8Array.of(1, 2, 3)
 const text = (s: string) => new TextEncoder().encode(s)
 
@@ -1216,8 +1240,14 @@ describe('requests on the recorder', () => {
     }
     const atCap = padded(MAX_JSON_BYTES)
     expect(atCap.byteLength, 'precondition: the padded record is exactly 1 MiB').toBe(1_048_576)
-    await asCreate(storage, APPROVAL_REF(), atCap)
-    expect.soft(calls.length, '(g3) approval at the cap is sent').toBe(2)
+    // Step 15a (D15-6): the padded record reaches the gate, so the size bound is not its refusal; the
+    // strict schema is.
+    await expectRefused(
+      '(g3) approval at the cap reaches the gate',
+      () => asCreate(storage, APPROVAL_REF(), atCap),
+      'approval body-gate record-schema',
+      count,
+    )
     await expectRefused(
       '(g3) approval cap+1',
       () => asCreate(storage, APPROVAL_REF(), padded(MAX_JSON_BYTES + 1)),
@@ -1399,14 +1429,14 @@ describe('requests on the recorder', () => {
       hasOwnProtoKey(JSON.parse(new TextDecoder().decode(protoAt70))),
       'precondition: hasOwnProtoKey does not see a __proto__ key 70 levels deep',
     ).toBe(false)
-    const before = calls.length
-    expect
-      .soft(
-        await asCreate(storage, APPROVAL_REF(), deep(63, '{}')),
-        '(g5) a record whose deepest object is 64 levels down is still sent',
-      )
-      .toEqual({ kind: 'created' })
-    expect.soft(calls.length, '(g5) one request for it').toBe(before + 1)
+    // Step 15a (D15-6): the strict schema refuses this record, so the claim (the proto check does not
+    // over-refuse at depth 64) is that its refusal is record-schema, not proto-key.
+    await expectRefused(
+      '(g5) a record whose deepest object is 64 levels down passes the proto check',
+      () => asCreate(storage, APPROVAL_REF(), deep(63, '{}')),
+      'approval body-gate record-schema',
+      () => calls.length,
+    )
     for (const [name, body] of [
       ['g5 __proto__ 70 levels deep', protoAt70],
       ['g5 an object 65 levels deep', deep(64, '{}')],
@@ -1938,6 +1968,12 @@ describe('requests on the recorder', () => {
           ['200 cut', cut(200), { kind: 'failed', status: null, code: 'TypeError' }],
         ],
       ],
+      [
+        'g5 readContent',
+        (storage) =>
+          storage.readContent({ kind: 'package', storyId: 'two-paths', packageSha256: SHA_A }),
+        [['package 401 cut', cut(401), { kind: 'unauthorized', status: 401 }]],
+      ],
     ]
     for (const [label, call, rows] of routes) {
       const [group, route] = label.split(' ')
@@ -2096,6 +2132,82 @@ describe('requests on the recorder', () => {
       expect
         .soft(network.kind === 'failed' && network.status, `(g4) ${label} network status null`)
         .toBe(null)
+    }
+  })
+
+  // ---- Step 15a (P1-8d part a): the approval gate's strict half (p1-step15a-design.md §3.6) ----
+
+  it('T15A-60 approval gate, Step 15a half: record-schema then not-jcs after the four Step 13 checks, in that order (A3, D15-6, L1)', async () => {
+    const { storage, calls } = client()
+    const count = () => calls.length
+    await asCreate(storage, APPROVAL_REF(), APPROVAL('2026-11-21'))
+    expect(calls.length, 'precondition: the full record is sent').toBe(1)
+    const valueWith = (over: Record<string, unknown>, review: Record<string, unknown> = {}) => {
+      const value = APPROVAL_VALUE('2026-11-21')
+      return { ...value, ...over, review: { ...(value.review as object), ...review } }
+    }
+    const missingReview = valueWith({})
+    delete (missingReview.review as Record<string, unknown>).devices
+    // (g1) record-schema
+    const schema: [string, Uint8Array<ArrayBuffer>][] = [
+      ['an extra key', jcsBytes(valueWith({ extra: 1 }))],
+      ['a missing review field', jcsBytes(missingReview)],
+      ["decision 'rejected'", jcsBytes(valueWith({ decision: 'rejected' }))],
+      ['approvedOn 2026-02-30', jcsBytes(valueWith({ approvedOn: '2026-02-30' }))],
+      ['a U+202E in narrationCheck', jcsBytes(valueWith({}, { narrationCheck: 'a\u202Eb' }))],
+    ]
+    for (const [name, body] of schema) {
+      await expectRefused(
+        `(g1) ${name}`,
+        () => asCreate(storage, APPROVAL_REF(), body),
+        'approval body-gate record-schema',
+        count,
+      )
+    }
+    // (g2) not-jcs: a valid record in another byte form
+    const jcsText = new TextDecoder().decode(APPROVAL('2026-11-21'))
+    const swapped = jcsText.replace(
+      '"approvedBy":"owner","approvedOn":"2026-11-21"',
+      '"approvedOn":"2026-11-21","approvedBy":"owner"',
+    )
+    expect(swapped === jcsText, 'precondition: two keys were swapped').toBe(false)
+    const forms: [string, Uint8Array<ArrayBuffer>][] = [
+      ['pretty-printed', text(JSON.stringify(APPROVAL_VALUE('2026-11-21'), null, 2))],
+      ['two keys swapped', text(swapped)],
+    ]
+    for (const [name, body] of forms) {
+      await expectRefused(
+        `(g2) ${name}`,
+        () => asCreate(storage, APPROVAL_REF(), body),
+        'approval body-gate not-jcs',
+        count,
+      )
+    }
+    // (g3) the order: each earlier check wins over a schema fault
+    const nestedProto = jcsText
+      .replace('"review":{', '"review":{"__proto__":{},')
+      .replace('{"approvedBy"', '{"x":1,"approvedBy"')
+    expect(nestedProto.includes('"__proto__"'), 'precondition: the nested sample').toBe(true)
+    const order: [string, Uint8Array<ArrayBuffer>, string][] = [
+      [
+        'another storyId plus an extra key',
+        jcsBytes(valueWith({ storyId: 'fox-and-crow', extra: 1 })),
+        'record-story-id',
+      ],
+      ['a nested __proto__ plus an extra key', text(nestedProto), 'proto-key'],
+      [
+        'a non-JCS form plus an extra key',
+        text(JSON.stringify(valueWith({ extra: 1 }), null, 2)),
+        'record-schema',
+      ],
+    ]
+    for (const [name, body, rule] of order) {
+      await expectRefused(
+        `(g3) ${name}`,
+        () => asCreate(storage, APPROVAL_REF(), body),
+        `approval body-gate ${rule}`,
+        count,
+      )
     }
   })
 })
@@ -3004,7 +3116,8 @@ describe('over the wire against the storage stub', () => {
       await storage.listContent('catalogue/snapshots/') // an empty folder: one list request
       await storage.readContent({ kind: 'pointer', mode: 'staging' }) // missing: one request
       await storage.readContent({ kind: 'snapshot', seq: 7 }) // missing: one request
-      expect(s.requests.length, 'precondition: 6 requests').toBe(6)
+      await storage.readContent({ kind: 'package', storyId: 'two-paths', packageSha256: PKG_SHA }) // missing: one request
+      expect(s.requests.length, 'precondition: 7 requests').toBe(7)
       for (const entry of s.requests)
         expect
           .soft(entry.authorization, `(g1) ${flag} ${entry.method} ${entry.pathname.slice(0, 40)}`)
@@ -3081,5 +3194,51 @@ describe('over the wire against the storage stub', () => {
     const last = stub.requests.at(-1)
     expect.soft(last?.pathname, '(g3) pathname').toBe(`${read}catalogue/snapshots/7.json`)
     expect.soft(last?.search, '(g3) no search').toBe('')
+  })
+
+  // ---- Step 15a (P1-8d part a): the package content read (p1-step15a-design.md §3.17) ----
+
+  it('T15A-61 readContent of a package: the content-addressed path, no nonce, found with its bytes and sha256, a missing object not-found, over the wire (A4, D15-17, L23)', async () => {
+    const path = `packages/two-paths/${PKG_SHA}.json`
+    stub.put('content', path, PKG.slice(), 'application/json')
+    const ref = { kind: 'package', storyId: 'two-paths', packageSha256: PKG_SHA } as const
+    // (g1) found, one GET of the authenticated content path with no search
+    const found = await wire(stub)
+      .readContent(ref)
+      .catch((error: unknown) => `threw ${(error as Error).message}`)
+    expect.soft(found, '(g1) found with its bytes and sha256').toEqual({
+      kind: 'found',
+      bytes: PKG,
+      size: PKG.byteLength,
+      sha256: PKG_SHA,
+    })
+    expect.soft(stub.requests.length, '(g1) one request').toBe(1)
+    const entry = stub.requests[0]
+    expect
+      .soft(
+        [entry?.method, entry?.pathname, entry?.search],
+        '(g1) GET of the packages path, no search',
+      )
+      .toEqual(['GET', `/storage/v1/object/authenticated/content/${path}`, ''])
+    // (g2) an absent sha
+    expect
+      .soft(
+        await wire(stub).readContent({ ...ref, packageSha256: SHA_B }),
+        '(g2) an absent package is not-found',
+      )
+      .toEqual({ kind: 'not-found' })
+    // (g3) other bytes under the name: found with the stored bytes' sha256 (callers compare)
+    const other = await startStub()
+    const otherBytes = jcsBytes({ ...fixture, version: 99 })
+    other.put('content', path, otherBytes, 'application/json')
+    const shaOther = await sha256Hex(otherBytes)
+    expect(shaOther === PKG_SHA, 'precondition: the stored bytes hash to another name').toBe(false)
+    const mismatched = await wire(other).readContent(ref)
+    expect
+      .soft(
+        mismatched.kind === 'found' && mismatched.sha256,
+        "(g3) found with the stored bytes' sha256",
+      )
+      .toBe(shaOther)
   })
 })

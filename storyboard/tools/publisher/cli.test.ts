@@ -10,20 +10,32 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MEDIA_ORIGIN } from '../../src/config/security-headers'
-import { jcsBytes } from '../../src/core/hashing'
+import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { runCli, type CliDeps } from './cli'
-import { Secret } from './env'
+import { Secret, readDeployHookUrl, readSiteUrl } from './env'
+import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
 import {
+  answersOf,
+  approvalRecordOf,
   buildTestStories,
+  waiverBytesOf,
+  waiverFileOf,
   writeStageInputs,
   type StageInputDirs,
   type TestStory,
 } from './stage-testkit'
+import type { VerifyOptions, VerifyOutcome } from './verify'
 import { createStorageClient, type StorageClientOptions } from './storage'
-import { expectNoUnexpected, startStorageStub, type StorageStub } from './storage-stub'
+import {
+  expectNoUnexpected,
+  startStorageStub,
+  type StorageStub,
+  type StubLogEntry,
+} from './storage-stub'
 
 // ---- shared material ----
 
@@ -141,9 +153,25 @@ function harness(stub: StorageStub | null, over: Partial<CliDeps> = {}): Harness
         ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
       })
     },
+    // Step 15a (§14.12): the six new members record their call and throw where a test does not
+    // expect them; a test that needs one passes its own through `over`.
+    openStdin: unexpected(calls, 'openStdin'),
+    stdinIsTTY: unexpected(calls, 'stdinIsTTY'),
+    promptWrite: unexpected(calls, 'promptWrite'),
+    stdinDeadline: unexpected(calls, 'stdinDeadline'),
+    triggerHook: unexpected(calls, 'triggerHook'),
+    verify: unexpected(calls, 'verify'),
     ...over,
   }
   return { deps, out, err, calls, options }
+}
+
+/** A dep that records its call, then throws: no test reaches it unless it passes its own. */
+function unexpected(calls: string[], name: string): () => never {
+  return () => {
+    calls.push(name)
+    throw new Error(`test harness: ${name} was not expected here`)
+  }
 }
 
 const dirFlags = (dirs: StageInputDirs) => [
@@ -496,6 +524,755 @@ describe('runCli', () => {
       expect.soft(exit, '(g2) exits non-zero').not.toBe(0)
       expect.soft(bare.requests.length, '(g2) no stub request').toBe(0)
       expect.soft(escapes, '(g2) escapes 0').toBe(0)
+    },
+  )
+})
+
+// ---- Step 15a: approve and publish through runCli (§14.11: T15A-52 to T15A-59, T15A-69) ----
+
+const SLOW = { timeout: 120_000 }
+/** The deploy hook URL, assembled at run time: the only shape readDeployHookUrl accepts. */
+const hookUrlText = () =>
+  ['https://api.vercel.com/v1/integrations/deploy', 'S15ACANARYproject', 'S15ACANARYhook'].join('/')
+const SITE_URL = 'https://s15a-site.example'
+const NO_CHANNEL = 'approve: stdin is not a terminal; pass --answers-stdin'
+const REPORT_DIR_IN_ACTIONS = 'usage: --report-dir is not used in GitHub Actions'
+const ACTIONS: Partial<CliDeps> = { platform: 'linux', runContext: { GITHUB_ACTIONS: 'true' } }
+const publishEnv = (key = FAKE_KEY): Record<string, string> => ({
+  SUPABASE_URL: MEDIA_ORIGIN,
+  SUPABASE_SECRET_KEY: key,
+  VERCEL_DEPLOY_HOOK_PRODUCTION: hookUrlText(),
+  NEXT_PUBLIC_SITE_URL: SITE_URL,
+})
+const reportsDir = () => join(root, 'reports')
+const defaultReportDir = () => join(root, 'migration-input', 'reports')
+const twoPaths = async () => (await testStories()).find((s) => s.storyId === 'two-paths')!
+/** stdin answers as one JSON body; the deadline never resolves. */
+const stdinOf = (text: string): Partial<CliDeps> => ({
+  openStdin: () => Readable.from([text]),
+  stdinDeadline: () => new Promise<void>(() => {}),
+})
+const approveArgv = (story: TestStory, extra: string[] = []) => [
+  'approve',
+  story.storyId,
+  '--package',
+  story.packageSha256.slice(0, 12),
+  ...extra,
+]
+const liveOutcome = (seq: number): VerifyOutcome => ({
+  kind: 'live',
+  expectedSeq: seq,
+  samples: 6,
+  regressions: [],
+  sample: {
+    kind: 'live',
+    at: 0,
+    ms: 1,
+    seq,
+    deploymentId: null,
+    appVersion: null,
+    deploymentUrl: null,
+    builtAt: NOW,
+    storyIds: [],
+  },
+})
+const TRIGGERED: HookResult = { kind: 'triggered', status: 200, jobId: 'j1', createdAt: null }
+
+/** Fakes for triggerHook and verify that record their options (no Vercel is ever reached). */
+function tailFakes(
+  hook: (options: HookOptions) => Promise<HookResult> = async () => TRIGGERED,
+  verify: (options: VerifyOptions) => Promise<VerifyOutcome> = async (o) =>
+    liveOutcome(o.expectedSeq),
+) {
+  const hooks: HookOptions[] = []
+  const verifies: VerifyOptions[] = []
+  const deps: Partial<CliDeps> = {
+    triggerHook: async (options) => {
+      hooks.push(options)
+      return hook(options)
+    },
+    verify: async (options) => {
+      verifies.push(options)
+      return verify(options)
+    },
+  }
+  return { hooks, verifies, deps }
+}
+
+/** A stub with the stories staged through runCli (pc mode). */
+async function stagedStub(stories?: readonly TestStory[], key = FAKE_KEY): Promise<StorageStub> {
+  const list = stories ?? (await testStories())
+  const dirs = writeStageInputs(root, list)
+  const stub = await startStorageStub({ apikey: key })
+  stubs.push(stub)
+  for (const story of list) {
+    stub.put(
+      'masters',
+      `waivers/${story.storyId}/${story.waiverSha256}.json`,
+      story.waiverBytes,
+      'application/json',
+    )
+  }
+  const h = harness(stub, { env: publishEnv(key) })
+  const exit = await runCli(['stage', ...list.map((s) => s.storyId), ...dirFlags(dirs)], h.deps)
+  if (exit !== 0) throw new Error(`test setup: stage exited ${exit}`)
+  return stub
+}
+
+/** Stages the three stories and approves two-paths through runCli (pc mode, stdin answers). */
+async function approvedStub(): Promise<{ stub: StorageStub; story: TestStory }> {
+  const stub = await stagedStub()
+  const story = await twoPaths()
+  const h = harness(stub, stdinOf(JSON.stringify(answersOf(story))))
+  const argv = approveArgv(story, ['--answers-stdin', '--report-dir', reportsDir()])
+  const exit = await runCli(argv, h.deps)
+  if (exit !== 0) throw new Error(`test setup: approve exited ${exit}`)
+  return { stub, story }
+}
+
+const readJson = (path: string): Record<string, unknown> | null =>
+  existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>) : null
+const readText = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : '')
+/** stdout, stderr and both reports of `command` in the reports dir. */
+const channelsOf = (h: Harness, command: 'approve' | 'publish') =>
+  [
+    ...h.out,
+    ...h.err,
+    readText(join(reportsDir(), `publisher-${command}.json`)),
+    readText(join(reportsDir(), `publisher-${command}.md`)),
+  ].join('\n')
+
+describe('runCli: approve and publish (Step 15a)', () => {
+  it(
+    'T15A-52 commandAllowedHere: pc mode and actions mode; Vercel contexts and other platforms refused before any load (A17, L16)',
+    SLOW,
+    async () => {
+      const story = await twoPaths()
+      const stories = await testStories()
+      const dirs = writeStageInputs(root, stories)
+      const answers = JSON.stringify(answersOf(story))
+      const argvs = {
+        approve: approveArgv(story, ['--answers-stdin']),
+        publish: ['publish', 'two-paths'],
+      }
+      for (const [mode, over] of [
+        ['pc', {}],
+        ['actions', ACTIONS],
+      ] as const) {
+        for (const command of ['approve', 'publish'] as const) {
+          const h = harness(await newStub(stories), {
+            ...stdinOf(answers),
+            ...tailFakes().deps,
+            env: publishEnv(),
+            ...over,
+          })
+          await runCli(argvs[command], h.deps)
+          expect(h.calls, `precondition: ${command} reaches the factory in ${mode} mode`).toContain(
+            'factory',
+          )
+        }
+      }
+      const refused: [string, Partial<CliDeps>][] = [
+        ["win32 VERCEL ''", { runContext: { VERCEL: '' } }],
+        [
+          "linux actions VERCEL_ENV 'preview'",
+          { platform: 'linux', runContext: { GITHUB_ACTIONS: 'true', VERCEL_ENV: 'preview' } },
+        ],
+        ["linux GITHUB_ACTIONS '1'", { platform: 'linux', runContext: { GITHUB_ACTIONS: '1' } }],
+        ["win32 GITHUB_ACTIONS 'true'", { runContext: { GITHUB_ACTIONS: 'true' } }],
+        ['linux without GITHUB_ACTIONS', { platform: 'linux' }],
+        ['darwin', { platform: 'darwin' }],
+        ["win32 vercel_env 'x'", { runContext: { vercel_env: 'x' } }],
+        ["win32 Github_Actions 'true'", { runContext: { Github_Actions: 'true' } }],
+      ]
+      for (const [label, over] of refused) {
+        for (const command of ['approve', 'publish'] as const) {
+          rmSync(defaultReportDir(), { recursive: true, force: true })
+          const h = harness(null, { ...stdinOf(answers), env: publishEnv(), ...over })
+          const exit = await runCli(argvs[command], h.deps).catch(() => 'rejected')
+          expect
+            .soft(
+              [
+                exit,
+                h.out,
+                h.calls.includes('loadEnv'),
+                h.calls.includes('factory'),
+                existsSync(defaultReportDir()),
+              ],
+              `(g1) ${command} refused: ${label}`,
+            )
+            .toEqual([2, [`${command}: stopped: run-context-refused`], false, false, false])
+        }
+      }
+      const stage = harness(null, ACTIONS)
+      const stageExit = await runCli(stageArgv(dirs), stage.deps)
+      expect
+        .soft([stageExit, stage.out], '(g2) stage on linux actions stays stage-here-only')
+        .toEqual([2, ['stage: stopped: stage-here-only']])
+      for (const command of ['approve', 'publish'] as const) {
+        const env: Record<string, string | undefined> = { ...publishEnv() }
+        const h = harness(await newStub(stories), {
+          ...stdinOf(answers),
+          ...tailFakes().deps,
+          env,
+          loadEnv: () => {
+            env.VERCEL = '1'
+            return true
+          },
+        })
+        await runCli(argvs[command], h.deps)
+        expect
+          .soft(
+            h.calls.includes('factory'),
+            `(g3) ${command}: VERCEL from the env file never decides`,
+          )
+          .toBe(true)
+      }
+    },
+  )
+
+  it(
+    'T15A-53 actions mode: no env file, no report, --report-dir refused, approve needs --answers-stdin and never prompts (A17, L17, TP-2)',
+    SLOW,
+    async () => {
+      const { stub, story } = await approvedStub()
+      const fakes = tailFakes()
+      const approve = harness(stub, {
+        ...stdinOf(JSON.stringify(answersOf(story))),
+        ...ACTIONS,
+        env: publishEnv(),
+      })
+      const publish = harness(stub, { ...fakes.deps, ...ACTIONS, env: publishEnv() })
+      const exitA = await runCli(approveArgv(story, ['--answers-stdin']), approve.deps)
+      const exitP = await runCli(['publish', 'two-paths'], publish.deps)
+      expect([exitA, exitP], 'precondition: approve and publish ran in actions mode').toEqual([
+        0, 0,
+      ])
+      expect
+        .soft(
+          [approve.calls.includes('loadEnv'), publish.calls.includes('loadEnv')],
+          '(g1) loadEnv never called',
+        )
+        .toEqual([false, false])
+      for (const argv of [
+        approveArgv(story, ['--answers-stdin', '--report-dir', 'x']),
+        ['publish', 'two-paths', '--report-dir', 'x'],
+      ]) {
+        const h = harness(null, { ...stdinOf('{}'), ...ACTIONS, env: publishEnv() })
+        const exit = await runCli(argv, h.deps)
+        expect
+          .soft(
+            [exit, h.out, h.err, h.calls.includes('factory')],
+            `(g2) --report-dir in actions: ${argv[0]}`,
+          )
+          .toEqual([2, [], [REPORT_DIR_IN_ACTIONS], false])
+      }
+      expect
+        .soft(
+          existsSync(defaultReportDir()),
+          '(g3) the published run wrote no file under the default report dir',
+        )
+        .toBe(false)
+      expect.soft(fakes.hooks.length, '(g3) the published run reached the tail').toBe(1)
+      // Non-throwing stdin and prompt fakes, so a run that prompts ends at this group's assertion.
+      const prompts: string[] = []
+      const tty = harness(null, {
+        ...ACTIONS,
+        env: publishEnv(),
+        stdinIsTTY: () => true,
+        openStdin: () => Readable.from([]),
+        promptWrite: (text) => void prompts.push(text),
+      })
+      const exitT = await runCli(approveArgv(story), tty.deps).catch(() => 'rejected')
+      expect
+        .soft([exitT, tty.out, tty.err, prompts.length], '(g4) actions approve without the flag')
+        .toEqual([2, ['approve: stopped: answers-missing'], [NO_CHANNEL], 0])
+    },
+  )
+
+  it(
+    'T15A-54 pc mode approve channel: TTY prompts, --answers-stdin, or answers-missing exit 2 with the fixed line; stdin opened for approve only (A17, CRIT-10, TP-2)',
+    SLOW,
+    async () => {
+      const story = await twoPaths()
+      const none = harness(null, { stdinIsTTY: () => false })
+      const exitN = await runCli(approveArgv(story), none.deps)
+      expect
+        .soft(
+          [
+            exitN,
+            none.out,
+            none.err,
+            none.calls.includes('loadEnv'),
+            none.calls.includes('openStdin'),
+          ],
+          '(g1) not a TTY and no flag: exit 2, the fixed lines, nothing loaded or opened',
+        )
+        .toEqual([2, ['approve: stopped: answers-missing'], [NO_CHANNEL], false, false])
+      const stub = await stagedStub()
+      const prompts: string[] = []
+      const lines = Readable.from([
+        'en,hi\n',
+        'yes\n',
+        '1\n',
+        'checked\n',
+        'phone, laptop\n',
+        'yes\n',
+      ])
+      const tty = harness(stub, {
+        stdinIsTTY: () => true,
+        openStdin: () => lines,
+        promptWrite: (text) => void prompts.push(text),
+      })
+      const exitT = await runCli(approveArgv(story, ['--report-dir', reportsDir()]), tty.deps)
+      expect.soft([exitT, prompts.length], '(g2) a TTY: the six prompts, approved').toEqual([0, 6])
+      const body = Readable.from([JSON.stringify(answersOf(story))])
+      const flag = harness(stub, {
+        openStdin: () => body,
+        stdinDeadline: () => new Promise<void>(() => {}),
+      })
+      const argv = approveArgv(story, ['--answers-stdin', '--report-dir', reportsDir()])
+      const exitF = await runCli(argv, flag.deps)
+      expect
+        .soft([exitF, body.readableEnded], '(g2) the flag: the stream read to its end')
+        .toEqual([0, true])
+      const opened: string[] = []
+      const recording: Partial<CliDeps> = {
+        openStdin: () => {
+          opened.push('openStdin')
+          return Readable.from([])
+        },
+        stdinDeadline: () => {
+          opened.push('stdinDeadline')
+          return new Promise<void>(() => {})
+        },
+      }
+      const dirs = writeStageInputs(root, await testStories())
+      const publishRun = harness(await newStub([]), {
+        ...recording,
+        ...tailFakes().deps,
+        env: publishEnv(),
+      })
+      await runCli(['publish', 'two-paths'], publishRun.deps)
+      const stageRun = harness(await newStub(await testStories()), recording)
+      await runCli(stageArgv(dirs, ['--dry-run']), stageRun.deps)
+      expect.soft(opened, '(g3) publish and stage never open stdin or its deadline').toEqual([])
+    },
+  )
+
+  it(
+    'T15A-55 publish configuration: the hook and site URLs read after the credentials and before any client; failures exit 2 by name; approve reads neither (A18, L18)',
+    SLOW,
+    async () => {
+      const story = await twoPaths()
+      const noHook = publishEnv()
+      delete noHook.VERCEL_DEPLOY_HOOK_PRODUCTION
+      const samples: [string, Record<string, string>][] = [
+        ['hook unset', noHook],
+        [
+          'hook https://example.com/x',
+          { ...publishEnv(), VERCEL_DEPLOY_HOOK_PRODUCTION: 'https://example.com/x' },
+        ],
+        ['site with a path', { ...publishEnv(), NEXT_PUBLIC_SITE_URL: `${SITE_URL}/path` }],
+        ['site http://', { ...publishEnv(), NEXT_PUBLIC_SITE_URL: 'http://s15a-site.example' }],
+      ]
+      for (const [label, env] of samples) {
+        const hook = readDeployHookUrl(env)
+        const site = readSiteUrl(env)
+        const reason = !hook.ok ? hook.reason : !site.ok ? site.reason : 'none'
+        for (const extra of [[], ['--dry-run']]) {
+          const h = harness(null, { env })
+          const exit = await runCli(['publish', 'two-paths', ...extra], h.deps).catch(
+            () => 'rejected',
+          )
+          expect
+            .soft(
+              [exit, h.out, h.err, h.calls.includes('factory')],
+              `(g1) ${label} ${extra.join(' ')}`,
+            )
+            .toEqual([2, ['publish: stopped: configuration'], [`publish: ${reason}`], false])
+        }
+      }
+      const approve = harness(await newStub([]), {
+        ...stdinOf(JSON.stringify(answersOf(story))),
+        env: { SUPABASE_URL: MEDIA_ORIGIN, SUPABASE_SECRET_KEY: FAKE_KEY },
+      })
+      await runCli(approveArgv(story, ['--answers-stdin']), approve.deps)
+      expect
+        .soft(approve.calls.includes('factory'), '(g2) approve with both unset proceeds')
+        .toBe(true)
+    },
+  )
+
+  it(
+    'T15A-56 triggerHook and verify: no default; the adapters pass the hook secret and log, and now in milliseconds; no absentStoryIds (A18, A28, CRIT-17)',
+    SLOW,
+    async () => {
+      const first = await approvedStub()
+      const bare = harness(first.stub, {
+        env: publishEnv(),
+        ...tailFakes().deps,
+        triggerHook: undefined as unknown as CliDeps['triggerHook'],
+      })
+      const exitB = await runCli(['publish', 'two-paths'], bare.deps)
+      expect
+        .soft([escapes, exitB !== 0], '(g1) no default: escapes 0, a non-zero exit')
+        .toEqual([0, true])
+      const second = await approvedStub()
+      const fakes = tailFakes()
+      const h = harness(second.stub, { env: publishEnv(), ...fakes.deps })
+      const exit = await runCli(['publish', 'two-paths'], h.deps)
+      expect(exit, 'precondition: the publish exits 0').toBe(0)
+      const hook = fakes.hooks[0]
+      expect
+        .soft(
+          [fakes.hooks.length, hook?.hookUrl.reveal() === hookUrlText(), hook?.log === h.deps.log],
+          '(g2) the hook options: the secret and the run log',
+        )
+        .toEqual([1, true, true])
+      const verify = fakes.verifies[0]
+      const now = verify?.now?.()
+      expect
+        .soft(
+          [
+            verify?.siteUrl.origin,
+            verify?.expectedSeq,
+            typeof now,
+            now === h.deps.now().getTime(),
+            verify !== undefined && 'absentStoryIds' in verify,
+          ],
+          '(g3) the verify options',
+        )
+        .toEqual([SITE_URL, 2, 'number', true, false])
+    },
+  )
+
+  it(
+    'T15A-57 a throw from the hook or verify adapter after the pointer moved is internal at phase tail: exit 4, the report written, no second hook (CRIT-17)',
+    SLOW,
+    async () => {
+      const throwers: [string, ReturnType<typeof tailFakes>][] = [
+        [
+          'TypeError',
+          tailFakes(async () => {
+            throw new TypeError(hookUrlText())
+          }),
+        ],
+        [
+          'RangeError',
+          tailFakes(undefined, async () => {
+            throw new RangeError(hookUrlText())
+          }),
+        ],
+      ]
+      for (const [name, fakes] of throwers) {
+        const { stub } = await approvedStub()
+        const h = harness(stub, { env: publishEnv(), ...fakes.deps })
+        const exit = await runCli(['publish', 'two-paths', '--report-dir', reportsDir()], h.deps)
+        const report = readJson(join(reportsDir(), 'publisher-publish.json'))
+        expect
+          .soft(
+            [exit, lastLine(h.out), report?.outcome, report?.exitCode, fakes.hooks.length],
+            `(g1) a ${name} in the tail: internal at exit 4, the report written, one hook`,
+          )
+          .toEqual([4, `publish: stopped: internal ${name}`, 'internal', 4, 1])
+        expect
+          .soft(
+            channelsOf(h, 'publish').includes('S15ACANARY'),
+            `(g2) ${name}: no canary in any output`,
+          )
+          .toBe(false)
+      }
+    },
+  )
+
+  it(
+    'T15A-58 privacy through runCli: the canary key, hook URL, answers and waiver fields in no channel on success and on each refusal (A25, L20)',
+    SLOW,
+    async () => {
+      const key = ['sb', 'secret', 'S15ACANARYkey'].join('_')
+      const base = await twoPaths()
+      const file = {
+        ...waiverFileOf(base.storyId),
+        basis: 'S15ACANARYbasis',
+        notes: ['S15ACANARYnote'],
+        recordedBy: 'S15ACANARYby',
+      }
+      const waiverBytes = waiverBytesOf(file)
+      const story: TestStory = { ...base, waiverBytes, waiverSha256: await sha256Hex(waiverBytes) }
+      const stories = (await testStories()).map((s) => (s.storyId === story.storyId ? story : s))
+      const stub = await stagedStub(stories, key)
+      const env = publishEnv(key)
+      const canary = {
+        'narration-check': 'S15ACANARYnarration',
+        devices: 'S15ACANARYdevice, laptop',
+      }
+      const reports = ['--report-dir', reportsDir()]
+      const approveTexts: string[] = []
+      const publishTexts: string[] = []
+      const run = async (
+        argv: string[],
+        over: Partial<CliDeps>,
+        command: 'approve' | 'publish',
+      ) => {
+        const h = harness(stub, { env, ...over })
+        await runCli(argv, h.deps)
+        ;(command === 'approve' ? approveTexts : publishTexts).push(channelsOf(h, command))
+        return h
+      }
+      const stdinRun = (answers: Record<string, string>) =>
+        run(
+          approveArgv(story, ['--answers-stdin', ...reports]),
+          stdinOf(JSON.stringify(answers)),
+          'approve',
+        )
+      const invalid = await stdinRun({ ...answersOf(story, canary), x: 'S15ACANARYx' })
+      const incomplete = await stdinRun(answersOf(story, { ...canary, 'all-nodes-read': 'no' }))
+      const approved = await stdinRun(answersOf(story, canary))
+      const live = await run(['publish', 'two-paths', ...reports], tailFakes().deps, 'publish')
+      const failedHook = tailFakes(async () => ({
+        kind: 'failed',
+        status: null,
+        reason: 'network TypeError',
+      }))
+      const failed = await run(['publish', 'two-paths', ...reports], failedHook.deps, 'publish')
+      const malformed = harness(null, {
+        env: { ...env, VERCEL_DEPLOY_HOOK_PRODUCTION: 'https://example.com/S15ACANARYhookpath' },
+      })
+      await runCli(['publish', 'two-paths'], malformed.deps)
+      const isApprovalPost = (r: StubLogEntry) =>
+        r.method === 'POST' && r.pathname.startsWith('/storage/v1/object/masters/approvals/')
+      expect(
+        [
+          invalid.out.at(-1),
+          incomplete.out.at(-1),
+          lastLine(live.out),
+          lastLine(failed.out),
+          malformed.out.at(-1),
+        ],
+        'precondition: the runs ended as planned',
+      ).toEqual([
+        'approve: stopped: answers-invalid',
+        'approve: stopped: approval-review-incomplete',
+        'publish: live seq=2',
+        'publish: recovery: publish --snapshot 2 redeploys production as it is',
+        'publish: stopped: configuration',
+      ])
+      expect(
+        approved.out.at(-1)?.endsWith(' created') &&
+          stub.requests
+            .filter(isApprovalPost)
+            .some((r) => Buffer.from(r.body).toString('latin1').includes('S15ACANARY')),
+        'precondition: the canary answers reached the approval POST body',
+      ).toBe(true)
+      const bodies = stub.requests
+        .filter((r) => !isApprovalPost(r))
+        .map((r) => Buffer.from(r.body).toString('latin1'))
+      const text = [...approveTexts, ...publishTexts, everything(malformed), ...bodies].join('\n')
+      expect.soft(text.includes('S15ACANARY'), '(g1) no canary in any channel').toBe(false)
+    },
+  )
+
+  it(
+    'T15A-59 exit codes, stop lines and client options for approve and publish through runCli (A19, A20)',
+    SLOW,
+    async () => {
+      const story = await twoPaths()
+      const answers = () => stdinOf(JSON.stringify(answersOf(story)))
+      const stdinArgv = approveArgv(story, ['--answers-stdin'])
+      const codes: [string, number, string | null][] = []
+      const approved = await approvedStub()
+      codes.push(['approve approved', 0, null])
+      const notStaged = harness(await newStub([]), answers())
+      codes.push([
+        'approve not-staged',
+        await runCli(stdinArgv, notStaged.deps),
+        lastLine(notStaged.out),
+      ])
+      const darwin = harness(null, { ...answers(), platform: 'darwin' })
+      codes.push(['approve run-context-refused', await runCli(stdinArgv, darwin.deps), null])
+      const racedStub = await stagedStub()
+      const theirs = await approvalRecordOf(story, { on: '2026-11-20' })
+      const recordPath = `approvals/${story.storyId}/${story.packageSha256}.json`
+      const raced = harness(racedStub, {
+        ...answers(),
+        createClient: (opts) =>
+          createStorageClient({
+            supabaseUrl: racedStub.origin,
+            secretKey: opts.secretKey,
+            fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+              const url = new URL(input instanceof Request ? input.url : String(input))
+              if (init?.method === 'POST' && url.pathname.endsWith(recordPath)) {
+                racedStub.put('masters', recordPath, theirs.bytes, 'application/json')
+              }
+              return globalThis.fetch(input, init)
+            }) as typeof fetch,
+          }),
+      })
+      codes.push([
+        'approve approval-raced',
+        await runCli(stdinArgv, raced.deps),
+        lastLine(raced.out),
+      ])
+      const published = harness(approved.stub, { env: publishEnv(), ...tailFakes().deps })
+      codes.push([
+        'publish published',
+        await runCli(['publish', 'two-paths'], published.deps),
+        null,
+      ])
+      const unapproved = harness(await stagedStub(), { env: publishEnv(), ...tailFakes().deps })
+      codes.push([
+        'publish approval-missing',
+        await runCli(['publish', 'two-paths'], unapproved.deps),
+        lastLine(unapproved.out),
+      ])
+      const uploadStub = (await approvedStub()).stub
+      uploadStub.override('POST', '/storage/v1/object/content/catalogue/snapshots/2.json', {
+        kind: 'answer',
+        status: 400,
+        body: '{"statusCode":"400"}',
+      })
+      const upload = harness(uploadStub, { env: publishEnv(), ...tailFakes().deps })
+      codes.push([
+        'publish upload-failed',
+        await runCli(['publish', 'two-paths'], upload.deps),
+        lastLine(upload.out),
+      ])
+      const hookStub = (await approvedStub()).stub
+      const failing = tailFakes(async () => ({
+        kind: 'failed',
+        status: 500,
+        reason: 'non-2xx status',
+      }))
+      const hook = harness(hookStub, { env: publishEnv(), ...failing.deps })
+      codes.push([
+        'publish hook-failed',
+        await runCli(['publish', 'two-paths'], hook.deps),
+        hook.out.at(-2) ?? '',
+      ])
+      expect
+        .soft(
+          codes.map(([label, exit]) => [label, exit]),
+          '(g1) the exits',
+        )
+        .toEqual([
+          ['approve approved', 0],
+          ['approve not-staged', 1],
+          ['approve run-context-refused', 2],
+          ['approve approval-raced', 3],
+          ['publish published', 0],
+          ['publish approval-missing', 1],
+          ['publish upload-failed', 3],
+          ['publish hook-failed', 4],
+        ])
+      expect
+        .soft(
+          codes.filter(([, , line]) => line !== null).map(([, , line]) => line),
+          '(g1) the stop lines',
+        )
+        .toEqual([
+          'approve: stopped: not-staged two-paths',
+          'approve: stopped: approval-raced two-paths',
+          'publish: stopped: approval-missing two-paths',
+          'publish: stopped: upload-failed',
+          'publish: stopped: hook-failed',
+        ])
+      const timed = harness(await newStub([]), {
+        env: publishEnv(),
+        ...tailFakes().deps,
+        ...answers(),
+      })
+      await runCli(['publish', 'two-paths', '--timeout-ms', '5000'], timed.deps)
+      await runCli(approveArgv(story, ['--answers-stdin', '--timeout-ms', '5000']), timed.deps)
+      const options = [...published.options, ...notStaged.options, ...timed.options]
+      expect
+        .soft(
+          options.map((o) => [o.supabaseUrl.origin, o.secretKey instanceof Secret, o.timeoutMs]),
+          '(g2) the factory options: the origin, a Secret, the timeout',
+        )
+        .toEqual([
+          [MEDIA_ORIGIN, true, 180_000],
+          [MEDIA_ORIGIN, true, 180_000],
+          [MEDIA_ORIGIN, true, 5000],
+          [MEDIA_ORIGIN, true, 5000],
+        ])
+    },
+  )
+
+  it(
+    'T15A-69 the real triggerDeployHook through cli.ts adapter: one POST with buildCache=false, a failure is hook-failed with no canary in any channel, a triggered hook reaches verify (A18, A25, D15-11, AUD-7)',
+    SLOW,
+    async () => {
+      const { stub } = await approvedStub()
+      const sent: { url: URL; method: string | undefined }[] = []
+      let answer: () => Promise<Response> = async () =>
+        new Response('{"job":{"id":"j1"}}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      const fake = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input))
+        sent.push({ url, method: init?.method })
+        return answer()
+      }) as typeof fetch
+      const verifies: VerifyOptions[] = []
+      const deps: Partial<CliDeps> = {
+        env: publishEnv(),
+        triggerHook: (o) => triggerDeployHook({ ...o, fetchImpl: fake }),
+        verify: async (o) => {
+          verifies.push(o)
+          return liveOutcome(o.expectedSeq)
+        },
+      }
+      const ok = harness(stub, deps)
+      const exitOk = await runCli(['publish', 'two-paths', '--report-dir', reportsDir()], ok.deps)
+      expect(
+        stub.requests.some(
+          (r) => r.method === 'POST' && r.pathname.endsWith('/catalogue/production.json'),
+        ),
+        'precondition: the publish reached the tail (the production POST)',
+      ).toBe(true)
+      const target = new URL(hookUrlText())
+      const one = sent[0]
+      expect
+        .soft(
+          [
+            sent.length,
+            one?.method,
+            one?.url.searchParams.get('buildCache'),
+            one?.url.origin === target.origin,
+            one?.url.pathname === target.pathname,
+          ],
+          '(g1) one POST with buildCache=false to the hook URL',
+        )
+        .toEqual([1, 'POST', 'false', true, true])
+      expect
+        .soft([exitOk, verifies.map((v) => v.expectedSeq)], '(g3) triggered: verify once with 2')
+        .toEqual([0, [2]])
+      answer = async () => {
+        throw new Error(hookUrlText())
+      }
+      const failed = harness(stub, deps)
+      const exitF = await runCli(
+        ['publish', 'two-paths', '--report-dir', reportsDir()],
+        failed.deps,
+      )
+      expect
+        .soft(
+          [exitF, failed.out.slice(-2), verifies.length],
+          '(g2) a failed hook: exit 4, the stop and recovery lines, no verify',
+        )
+        .toEqual([
+          4,
+          [
+            'publish: stopped: hook-failed',
+            'publish: recovery: publish --snapshot 2 redeploys production as it is',
+          ],
+          1,
+        ])
+      expect
+        .soft(channelsOf(failed, 'publish').includes('S15ACANARY'), '(g2) no canary in any output')
+        .toBe(false)
     },
   )
 })

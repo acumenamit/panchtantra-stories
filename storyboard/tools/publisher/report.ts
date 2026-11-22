@@ -1,11 +1,15 @@
 // The publisher's outcome codes, printed lines and local reports (design
-// migration-input/p1-step14-design.md §4.8, §4.9, §5, D14-18; P1-8c, Step 14). EXIT_BY_CODE is the
+// migration-input/p1-step14-design.md §4.8, §4.9, §5, D14-18; P1-8c, Step 14; and
+// migration-input/p1-step15a-design.md §4.7, §4.8, §5, D15-19, D15-22, D15-28, D15-29; P1-8d part
+// a, Step 15a: the approve and publish codes, lines and sections, the phase tail, the real-path
+// half of the report-dir guard and the writer's write-time re-checks). EXIT_BY_CODE is the
 // one source of the codes and the exits each may carry (§5); a code's exit follows the phase it
 // occurs in. Every formatter and the report builder validate each field (a StoryId, a 64-hex sha, a
 // safe integer, a listed code, a fixed word) and throw a TypeError naming the field, never its
 // value; so no line or report can carry a path, a message, a key or a private waiver field. The
-// writer creates the report dir, writes each file to a temp name in the same folder, then renames
-// it; a failed write is a result, never a throw.
+// writer takes only the checked real dir (a CheckedReportDir, which checkedReportDir alone makes),
+// creates it, re-checks its real path, then per file removes a stale temp entry, creates the temp
+// exclusively, re-checks and renames; a failed write is a result, never a throw.
 import { mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { isSafeStoragePath } from '../../src/core/content/gates'
@@ -13,8 +17,14 @@ import { LOCALE_CODES } from '../../src/core/locales'
 import { NodeId, StoryId } from '../../src/core/package/v1'
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4
-/** end 0; local and plan 1 (no Storage write sent); configuration 2; commit 3; pointer 4 (§5). */
-export type Phase = 'end' | 'local' | 'plan' | 'configuration' | 'commit' | 'pointer'
+/**
+ * end 0; local and plan 1 (no Storage write sent); configuration 2; commit 3; pointer 4 (§5); tail
+ * 4 (Step 15a: after the production pointer moved, or after an unchanged plan, while the hook and
+ * verify run).
+ */
+export type Phase = 'end' | 'local' | 'plan' | 'configuration' | 'commit' | 'pointer' | 'tail'
+/** The publisher's commands that print lines and write reports (help prints the usage only). */
+export type Command = 'validate' | 'stage' | 'approve' | 'publish'
 
 const PHASE_EXIT: ReadonlyMap<string, ExitCode> = new Map<string, ExitCode>([
   ['end', 0],
@@ -23,6 +33,7 @@ const PHASE_EXIT: ReadonlyMap<string, ExitCode> = new Map<string, ExitCode>([
   ['configuration', 2],
   ['commit', 3],
   ['pointer', 4],
+  ['tail', 4],
 ])
 
 const group = (exits: readonly ExitCode[], codes: readonly string[]) =>
@@ -104,6 +115,51 @@ export const EXIT_BY_CODE: ReadonlyMap<string, readonly ExitCode[]> = new Map([
     ['pointer-not-moved', 'pointer-superseded', 'pointer-unconfirmed', 'pointer-raced'],
   ),
   ...group([1, 3, 4], ['client-refused', 'internal']),
+  // Step 15a §5: 35 new codes (6 at exit 0, 23 at exit 1, answers-missing at 1 and 2,
+  // run-context-refused at 2, 2 at exit 3, 2 at exit 4).
+  ...group(
+    [0],
+    [
+      'approved',
+      'already-approved',
+      'already-published',
+      'published',
+      'rebuilt',
+      'verify-superseded',
+    ],
+  ),
+  ...group(
+    [1],
+    [
+      'answers-invalid',
+      'not-staged',
+      'approval-package-changed',
+      'staged-entry-superseded',
+      'staged-entry-invalid',
+      'approve-origin-not-migration',
+      'approval-review-incomplete',
+      'approval-missing',
+      'approval-invalid',
+      'approval-rule-set',
+      'approval-waiver-mismatch',
+      'approval-sha-mismatch',
+      'waiver-keys-differ',
+      'object-missing',
+      'carried-package-gate',
+      'production-missing',
+      'production-entry-unapproved',
+      'feature-not-in-production',
+      'feature-media-incomplete',
+      'rollback-seq-not-older',
+      'rollback-snapshot-missing',
+      'rollback-snapshot-invalid',
+      'rollback-entry-unapproved',
+    ],
+  ),
+  ...group([1, 2], ['answers-missing']),
+  ...group([2], ['run-context-refused']),
+  ...group([3], ['approval-raced', 'approval-unconfirmed']),
+  ...group([4], ['hook-failed', 'verify-timeout']),
 ])
 
 export const REVIEW_LINE = 'review: corepack pnpm preview:staging'
@@ -131,8 +187,8 @@ const isSha = (value: unknown): value is string => typeof value === 'string' && 
 const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const isSeq = (value: unknown): value is number => isCount(value) && value >= 1
-const isCommand = (value: unknown): value is 'validate' | 'stage' =>
-  value === 'validate' || value === 'stage'
+const isCommand = (value: unknown): value is Command =>
+  value === 'validate' || value === 'stage' || value === 'approve' || value === 'publish'
 const oneOf = (value: unknown, words: readonly string[]): value is string =>
   typeof value === 'string' && words.includes(value)
 const isErrorName = (value: unknown): value is string =>
@@ -284,6 +340,162 @@ export function formatPointerMoved(seq: number): string {
   return `stage: staging pointer seq=${seq} moved (read back, post-check clean)`
 }
 
+// ---- approve and publish lines (Step 15a §4.7) ----
+
+/** The six answer keys (answers.ts reads them; a refusal line may name one, never a value). */
+const ANSWER_KEYS: readonly string[] = [
+  'languages-read',
+  'all-nodes-read',
+  'images-viewed',
+  'narration-check',
+  'devices',
+  'checklist-complete',
+]
+const APPROVE_STATES = ['new', 'already-approved', 'already-published'] as const
+const PUBLISH_STORY_STATES = ['new', 'replaced', 'in-production'] as const
+const idOrNone = (id: string | null): string => (id === null ? 'none' : id)
+
+export interface ApprovePlanLine {
+  readonly storyId: string
+  readonly packageSha256: string
+  readonly version: number
+  /** The staged entry's waiverFileSha256; null when the entry has no block. */
+  readonly waiverFileSha256: string | null
+  readonly state: (typeof APPROVE_STATES)[number]
+}
+
+/** `approve: <id> package=<sha12> version=<v> waivers=<sha12|none> state=<state>`. */
+export function formatApprovePlan(line: ApprovePlanLine): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isSha(line.packageSha256), 'packageSha256')
+  field(isSeq(line.version), 'version')
+  field(line.waiverFileSha256 === null || isSha(line.waiverFileSha256), 'waiverFileSha256')
+  field(oneOf(line.state, APPROVE_STATES), 'state')
+  const waivers = line.waiverFileSha256 === null ? 'none' : sha12(line.waiverFileSha256)
+  return `approve: ${line.storyId} package=${sha12(line.packageSha256)} version=${line.version} waivers=${waivers} state=${line.state}`
+}
+
+/** `approve: record sha256=<sha12> created|identical|exists|planned`. */
+export function formatApprovalRecord(line: {
+  readonly sha256: string
+  readonly result: 'created' | 'identical' | 'exists' | 'planned'
+}): string {
+  field(isSha(line.sha256), 'sha256')
+  field(oneOf(line.result, ['created', 'identical', 'exists', 'planned']), 'result')
+  return `approve: record sha256=${sha12(line.sha256)} ${line.result}`
+}
+
+/** `approve: answer <key> refused`: the key is one of the six, never a value. */
+export function formatAnswerRefused(key: string): string {
+  field(oneOf(key, ANSWER_KEYS), 'answer key')
+  return `approve: answer ${key} refused`
+}
+
+export interface PublishStoryLine {
+  readonly storyId: string
+  readonly packageSha256: string
+  readonly version: number
+  /** The approvalSha256 the entry carries in N+1 (production's for in-production); null for none. */
+  readonly approvalSha256: string | null
+  readonly state: (typeof PUBLISH_STORY_STATES)[number]
+}
+
+/** `publish: <id> package=<sha12> version=<v> approval=<sha12|none> state=<state>`. */
+export function formatPublishStory(line: PublishStoryLine): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isSha(line.packageSha256), 'packageSha256')
+  field(isSeq(line.version), 'version')
+  field(line.approvalSha256 === null || isSha(line.approvalSha256), 'approvalSha256')
+  field(oneOf(line.state, PUBLISH_STORY_STATES), 'state')
+  const approval = line.approvalSha256 === null ? 'none' : sha12(line.approvalSha256)
+  return `publish: ${line.storyId} package=${sha12(line.packageSha256)} version=${line.version} approval=${approval} state=${line.state}`
+}
+
+/** `publish: feature <id|none> state=set|cleared|kept|checked`. */
+export function formatFeature(line: {
+  readonly storyId: string | null
+  readonly state: 'set' | 'cleared' | 'kept' | 'checked'
+}): string {
+  field(line.storyId === null || isStoryId(line.storyId), 'storyId')
+  field(oneOf(line.state, ['set', 'cleared', 'kept', 'checked']), 'state')
+  return `publish: feature ${idOrNone(line.storyId)} state=${line.state}`
+}
+
+/** A refused feature: `publish: feature <id> A001=<n> A005=<n> A006=<n>` (featured.ts's checks). */
+export function formatFeatureCounts(line: {
+  readonly storyId: string
+  readonly A001: number
+  readonly A005: number
+  readonly A006: number
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  for (const key of ['A001', 'A005', 'A006'] as const) field(isCount(line[key]), key)
+  return `publish: feature ${line.storyId} A001=${line.A001} A005=${line.A005} A006=${line.A006}`
+}
+
+export interface PublishPlanLine {
+  readonly kind: 'publish' | 'rollback'
+  /** N+1, or null when the plan is unchanged. */
+  readonly seq: number | null
+  readonly stories: number
+  readonly production: number | null
+  readonly staging: number | null
+  readonly featured: string | null
+  /** The rollback's `<seq>`; null for a publish. */
+  readonly from: number | null
+}
+
+/** `publish: plan kind=… seq=<N|none> stories=… production=… staging=… featured=… from=…`. */
+export function formatPublishPlan(line: PublishPlanLine): string {
+  field(oneOf(line.kind, ['publish', 'rollback']), 'kind')
+  for (const key of ['seq', 'production', 'staging', 'from'] as const) {
+    field(line[key] === null || isSeq(line[key]), key)
+  }
+  field(isCount(line.stories), 'stories')
+  field(line.featured === null || isStoryId(line.featured), 'featured')
+  return `publish: plan kind=${line.kind} seq=${seqOrNone(line.seq)} stories=${line.stories} production=${seqOrNone(line.production)} staging=${seqOrNone(line.staging)} featured=${idOrNone(line.featured)} from=${seqOrNone(line.from)}`
+}
+
+/** `publish: snapshot seq=<N> sha256=<sha12> created|identical` (after the read-back). */
+export function formatPublishSnapshot(line: {
+  readonly seq: number
+  readonly sha256: string
+  readonly result: 'created' | 'identical'
+}): string {
+  field(isSeq(line.seq), 'seq')
+  field(isSha(line.sha256), 'sha256')
+  field(oneOf(line.result, ['created', 'identical']), 'result')
+  return `publish: snapshot seq=${line.seq} sha256=${sha12(line.sha256)} ${line.result}`
+}
+
+/** `publish: production pointer seq=<N> moved (read back, post-check clean)`. */
+export function formatProductionMoved(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `publish: production pointer seq=${seq} moved (read back, post-check clean)`
+}
+
+/** `publish: live seq=<N>`: verify confirmed the expected seq. */
+export function formatLive(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `publish: live seq=${seq}`
+}
+
+/** `publish: superseded seq=<N>`: verify saw a later seq live. */
+export function formatSuperseded(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `publish: superseded seq=${seq}`
+}
+
+/** Printed after a verify timeout, before the recovery line (D15-11; a fixed sentence). */
+export const VERIFY_TIMEOUT_HINT =
+  'publish: verify timed out; if a Vercel Instant Rollback is active, production stays on it until Undo Rollback (spec §8)'
+
+/** After hook-failed or verify-timeout (CRIT-8): the redeploy of production as it is. */
+export function formatRecovery(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `publish: recovery: publish --snapshot ${seq} redeploys production as it is`
+}
+
 export interface StopDetail {
   readonly storyId?: string
   /** client-refused only: the fixed text of a refusal isStorageRefusal accepted. */
@@ -293,14 +505,10 @@ export interface StopDetail {
 }
 
 /**
- * `<command>: stopped: <code>` or `… <code> <id>`; pointer-raced adds `re-run stage`,
+ * `<command>: stopped: <code>` or `… <code> <id>`; pointer-raced adds `re-run <command>`,
  * client-refused the refusal's fixed text, internal the class name only (§4.8).
  */
-export function formatStopped(
-  command: 'validate' | 'stage',
-  code: string,
-  detail: StopDetail = {},
-): string {
+export function formatStopped(command: Command, code: string, detail: StopDetail = {}): string {
   field(isCommand(command), 'command')
   field(isCode(code) && !exitsOf(code).includes(0), 'code')
   let line = `${command}: stopped: ${code}`
@@ -320,24 +528,42 @@ export function formatStopped(
   } else {
     field(detail.errorName === undefined, 'error name')
   }
-  if (code === 'pointer-raced') line += ' re-run stage'
+  if (code === 'pointer-raced') line += ` re-run ${command}`
   return line
 }
 
 /** `<command>: report-unwritten` (stderr). */
-export function formatReportUnwritten(command: 'validate' | 'stage'): string {
+export function formatReportUnwritten(command: Command): string {
   field(isCommand(command), 'command')
   return `${command}: report-unwritten`
 }
 
 /** The stderr reason for a report dir whose real path lies in the site (D14-25, SEC1-1). */
-export function formatReportDirRefused(command: 'validate' | 'stage'): string {
+export function formatReportDirRefused(command: Command): string {
   field(isCommand(command), 'command')
   return `${command}: report-dir refused: its real path is at or under public/ or app/ of the storyboard folder`
 }
 
+/**
+ * The stderr reason for a report dir whose real path is not on a local drive (D15-29): a mapped
+ * drive or a link to a share answers `\\host\share\…`, a volume without a letter `Volume{…}\…`.
+ */
+export function formatReportDirNotLocal(command: Command, given: boolean): string {
+  field(isCommand(command), 'command')
+  field(typeof given === 'boolean', 'given')
+  return given
+    ? `${command}: report-dir refused: its real path is not on a local drive`
+    : `${command}: report-dir refused: the default report dir's real path is not on a local drive; pass a local --report-dir`
+}
+
+/** The stderr reason when the real path of the storyboard folder's public/ or app/ is not local. */
+export function formatSiteNotLocal(command: Command): string {
+  field(isCommand(command), 'command')
+  return `${command}: report-dir refused: the storyboard folder's real path is not on a local drive; run from a local checkout`
+}
+
 /** `<command>: <message>` for story-checks' fixed R24 message (story, check and locale only). */
-export function formatStoryMessage(command: 'validate' | 'stage', message: string): string {
+export function formatStoryMessage(command: Command, message: string): string {
   field(isCommand(command), 'command')
   const match = STORY_MESSAGE.exec(message)
   field(match !== null && isStoryId(match[1]), 'story message')
@@ -410,7 +636,10 @@ export interface ReportPlan {
 
 export interface ReportInput {
   readonly command: string
-  /** validate for validate; dry-run or stage for stage. */
+  /**
+   * validate for validate; stage or dry-run for stage; approve or dry-run for approve; publish or
+   * dry-run for publish (MODES).
+   */
   readonly mode: string
   readonly startedAt: string
   readonly finishedAt: string
@@ -425,8 +654,98 @@ export interface ReportInput {
   readonly ruleSetRef: string
   readonly privateWordLists: string
   readonly stories: readonly ReportStory[]
-  /** Stage only (null when the run stopped before the plan); never set for validate. */
+  /** Stage only (null when the run stopped before the plan); never set for the other commands. */
   readonly plan?: ReportPlan | null
+  /** Approve only (null when the run stopped before the plan); never set for the others. */
+  readonly approval?: ReportApproval | null
+  /** Publish only (null when the run stopped before the plan); never set for the others. */
+  readonly publish?: ReportPublish | null
+}
+
+/** The approve report's section (§4.8): each field null until known; never an answer. */
+export interface ReportApproval {
+  readonly storyId: string | null
+  readonly packageSha256: string | null
+  readonly version: number | null
+  readonly waiverFileSha256: string | null
+  readonly state: (typeof APPROVE_STATES)[number] | null
+  readonly approvalSha256: string | null
+}
+
+export interface ReportPublishNamed {
+  readonly storyId: string
+  readonly packageSha256: string
+  readonly version: number
+  /** The approvalSha256 the entry carries in N+1 (production's for a story already in production). */
+  readonly approvalSha256: string | null
+  readonly state: (typeof PUBLISH_STORY_STATES)[number]
+}
+
+/** An entry of N+1 (every entry of a production snapshot carries its approval). */
+export interface ReportPublishStory {
+  readonly storyId: string
+  readonly packageSha256: string
+  readonly approvalSha256: string
+  readonly source: 'production' | 'published' | 'rollback'
+}
+
+/** The publish report's section (§4.8): ids, hashes, seqs and fixed words only. */
+export interface ReportPublish {
+  readonly kind: 'publish' | 'rollback'
+  /** The rollback's `<seq>`; null for a publish. */
+  readonly from: number | null
+  /** N+1; null when the plan is unchanged or the run stopped before it. */
+  readonly seq: number | null
+  readonly productionSeq: number | null
+  readonly stagingSeq: number | null
+  readonly featuredBefore: string | null
+  readonly featuredAfter: string | null
+  readonly named: readonly ReportPublishNamed[]
+  readonly stories: readonly ReportPublishStory[]
+  readonly snapshotSha256: string | null
+  readonly pointerSha256: string | null
+  readonly hook: 'not-run' | 'triggered' | 'failed'
+  readonly verify: 'not-run' | 'live' | 'superseded' | 'timeout'
+  readonly liveSeq: number | null
+}
+
+/** Every key a ReportInput may hold; any other own key is a TypeError (nothing extra is written). */
+const INPUT_KEYS: readonly string[] = [
+  'command',
+  'mode',
+  'startedAt',
+  'finishedAt',
+  'outcome',
+  'exitCode',
+  'writes',
+  'uploaded',
+  'skipped',
+  'orphans',
+  'superseded',
+  'ruleSetRef',
+  'privateWordLists',
+  'stories',
+  'plan',
+  'approval',
+  'publish',
+]
+const MODES: Readonly<Record<Command, readonly string[]>> = {
+  validate: ['validate'],
+  stage: ['dry-run', 'stage'],
+  approve: ['approve', 'dry-run'],
+  publish: ['publish', 'dry-run'],
+}
+
+/** A plain object whose own keys are exactly `keys` (a TypeError naming `name` otherwise). */
+function exactKeys(value: unknown, keys: readonly string[], name: string): void {
+  field(value !== null && typeof value === 'object' && !Array.isArray(value), name)
+  const own = Object.keys(value as object)
+  field(own.length === keys.length && own.every((key) => keys.includes(key)), `${name} keys`)
+}
+
+const storyIdOrNull = (value: unknown, name: string): string | null => {
+  field(value === null || isStoryId(value), name)
+  return value as string | null
 }
 
 const shaOrNull = (value: unknown, name: string): string | null => {
@@ -525,13 +844,100 @@ function reportPlan(plan: ReportPlan): Record<string, unknown> {
   }
 }
 
+const APPROVAL_KEYS = [
+  'storyId',
+  'packageSha256',
+  'version',
+  'waiverFileSha256',
+  'state',
+  'approvalSha256',
+]
+
+function reportApproval(approval: ReportApproval): Record<string, unknown> {
+  exactKeys(approval, APPROVAL_KEYS, 'approval')
+  field(approval.state === null || oneOf(approval.state, APPROVE_STATES), 'approval state')
+  return {
+    storyId: storyIdOrNull(approval.storyId, 'approval storyId'),
+    packageSha256: shaOrNull(approval.packageSha256, 'approval packageSha256'),
+    version: seqOrNull(approval.version, 'approval version'),
+    waiverFileSha256: shaOrNull(approval.waiverFileSha256, 'approval waiverFileSha256'),
+    state: approval.state,
+    approvalSha256: shaOrNull(approval.approvalSha256, 'approval approvalSha256'),
+  }
+}
+
+const PUBLISH_KEYS = [
+  'kind',
+  'from',
+  'seq',
+  'productionSeq',
+  'stagingSeq',
+  'featuredBefore',
+  'featuredAfter',
+  'named',
+  'stories',
+  'snapshotSha256',
+  'pointerSha256',
+  'hook',
+  'verify',
+  'liveSeq',
+]
+
+function reportPublish(publish: ReportPublish): Record<string, unknown> {
+  exactKeys(publish, PUBLISH_KEYS, 'publish')
+  field(oneOf(publish.kind, ['publish', 'rollback']), 'publish kind')
+  field(oneOf(publish.hook, ['not-run', 'triggered', 'failed']), 'publish hook')
+  field(oneOf(publish.verify, ['not-run', 'live', 'superseded', 'timeout']), 'publish verify')
+  field(Array.isArray(publish.named) && Array.isArray(publish.stories), 'publish lists')
+  return {
+    kind: publish.kind,
+    from: seqOrNull(publish.from, 'publish from'),
+    seq: seqOrNull(publish.seq, 'publish seq'),
+    productionSeq: seqOrNull(publish.productionSeq, 'publish productionSeq'),
+    stagingSeq: seqOrNull(publish.stagingSeq, 'publish stagingSeq'),
+    featuredBefore: storyIdOrNull(publish.featuredBefore, 'publish featuredBefore'),
+    featuredAfter: storyIdOrNull(publish.featuredAfter, 'publish featuredAfter'),
+    named: publish.named.map((named) => {
+      exactKeys(named, ['storyId', 'packageSha256', 'version', 'approvalSha256', 'state'], 'named')
+      field(isStoryId(named.storyId) && isSha(named.packageSha256), 'named story')
+      field(isSeq(named.version), 'named version')
+      field(oneOf(named.state, PUBLISH_STORY_STATES), 'named state')
+      return {
+        storyId: named.storyId,
+        packageSha256: named.packageSha256,
+        version: named.version,
+        approvalSha256: shaOrNull(named.approvalSha256, 'named approvalSha256'),
+        state: named.state,
+      }
+    }),
+    stories: publish.stories.map((story) => {
+      exactKeys(story, ['storyId', 'packageSha256', 'approvalSha256', 'source'], 'publish story')
+      field(isStoryId(story.storyId) && isSha(story.packageSha256), 'publish story')
+      field(isSha(story.approvalSha256), 'publish story approvalSha256')
+      field(oneOf(story.source, ['production', 'published', 'rollback']), 'publish story source')
+      return {
+        storyId: story.storyId,
+        packageSha256: story.packageSha256,
+        approvalSha256: story.approvalSha256,
+        source: story.source,
+      }
+    }),
+    snapshotSha256: shaOrNull(publish.snapshotSha256, 'publish snapshotSha256'),
+    pointerSha256: shaOrNull(publish.pointerSha256, 'publish pointerSha256'),
+    hook: publish.hook,
+    verify: publish.verify,
+    liveSeq: seqOrNull(publish.liveSeq, 'publish liveSeq'),
+  }
+}
+
 /** The report's JSON text and its Markdown rendering; a TypeError on any field outside the rules. */
 export function buildReport(input: ReportInput): { readonly json: string; readonly md: string } {
   field(isCommand(input.command), 'command')
   field(
-    oneOf(input.mode, input.command === 'validate' ? ['validate'] : ['dry-run', 'stage']),
-    'mode',
+    Object.keys(input).every((key) => INPUT_KEYS.includes(key)),
+    'input keys',
   )
+  field(isCommand(input.command) && oneOf(input.mode, MODES[input.command]), 'mode')
   field(ISO_MS.test(input.startedAt) && ISO_MS.test(input.finishedAt), 'timestamps')
   field(
     isCode(input.outcome) && exitsOf(input.outcome).some((exit) => exit === input.exitCode),
@@ -553,6 +959,25 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
   field(RULE_SET_REF.test(input.ruleSetRef), 'ruleSetRef')
   field(oneOf(input.privateWordLists, ['loaded', 'not loaded']), 'privateWordLists')
   field(input.command === 'stage' ? input.plan !== undefined : input.plan === undefined, 'plan')
+  field(
+    input.command === 'approve' ? input.approval !== undefined : input.approval === undefined,
+    'approval',
+  )
+  field(
+    input.command === 'publish' ? input.publish !== undefined : input.publish === undefined,
+    'publish',
+  )
+  if (input.command === 'approve' || input.command === 'publish') {
+    // §D15-19: approve and publish carry no stories, objects or private word lists.
+    field(
+      input.stories.length === 0 &&
+        input.uploaded.length === 0 &&
+        input.skipped.length === 0 &&
+        input.superseded.length === 0,
+      'lists for approve and publish',
+    )
+    field(input.privateWordLists === 'not loaded', 'privateWordLists for approve and publish')
+  }
   const report: Record<string, unknown> = {
     command: input.command,
     mode: input.mode,
@@ -573,6 +998,12 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
     stories: input.stories.map(reportStory),
   }
   if (input.command === 'stage') report.plan = input.plan ? reportPlan(input.plan) : null
+  if (input.command === 'approve') {
+    report.approval = input.approval == null ? null : reportApproval(input.approval)
+  }
+  if (input.command === 'publish') {
+    report.publish = input.publish == null ? null : reportPublish(input.publish)
+  }
   return { json: `${JSON.stringify(report, null, 2)}\n`, md: renderMarkdown(report) }
 }
 
@@ -720,6 +1151,59 @@ function renderMarkdown(report: Record<string, unknown>): string {
       )
     }
   }
+  const approval = report.approval as Record<string, unknown> | null | undefined
+  if (approval !== undefined) {
+    lines.push('', '## Approval', '')
+    if (approval === null) {
+      lines.push('No approval data: the run stopped before the plan.')
+    } else {
+      lines.push(
+        ...table(
+          ['story', 'package', 'version', 'waiver file', 'state', 'approval record'],
+          [APPROVAL_KEYS.map((key) => approval[key])],
+        ),
+      )
+    }
+  }
+  type Rows = Record<string, unknown>[]
+  const publish = report.publish as
+    (Record<string, unknown> & { named: Rows; stories: Rows }) | null | undefined
+  if (publish !== undefined) {
+    lines.push('', '## Publish', '')
+    if (publish === null) {
+      lines.push('No publish data: the run stopped before the plan.')
+    } else {
+      lines.push(
+        ...table(
+          ['field', 'value'],
+          PUBLISH_KEYS.filter((key) => key !== 'named' && key !== 'stories').map((key) => [
+            key,
+            publish[key],
+          ]),
+        ),
+        '',
+        '### Named stories',
+        '',
+        ...table(
+          ['story', 'package', 'version', 'approval', 'state'],
+          publish.named.map((s) => [
+            s.storyId,
+            s.packageSha256,
+            s.version,
+            s.approvalSha256,
+            s.state,
+          ]),
+        ),
+        '',
+        '### Snapshot stories',
+        '',
+        ...table(
+          ['story', 'package', 'approval', 'source'],
+          publish.stories.map((s) => [s.storyId, s.packageSha256, s.approvalSha256, s.source]),
+        ),
+      )
+    }
+  }
   return `${lines.join('\n')}\n`
 }
 
@@ -743,58 +1227,162 @@ function realPathOf(path: string): string {
 }
 
 /**
- * True when the report dir's real path is `<storyboardRoot>/public` or `/app`, or under either
- * (D14-25, SEC1-1): both sides through realPathOf, without regard to case on win32. args.ts already
- * refused the string forms; this sees a cwd reached through a junction, a link or a subst drive,
- * and a link inside the report dir's existing part. stage.ts asks it before any other work.
+ * True only for a drive-letter absolute path (`X:\`) or one with exactly one leading `/` (D15-29).
+ * realpathSync.native turns a mapped drive or a link to a share into `\\host\share\…` and a volume
+ * without a letter into `Volume{…}\…`, which no in-site compare can place. No platform argument:
+ * tests inject win32 on Linux, where a real path starts with one `/`; a win32 real path never does.
  */
-export function reportDirInSite(dir: string, storyboardRoot: string, platform: string): boolean {
-  const fold = (path: string) => (platform === 'win32' ? path.toLowerCase() : path)
-  const target = fold(realPathOf(dir))
-  return ['public', 'app'].some((name) => {
-    const base = fold(realPathOf(join(storyboardRoot, name)))
-    return target === base || target.startsWith(base + sep)
+export function isLocalRealPath(path: string): boolean {
+  return /^[A-Za-z]:\\/.test(path) || /^\/(?!\/)/.test(path) || path === '/'
+}
+
+/** The storyboard folder the report dir is compared with, and the platform of the run. */
+export interface ReportSite {
+  readonly storyboardRoot: string
+  readonly platform: string
+}
+
+/** A report dir's real path that passed the whole verdict; only checkedReportDir makes one. */
+export type CheckedReportDir = string & { readonly __brand: 'CheckedReportDir' }
+export type ReportDirRefusal = 'in-site' | 'not-local' | 'site-not-local'
+
+const SITE_FOLDERS = ['public', 'app'] as const
+/** win32 folds as NTFS's upcase table does for U+0131 and U+017F (D15-28); posix keeps case. */
+const foldFor = (platform: string) => (path: string) =>
+  platform === 'win32' ? path.toUpperCase().toLowerCase() : path
+const inSiteOf = (real: string, bases: readonly string[], platform: string): boolean => {
+  const fold = foldFor(platform)
+  const target = fold(real)
+  return bases.some((base) => {
+    const folded = fold(base)
+    return target === folded || target.startsWith(folded + sep)
   })
 }
 
+/**
+ * The one real-path verdict (D15-22, D15-29), in order: the report dir's real path not local;
+ * public/'s or app/'s real path not local; the real path at or under public/ or app/ (D14-25,
+ * SEC1-1: a cwd through a junction, a link or a subst drive, an 8.3 or other-case name). The dir's
+ * real path is read once per verdict.
+ */
+function realDirVerdict(
+  dir: string,
+  site: ReportSite,
+): { readonly verdict: ReportDirRefusal | 'ok'; readonly real: string } {
+  const real = realPathOf(dir)
+  if (!isLocalRealPath(real)) return { verdict: 'not-local', real }
+  const bases = SITE_FOLDERS.map((name) => realPathOf(join(site.storyboardRoot, name)))
+  if (!bases.every(isLocalRealPath)) return { verdict: 'site-not-local', real }
+  if (inSiteOf(real, bases, site.platform)) return { verdict: 'in-site', real }
+  return { verdict: 'ok', real }
+}
+
+/**
+ * True when the report dir's real path is `<storyboardRoot>/public` or `/app`, or under either
+ * (D14-25, SEC1-1): both sides through realPathOf, folded on win32 (D15-28). args.ts already
+ * refused the string forms; this sees a cwd reached through a junction, a link or a subst drive,
+ * and a link inside the report dir's existing part. checkedReportDir holds the full verdict.
+ */
+export function reportDirInSite(dir: string, storyboardRoot: string, platform: string): boolean {
+  const bases = SITE_FOLDERS.map((name) => realPathOf(join(storyboardRoot, name)))
+  return inSiteOf(realPathOf(dir), bases, platform)
+}
+
+/**
+ * The report dir checked once at the start of a run (D15-22): its real path as the branded
+ * CheckedReportDir, or the refusal. The runner keeps the real path and writes there, so a link on
+ * the input path retargeted later cannot move the report.
+ */
+export function checkedReportDir(
+  dir: string,
+  site: ReportSite,
+):
+  | { readonly ok: true; readonly realDir: CheckedReportDir }
+  | { readonly ok: false; readonly reason: ReportDirRefusal } {
+  const { verdict, real } = realDirVerdict(dir, site)
+  if (verdict !== 'ok') return { ok: false, reason: verdict }
+  return { ok: true, realDir: real as CheckedReportDir }
+}
+
 export type ReportWrite =
-  { readonly ok: true } | { readonly ok: false; readonly code: 'report-unwritten' }
+  | { readonly ok: true }
+  | {
+      readonly ok: false
+      readonly code: 'report-unwritten'
+      /** The write-time verdict that refused, or null for any other failure. */
+      readonly refused: ReportDirRefusal | null
+    }
 
 const REPORT_NAMES: ReadonlyMap<string, string> = new Map([
   ['validate', 'publisher-validate'],
   ['stage', 'publisher-stage'],
+  ['approve', 'publisher-approve'],
+  ['publish', 'publisher-publish'],
 ])
 
+/** Removes a temp file of ours, best effort (a failure leaves it; the run reports unwritten). */
+function removeQuietly(temp: string): void {
+  try {
+    rmSync(temp, { force: true })
+  } catch {
+    // Nothing of ours to remove, or it cannot be removed; the result already says unwritten.
+  }
+}
+
 /**
- * Writes `<dir>/publisher-<command>.json` and `.md` (a dry run included: the name follows the
- * command): a recursive mkdir, then each file to `<name>.tmp` in the same folder and a rename over
- * the old report. Invalid data throws a TypeError before any write; a failed write is
- * `{ok: false, code: 'report-unwritten'}`, and the temp file is removed.
+ * Writes `<realDir>/publisher-<command>.json` and `.md` (a dry run included: the name follows the
+ * command). Invalid data throws a TypeError before any write. Then (D15-22): a recursive mkdir; the
+ * full real-path verdict again; per file, a stale entry at `<name>.tmp` removed (a link removed,
+ * never followed), the temp created exclusively, the verdict again, and a rename over the old
+ * report. A failure is `{ok: false, code: 'report-unwritten', refused}`: the verdict that refused,
+ * or null. An entry this run did not create is never removed.
  */
-export function writeReport(dir: string, input: ReportInput): ReportWrite {
+export function writeReport(
+  realDir: CheckedReportDir,
+  input: ReportInput,
+  site: ReportSite,
+): ReportWrite {
   const { json, md } = buildReport(input)
   const base = REPORT_NAMES.get(input.command) ?? 'publisher-stage'
-  const unwritten: ReportWrite = { ok: false, code: 'report-unwritten' }
+  const unwritten = (refused: ReportDirRefusal | null): ReportWrite => ({
+    ok: false,
+    code: 'report-unwritten',
+    refused,
+  })
   try {
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(realDir, { recursive: true })
   } catch {
-    return unwritten
+    return unwritten(null)
   }
+  const afterMkdir = realDirVerdict(realDir, site).verdict
+  if (afterMkdir !== 'ok') return unwritten(afterMkdir)
   for (const [name, text] of [
     [`${base}.json`, json],
     [`${base}.md`, md],
   ] as const) {
-    const temp = join(dir, `${name}.tmp`)
+    const temp = join(realDir, `${name}.tmp`)
     try {
-      writeFileSync(temp, text)
-      renameSync(temp, join(dir, name))
+      rmSync(temp, { force: true })
     } catch {
-      try {
-        rmSync(temp, { force: true })
-      } catch {
-        // The temp name is not a plain file; nothing of ours to remove.
-      }
-      return unwritten
+      // A directory at the temp name, say: it is not ours, so it stays.
+      return unwritten(null)
+    }
+    try {
+      writeFileSync(temp, text, { flag: 'wx' })
+    } catch {
+      // An entry planted after the removal is not ours: it stays.
+      return unwritten(null)
+    }
+    const beforeRename = realDirVerdict(realDir, site).verdict
+    if (beforeRename !== 'ok') {
+      removeQuietly(temp)
+      return unwritten(beforeRename)
+    }
+    try {
+      renameSync(temp, join(realDir, name))
+    } catch {
+      removeQuietly(temp)
+      return unwritten(null)
     }
   }
   return { ok: true }

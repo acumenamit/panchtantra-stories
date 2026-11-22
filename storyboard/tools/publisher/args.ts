@@ -1,7 +1,13 @@
 // The publisher's argument parser and run context (design migration-input/p1-step14-design.md
-// §3.11 D14-1, D14-17, D14-25; P1-8c, Step 14). Pure: no file, no environment, no clock. Flags are
-// held in a Map, so prototype names (`--__proto__`, `--constructor`, `--toString`) are unknown
-// flags. Every message names a flag or a rule from the fixed table, never an input value.
+// §3.11 D14-1, D14-17, D14-25; P1-8c, Step 14; migration-input/p1-step15a-design.md §3.1, §3.7,
+// §3.23, §3.29, D15-1, D15-7, D15-23, D15-28; P1-8d part a, Step 15a). Pure: no file, no
+// environment, no clock. Flags are held in a Map, so prototype names (`--__proto__`,
+// `--constructor`, `--toString`) are unknown flags. Every message names a flag or a rule from the
+// fixed table, never an input value.
+// - Parse order for every command: the flag loop (unknown, repeated, no value, needs a value), the
+//   scope texts, the id rules, the required flags, the value forms (`--package`, `--snapshot`,
+//   `--feature`), the report dir (device or network, then the win32 segment rule, then the
+//   in-site compare), then `--timeout-ms`.
 import { resolve, sep } from 'node:path'
 import { StoryId } from '../../src/core/package/v1'
 
@@ -9,6 +15,10 @@ export const USAGE_TEXT = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
   '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -26,39 +36,90 @@ const FLAGS: ReadonlyMap<string, FlagKind> = new Map([
   ['timeout-ms', 'value'],
   ['dry-run', 'boolean'],
   ['all', 'boolean'],
+  ['answers-stdin', 'boolean'],
+  ['feature', 'value'],
+  ['snapshot', 'value'],
+  ['package', 'value'],
 ])
-const COMMANDS: ReadonlySet<string> = new Set(['help', 'validate', 'stage'])
+type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish'
+const COMMANDS: ReadonlySet<string> = new Set<Command>([
+  'help',
+  'validate',
+  'stage',
+  'approve',
+  'publish',
+])
+
+/** Each flag's commands (TP-1); `--report-dir` is for every command but help. */
+const SCOPE: ReadonlyMap<string, readonly Command[]> = new Map<string, readonly Command[]>([
+  ['packages', ['validate', 'stage']],
+  ['media', ['validate', 'stage']],
+  ['waivers', ['validate', 'stage']],
+  ['report-dir', ['validate', 'stage', 'approve', 'publish']],
+  ['timeout-ms', ['stage', 'approve', 'publish']],
+  ['dry-run', ['stage', 'approve', 'publish']],
+  ['all', ['validate']],
+  ['answers-stdin', ['approve']],
+  ['package', ['approve']],
+  ['feature', ['publish']],
+  ['snapshot', ['publish']],
+])
 
 const MESSAGE = {
   empty: 'usage: an argument is empty or holds a NUL character',
-  noCommand: 'usage: no command (validate, stage or help)',
-  command: 'usage: unknown command (validate, stage or help)',
+  noCommand: 'usage: no command (validate, stage, approve, publish or help)',
+  command: 'usage: unknown command (validate, stage, approve, publish or help)',
   helpArgs: 'usage: help takes no arguments',
   bareDashes: 'usage: a bare -- is not allowed',
   singleDash: 'usage: single-dash flags are not supported',
   unknownFlag: 'usage: unknown flag',
-  allForValidate: 'usage: --all is for validate only',
   allWithIds: 'usage: --all cannot be combined with story ids',
   idsOrAll: 'usage: validate needs story ids or --all',
   idCount: 'usage: give 1 to 64 story ids',
   idInvalid: 'usage: a story id must be 3 to 64 characters of a-z, 0-9 and single hyphens',
   idTwice: 'usage: a story id is given more than once',
+  approveOneId: 'usage: approve takes exactly one story id',
+  packageForm: 'usage: --package must be 12 to 64 lowercase hex characters',
+  publishNeeds: 'usage: publish needs story ids, --feature or --snapshot',
+  snapshotWithIds: 'usage: --snapshot cannot be combined with story ids',
+  snapshotForm: 'usage: --snapshot must be a whole number from 1',
+  featureForm: 'usage: --feature takes a story id or none',
   timeout: 'usage: --timeout-ms must be a whole number from 1 to 600000',
   reportDir: 'usage: --report-dir may not be at or under public/ or app/ of the storyboard folder',
   reportDirDevice: 'usage: --report-dir may not be a device or network path',
+  reportDirDeviceDefault:
+    'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
+  reportDirSegment: 'usage: --report-dir has a segment Windows cannot store as written',
+  reportDirSegmentDefault:
+    'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
 } as const
 // The flag-named messages take a name from FLAGS, never the argument as typed.
 const repeated = (flag: string) => `usage: --${flag} is given more than once`
 const noValue = (flag: string) => `usage: --${flag} takes no value`
 const needsValue = (flag: string) =>
   `usage: --${flag} needs a value that is not empty and does not start with --`
-const stageOnly = (flag: string) => `usage: --${flag} is for stage only`
 const required = (flag: string) => `usage: --${flag} is required`
+const SCOPE_TEXT: Readonly<Record<string, string>> = {
+  packages: 'validate and stage',
+  media: 'validate and stage',
+  waivers: 'validate and stage',
+  'timeout-ms': 'stage, approve and publish',
+  'dry-run': 'stage, approve and publish',
+  all: 'validate',
+  'answers-stdin': 'approve',
+  package: 'approve',
+  feature: 'publish',
+  snapshot: 'publish',
+}
+const outOfScope = (flag: string) => `usage: --${flag} is for ${SCOPE_TEXT[flag] ?? ''} only`
 
 export interface ArgsContext {
   readonly cwd: string
   readonly storyboardRoot: string
-  /** The platform node reports for the run; win32 compares the report dir without regard to case. */
+  /**
+   * The platform node reports for the run; win32 folds the in-site compare
+   * (toUpperCase().toLowerCase()) and applies the D15-28 segment rule.
+   */
   readonly platform: string
 }
 
@@ -69,6 +130,12 @@ interface Paths {
   readonly reportDir: string
 }
 
+interface ReportDirArg {
+  readonly reportDir: string
+  /** True when `--report-dir` was given; false for the default under storyboardRoot. */
+  readonly reportDirGiven: boolean
+}
+
 export type ParsedArgs =
   | { readonly ok: true; readonly command: 'help'; readonly usage: string }
   | ({
@@ -77,6 +144,7 @@ export type ParsedArgs =
       /** True for --all; then `ids` is empty. */
       readonly all: boolean
       readonly ids: readonly string[]
+      readonly reportDirGiven: boolean
     } & Paths)
   | ({
       readonly ok: true
@@ -84,17 +152,71 @@ export type ParsedArgs =
       readonly ids: readonly string[]
       readonly dryRun: boolean
       readonly timeoutMs: number
+      readonly reportDirGiven: boolean
     } & Paths)
+  | ({
+      readonly ok: true
+      readonly command: 'approve'
+      readonly storyId: string
+      /** 12 to 64 lowercase hex: a prefix of the reviewed package's sha256 (D15-27). */
+      readonly packagePrefix: string
+      readonly answersStdin: boolean
+      readonly dryRun: boolean
+      readonly timeoutMs: number
+    } & ReportDirArg)
+  | ({
+      readonly ok: true
+      readonly command: 'publish'
+      readonly ids: readonly string[]
+      /** True when `--feature` was given (`none` included). */
+      readonly featureGiven: boolean
+      /** The story id of `--feature`; null for `none` or when the flag was not given. */
+      readonly feature: string | null
+      /** The seq of `--snapshot`, or null. */
+      readonly snapshot: number | null
+      readonly dryRun: boolean
+      readonly timeoutMs: number
+    } & ReportDirArg)
   | { readonly ok: false; readonly code: 'usage'; readonly message: string }
 
 const usage = (message: string): ParsedArgs => ({ ok: false, code: 'usage', message })
 
-/** Parses argv after the script name (design §3.11). */
+const isStoryId = (id: string): boolean => StoryId.safeParse(id).success
+
+/** The id rules of each command (§3.1, §3.7), in order; null when they pass. */
+function idRule(
+  command: Exclude<Command, 'help'>,
+  ids: readonly string[],
+  flags: ReadonlyMap<string, string | true>,
+): string | null {
+  const all = flags.has('all')
+  if (command === 'validate') {
+    if (all && ids.length > 0) return MESSAGE.allWithIds
+    if (!all && ids.length === 0) return MESSAGE.idsOrAll
+  }
+  if (command === 'approve') {
+    if (ids.length !== 1) return MESSAGE.approveOneId
+  } else if (command === 'publish') {
+    if (ids.length === 0 && !flags.has('feature') && !flags.has('snapshot')) {
+      return MESSAGE.publishNeeds
+    }
+    if (flags.has('snapshot') && ids.length > 0) return MESSAGE.snapshotWithIds
+    if (ids.length > MAX_IDS) return MESSAGE.idCount
+  } else if (!all && (ids.length === 0 || ids.length > MAX_IDS)) {
+    return MESSAGE.idCount
+  }
+  if (!ids.every(isStoryId)) return MESSAGE.idInvalid
+  if (new Set(ids).size !== ids.length) return MESSAGE.idTwice
+  return null
+}
+
+/** Parses argv after the script name (design §3.11; Step 15a §3.1, §3.7). */
 export function parseArgs(argv: readonly string[], context: ArgsContext): ParsedArgs {
   if (argv.some((arg) => arg === '' || arg.includes('\u0000'))) return usage(MESSAGE.empty)
-  const command = argv[0]
-  if (command === undefined) return usage(MESSAGE.noCommand)
-  if (!COMMANDS.has(command)) return usage(MESSAGE.command)
+  const name0 = argv[0]
+  if (name0 === undefined) return usage(MESSAGE.noCommand)
+  if (!COMMANDS.has(name0)) return usage(MESSAGE.command)
+  const command = name0 as Command
   if (command === 'help') {
     return argv.length === 1
       ? { ok: true, command: 'help', usage: USAGE_TEXT }
@@ -128,46 +250,66 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
     flags.set(name, value)
   }
 
-  const all = flags.has('all')
-  if (command === 'stage' && all) return usage(MESSAGE.allForValidate)
-  if (command === 'validate') {
-    for (const flag of ['dry-run', 'timeout-ms']) if (flags.has(flag)) return usage(stageOnly(flag))
-    if (all && ids.length > 0) return usage(MESSAGE.allWithIds)
-    if (!all && ids.length === 0) return usage(MESSAGE.idsOrAll)
+  // The scope texts: the first flag (in argv order) given outside its commands.
+  for (const name of flags.keys()) {
+    if (!(SCOPE.get(name) ?? []).includes(command)) return usage(outOfScope(name))
   }
-  if (!all && (ids.length === 0 || ids.length > MAX_IDS)) return usage(MESSAGE.idCount)
-  if (!ids.every((id) => StoryId.safeParse(id).success)) return usage(MESSAGE.idInvalid)
-  if (new Set(ids).size !== ids.length) return usage(MESSAGE.idTwice)
+  const idProblem = idRule(command, ids, flags)
+  if (idProblem !== null) return usage(idProblem)
 
   const text = (flag: string): string | undefined => {
     const value = flags.get(flag)
     return typeof value === 'string' ? value : undefined
   }
-  const packages = text('packages')
-  const media = text('media')
-  if (packages === undefined) return usage(required('packages'))
-  if (media === undefined) return usage(required('media'))
-  const waivers = text('waivers')
-  const reportDir = text('report-dir')
-  const paths: Paths = {
-    packages: resolve(context.cwd, packages),
-    media: resolve(context.cwd, media),
-    waivers:
-      waivers === undefined
-        ? resolve(context.storyboardRoot, 'migration-input', 'waivers')
-        : resolve(context.cwd, waivers),
-    reportDir:
-      reportDir === undefined
-        ? resolve(context.storyboardRoot, 'migration-input', 'reports')
-        : resolve(context.cwd, reportDir),
+  if (command === 'validate' || command === 'stage') {
+    if (text('packages') === undefined) return usage(required('packages'))
+    if (text('media') === undefined) return usage(required('media'))
   }
-  // A win32 device-namespace (\\?\, \\.\) or network (\\host\share) form keeps its prefix through
-  // path.resolve, and node:fs opens it, so no string compare can place it (SEC1-1): refused as a
-  // form. A resolved posix path always starts with one '/', so this never refuses there.
-  if (paths.reportDir.startsWith('\\\\')) return usage(MESSAGE.reportDirDevice)
-  if (insideSite(paths.reportDir, context)) return usage(MESSAGE.reportDir)
+  const packagePrefix = text('package')
+  if (command === 'approve') {
+    if (packagePrefix === undefined) return usage(required('package'))
+    if (!/^[0-9a-f]{12,64}$/.test(packagePrefix)) return usage(MESSAGE.packageForm)
+  }
+  const snapshotText = text('snapshot')
+  let snapshot: number | null = null
+  if (snapshotText !== undefined) {
+    if (!/^[1-9][0-9]{0,15}$/.test(snapshotText) || !Number.isSafeInteger(Number(snapshotText))) {
+      return usage(MESSAGE.snapshotForm)
+    }
+    snapshot = Number(snapshotText)
+  }
+  const featureText = text('feature')
+  if (featureText !== undefined && featureText !== 'none' && !isStoryId(featureText)) {
+    return usage(MESSAGE.featureForm)
+  }
 
-  if (command === 'validate') return { ok: true, command, all, ids, ...paths }
+  const reportDirText = text('report-dir')
+  const reportDirGiven = reportDirText !== undefined
+  const reportDir =
+    reportDirText === undefined
+      ? resolve(context.storyboardRoot, 'migration-input', 'reports')
+      : resolve(context.cwd, reportDirText)
+  const formRefusal = reportDirFormRefusal(reportDir, reportDirGiven, context.platform)
+  if (formRefusal !== null) return usage(formRefusal)
+  if (insideSite(reportDir, context)) return usage(MESSAGE.reportDir)
+
+  if (command === 'validate') {
+    const waivers = text('waivers')
+    return {
+      ok: true,
+      command,
+      all: flags.has('all'),
+      ids,
+      packages: resolve(context.cwd, text('packages') ?? ''),
+      media: resolve(context.cwd, text('media') ?? ''),
+      waivers:
+        waivers === undefined
+          ? resolve(context.storyboardRoot, 'migration-input', 'waivers')
+          : resolve(context.cwd, waivers),
+      reportDir,
+      reportDirGiven,
+    }
+  }
   const timeout = text('timeout-ms')
   let timeoutMs = TIMEOUT_MS_DEFAULT
   if (timeout !== undefined) {
@@ -176,17 +318,126 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
     }
     timeoutMs = Number(timeout)
   }
-  return { ok: true, command: 'stage', ids, dryRun: flags.has('dry-run'), timeoutMs, ...paths }
+  const dryRun = flags.has('dry-run')
+  if (command === 'approve') {
+    return {
+      ok: true,
+      command,
+      storyId: ids[0] ?? '',
+      packagePrefix: packagePrefix ?? '',
+      answersStdin: flags.has('answers-stdin'),
+      dryRun,
+      timeoutMs,
+      reportDir,
+      reportDirGiven,
+    }
+  }
+  if (command === 'publish') {
+    return {
+      ok: true,
+      command,
+      ids,
+      featureGiven: featureText !== undefined,
+      feature: featureText === undefined || featureText === 'none' ? null : featureText,
+      snapshot,
+      dryRun,
+      timeoutMs,
+      reportDir,
+      reportDirGiven,
+    }
+  }
+  const waivers = text('waivers')
+  return {
+    ok: true,
+    command: 'stage',
+    ids,
+    dryRun,
+    timeoutMs,
+    packages: resolve(context.cwd, text('packages') ?? ''),
+    media: resolve(context.cwd, text('media') ?? ''),
+    waivers:
+      waivers === undefined
+        ? resolve(context.storyboardRoot, 'migration-input', 'waivers')
+        : resolve(context.cwd, waivers),
+    reportDir,
+    reportDirGiven,
+  }
+}
+
+/**
+ * True for a win32 device-namespace (`\\?\`, `\\.\`) or network (`\\host\share`) form, written
+ * with `\` or `/` (D15-23). Such a form keeps its prefix through path.resolve and node:fs opens it,
+ * so no string compare can place it (SEC1-1). A resolved posix path starts with one '/'.
+ */
+export function isDeviceOrNetworkPath(resolved: string): boolean {
+  return resolved.startsWith('\\\\') || resolved.startsWith('//')
+}
+
+/** Reserved device names Windows maps whatever the extension (D15-28), upper case. */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  'CONIN$',
+  'CONOUT$',
+  ...['COM', 'LPT'].flatMap((stem) =>
+    ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '¹', '²', '³'].map(
+      (digit) => `${stem}${digit}`,
+    ),
+  ),
+])
+const RESERVED_CHARACTERS = '<>"|?*'
+
+/**
+ * True when a segment of the path cannot be stored as written on Windows (D15-28): Node's fs
+ * passes `\\?\` paths, so Win32 neither strips a trailing dot or space nor maps a device name, and
+ * a `:` names a stream. The first segment may be a drive prefix `X:`.
+ */
+function hasUnstorableSegment(path: string): boolean {
+  return path.split(/[\\/]/).some((segment, index) => {
+    if (segment === '') return false
+    if (segment.endsWith('.') || segment.endsWith(' ')) return true
+    const drive = index === 0 && /^[A-Za-z]:$/.test(segment)
+    if (!drive && segment.includes(':')) return true
+    for (const ch of segment) {
+      if (ch.charCodeAt(0) < 0x20 || RESERVED_CHARACTERS.includes(ch)) return true
+    }
+    const dot = segment.indexOf('.')
+    const stem = (dot === -1 ? segment : segment.slice(0, dot)).replace(/ +$/, '')
+    return RESERVED_NAMES.has(stem.toUpperCase())
+  })
+}
+
+/**
+ * The report-dir form refusal for a resolved path (D15-23, D15-28), or null: a device or network
+ * form first (the flag or the default text), then, on platform win32, a segment Windows cannot
+ * store as written. Pure, so both texts run on every host; the text never holds the path.
+ */
+export function reportDirFormRefusal(
+  resolved: string,
+  given: boolean,
+  platform: string,
+): string | null {
+  if (isDeviceOrNetworkPath(resolved)) {
+    return given ? MESSAGE.reportDirDevice : MESSAGE.reportDirDeviceDefault
+  }
+  if (platform === 'win32' && hasUnstorableSegment(resolved)) {
+    return given ? MESSAGE.reportDirSegment : MESSAGE.reportDirSegmentDefault
+  }
+  return null
 }
 
 /**
  * True when the resolved report dir is `<storyboardRoot>/public` or `<storyboardRoot>/app`, or
- * under either (D14-25): compared after path.resolve, without regard to case on win32. This is the
- * string half; stage.ts compares the real paths before any work (report.ts reportDirInSite), which
- * also sees a cwd reached through a junction or subst drive (SEC1-1, L15).
+ * under either (D14-25): compared after path.resolve, on win32 folded with
+ * `toUpperCase().toLowerCase()` as NTFS's upcase table folds U+0131 and U+017F (D15-28). This is
+ * the string half; the runners compare the real paths before any work (report.ts
+ * checkedReportDir), which also sees a cwd reached through a junction or subst drive (L24).
  */
 function insideSite(dir: string, context: ArgsContext): boolean {
-  const fold = (path: string) => (context.platform === 'win32' ? path.toLowerCase() : path)
+  const fold = (path: string) =>
+    context.platform === 'win32' ? path.toUpperCase().toLowerCase() : path
   const target = fold(dir)
   return ['public', 'app'].some((name) => {
     const base = fold(resolve(context.storyboardRoot, name))

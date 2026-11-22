@@ -6,9 +6,11 @@
 //   per-story listings, the documents and the build's gates); a dry run stops there; the commit
 //   uploads media then packages one at a time, verifies them by listing, creates the snapshot with
 //   its read-back and moves the staging pointer (never production).
-// - Before any other work, a report dir whose real path lies at or under public/ or app/ is a usage
-//   stop (exit 2, no report; D14-25). Every later exit writes the report; a code's exit follows its
-//   phase. The commit deadline is checked before every commit request (D14-8).
+// - Before any other work, the report dir is checked once (run-kit openReportDir; D14-25, Step 15a
+//   D15-22, D15-29): a real path at or under public/ or app/, or not on a local drive, is a usage
+//   stop (exit 2, no report). Every later exit writes the report into that checked real dir
+//   (run-kit writeRunReport, which re-checks it); a code's exit follows its phase. The commit
+//   deadline is checked before every commit request (D14-8).
 // - Output only through deps.log and deps.error, in report.ts's fixed formats: ids, counts, hashes
 //   and codes. A client refusal is recognised only by isStorageRefusal; any other throw prints its
 //   class name.
@@ -34,8 +36,6 @@ import {
   exitForPhase,
   formatPlan,
   formatPointerMoved,
-  formatReportDirRefused,
-  formatReportUnwritten,
   formatSnapshot,
   formatStageCarried,
   formatStageStory,
@@ -44,8 +44,6 @@ import {
   formatValidateStory,
   formatValidateSummary,
   internalName,
-  reportDirInSite,
-  writeReport,
   type ExitCode,
   type Phase,
   type ReportInput,
@@ -53,6 +51,7 @@ import {
   type ReportStory,
   type StopDetail,
 } from './report'
+import { Stop, WAIVER_READ_CODE, failureCode, openReportDir, writeRunReport } from './run-kit'
 import { MAX_JSON_BYTES, classOfPath, type MediaRef } from './storage-layout'
 import { checkStories, deriveWaiverBlock, loadPrivateLists, type LocalStory } from './story-checks'
 
@@ -70,6 +69,8 @@ export interface ValidateInput {
   readonly media: string
   readonly waivers: string
   readonly reportDir: string
+  /** True when --report-dir was given (the not-local reason names the flag or the default). */
+  readonly reportDirGiven: boolean
 }
 
 /** What stage needs from the parsed arguments (the timeout goes to the client, in cli.ts). */
@@ -79,6 +80,7 @@ export interface StageInput {
   readonly media: string
   readonly waivers: string
   readonly reportDir: string
+  readonly reportDirGiven: boolean
   readonly dryRun: boolean
 }
 
@@ -95,34 +97,6 @@ export interface StageDeps extends ValidateDeps {
   readonly sleep: (ms: number) => Promise<void>
   /** Builds the client; called once, only after every local check passed (§4.3 step 3). */
   readonly makePort: () => StagePort
-}
-
-/** A stop line for the CLI's configuration checks (cli.ts may not import report.ts). */
-export function stopLine(
-  command: 'validate' | 'stage',
-  code: 'usage' | 'configuration' | 'stage-here-only' | 'project-mismatch',
-): string {
-  return formatStopped(command, code)
-}
-
-/** The internal stop line for a throw that escaped a runner (cli.ts; FID-3): the class name only. */
-export function internalLine(command: 'validate' | 'stage', thrown: unknown): string {
-  return formatStopped(command, 'internal', { errorName: internalName(thrown) })
-}
-
-/**
- * The report dir's real path at or under public/ or app/ (D14-25, SEC1-1): a usage stop, exit 2,
- * no report and no other work; true when the run must stop.
- */
-function reportDirRefused(
-  command: 'validate' | 'stage',
-  reportDir: string,
-  deps: ValidateDeps,
-): boolean {
-  if (!reportDirInSite(reportDir, deps.storyboardRoot, deps.platform)) return false
-  deps.log(formatStopped(command, 'usage'))
-  deps.error(formatReportDirRefused(command))
-  return true
 }
 
 /** `--all`: exact `<StoryId>.json` names, case-sensitive (TP-7); any other name is ignored. */
@@ -178,7 +152,8 @@ function reportStoryOf(story: LocalStory, states: ReadonlyMap<string, string>): 
 
 /** The validate command: local checks only; exit 0 (every story stageable), 1 or 2. */
 export async function runValidate(input: ValidateInput, deps: ValidateDeps): Promise<ExitCode> {
-  if (reportDirRefused('validate', input.reportDir, deps)) return 2
+  const realDir = openReportDir('validate', input.reportDir, input.reportDirGiven, deps)
+  if (realDir === null) return 2
   const startedAt = deps.now().toISOString()
   let ids: readonly string[] = input.ids
   let ignored: number | undefined
@@ -195,7 +170,7 @@ export async function runValidate(input: ValidateInput, deps: ValidateDeps): Pro
   let stories: LocalStory[] = []
   let privateState: 'loaded' | 'not loaded' = 'not loaded'
   const finish = (outcome: string, exitCode: ExitCode): ExitCode => {
-    const written = writeReport(input.reportDir, {
+    const report: ReportInput = {
       command: 'validate',
       mode: 'validate',
       startedAt,
@@ -210,10 +185,8 @@ export async function runValidate(input: ValidateInput, deps: ValidateDeps): Pro
       ruleSetRef: RULESET.ref,
       privateWordLists: privateState,
       stories: stories.map((story) => reportStoryOf(story, new Map())),
-    })
-    if (written.ok) return exitCode
-    deps.error(formatReportUnwritten('validate'))
-    return 2
+    }
+    return writeRunReport('validate', realDir, report, input.reportDirGiven, deps) ? exitCode : 2
   }
   try {
     const lists = loadPrivateLists(deps.storyboardRoot)
@@ -257,29 +230,10 @@ interface PlannedObject {
   readonly ref: MediaRef | null
 }
 
-const WAIVER_CODE: Readonly<Record<string, string>> = {
-  'not-found': 'waiver-not-in-masters',
-  'hash-mismatch': 'waiver-hash-mismatch',
-  'too-large': 'waiver-too-large',
-  unauthorized: 'storage-unauthorized',
-  failed: 'storage-failed',
-}
-
-const failureCode = (kind: string) =>
-  kind === 'unauthorized' ? 'storage-unauthorized' : 'storage-failed'
-
-/** A stop signal inside the run: the code, the line's detail and the phase its exit follows. */
-class Stop {
-  constructor(
-    readonly code: string,
-    readonly detail: StopDetail,
-    readonly phase: Phase,
-  ) {}
-}
-
 /** The stage command: plan, then the dry run or the commit; exits by phase (§5). */
 export async function runStage(input: StageInput, deps: StageDeps): Promise<ExitCode> {
-  if (reportDirRefused('stage', input.reportDir, deps)) return 2
+  const realDir = openReportDir('stage', input.reportDir, input.reportDirGiven, deps)
+  if (realDir === null) return 2
   const startedAt = deps.now().toISOString()
   const mode = input.dryRun ? 'dry-run' : 'stage'
   let phase: Phase = 'local'
@@ -312,9 +266,9 @@ export async function runStage(input: StageInput, deps: StageDeps): Promise<Exit
   })
   const finish = (code: string, at: Phase): ExitCode => {
     const exitCode = exitForPhase(code, at)
-    const written = writeReport(input.reportDir, report(code, exitCode))
-    if (written.ok) return exitCode
-    deps.error(formatReportUnwritten('stage'))
+    if (writeRunReport('stage', realDir, report(code, exitCode), input.reportDirGiven, deps)) {
+      return exitCode
+    }
     return writes === 0 ? 2 : exitCode
   }
   function stop(code: string, detail: StopDetail = {}, at: Phase = phase): never {
@@ -379,7 +333,7 @@ export async function runStage(input: StageInput, deps: StageDeps): Promise<Exit
         waiverSha256: story.waiver.sha256,
       })
       if (master.kind !== 'found') {
-        stop(WAIVER_CODE[master.kind] ?? 'storage-failed', { storyId: story.storyId })
+        stop(WAIVER_READ_CODE[master.kind] ?? 'storage-failed', { storyId: story.storyId })
       }
       const derived = await deriveWaiverBlock(story.storyId, master.bytes)
       if (!derived.ok) stop(derived.code, { storyId: story.storyId })

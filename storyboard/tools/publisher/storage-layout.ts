@@ -5,7 +5,8 @@
 // anchored pattern and bucket, the captured fields) and re-check 2 on the request URL (origin,
 // pathname, no search, no hash). Every refusal is a fixed triple {cls, stage, rule} that never
 // carries a caller value (D12-14). Step 14 (p1-step14-design.md §3.4) adds contentReadTarget, the
-// target of a pointer or snapshot read.
+// target of a pointer or snapshot read; Step 15a (p1-step15a-design.md §3.17, D15-17) adds the
+// content-addressed package read.
 import {
   expectedPackagePath,
   expectedSnapshotPath,
@@ -64,8 +65,16 @@ export interface PointerReadRef {
 export type CreateRef = PackageRef | MediaRef | SnapshotRef | ApprovalRef
 /** What readMaster may read. */
 export type MasterReadRef = ApprovalRef | WaiverRef
-/** What readContent may read (Step 14, D13-4): a pointer by mode or a snapshot by seq. */
-export type ContentReadRef = PointerReadRef | SnapshotRef
+/**
+ * A package read names its content address (Step 15a, D15-17); no nonce. The caller compares the
+ * found sha256 with the name, as the client checks no hash for content.
+ */
+export type PackageReadRef = PackageRef
+/**
+ * What readContent may read: a pointer by mode or a snapshot by seq (Step 14, D13-4), or a package by
+ * its content address (Step 15a, D15-17).
+ */
+export type ContentReadRef = PointerReadRef | SnapshotRef | PackageReadRef
 
 export type TargetFields = Readonly<Record<string, string | number>>
 
@@ -328,15 +337,18 @@ export function pointerTarget(mode: unknown): LayoutResult<Target> {
   }
 }
 
-/** The one field each content-readable kind holds besides `kind`. */
-const CONTENT_READ_FIELD: Readonly<Record<'pointer' | 'snapshot', string>> = {
-  pointer: 'mode',
-  snapshot: 'seq',
-}
+/** The fields each content-readable kind holds besides `kind`. */
+const CONTENT_READ_FIELDS: Readonly<Record<'pointer' | 'snapshot' | 'package', readonly string[]>> =
+  {
+    pointer: ['mode'],
+    snapshot: ['seq'],
+    package: ['storyId', 'packageSha256'],
+  }
 
 /**
  * The target a content read names (Step 14, D13-4), or a refusal at stage `field`: exactly
- * `{kind: 'pointer', mode}` or `{kind: 'snapshot', seq}`, under targetOf's shape rules. The ref is
+ * `{kind: 'pointer', mode}`, `{kind: 'snapshot', seq}` or `{kind: 'package', storyId, packageSha256}`
+ * (Step 15a, D15-17; no nonce: content-addressed), under targetOf's shape rules. The ref is
  * read once (one ownKeys, one descriptor per key) and the Target is built only from the values
  * captured on that read, never through targetOf or a get on the ref (S14-CRIT-10). The Target equals
  * pointerTarget's or targetOf's, so re-check 1 applies unchanged.
@@ -357,13 +369,20 @@ export function contentReadTarget(ref: unknown): LayoutResult<Target> {
         : null
   if (accessor) return refused(kind ?? 'ref', 'field', 'ref-accessor')
   if (kind === null) return refused('ref', 'field', 'kind-unknown')
-  if (kind !== 'pointer' && kind !== 'snapshot') {
+  if (kind !== 'pointer' && kind !== 'snapshot' && kind !== 'package') {
     return refused(kind, 'field', 'kind-not-content-readable')
   }
-  if (badKeys || values.size !== 2 || !values.has(CONTENT_READ_FIELD[kind])) {
+  const fields = CONTENT_READ_FIELDS[kind]
+  if (badKeys || values.size !== fields.length + 1 || fields.some((name) => !values.has(name))) {
     return refused(kind, 'field', 'ref-keys')
   }
   if (kind === 'pointer') return pointerTarget(values.get('mode'))
+  if (kind === 'package') {
+    for (const [name, rule] of CLASSES.package.fields) {
+      if (!fieldOk(rule, values.get(name))) return refused('package', 'field', rule)
+    }
+    return { ok: true, value: buildTarget('package', values) }
+  }
   if (!fieldOk('seq', values.get('seq'))) return refused('snapshot', 'field', 'seq')
   return { ok: true, value: buildTarget('snapshot', values) }
 }

@@ -3,8 +3,12 @@
 // vi.fn around the real function; each test gives one call a hostile return, so a removed or
 // reordered call in storage.ts turns a test red. A separate file because vi.mock covers the file.
 // Every call goes to a recorder on http://127.0.0.1:9; nothing is sent anywhere.
+// Step 15a (design p1-step15a-design.md §14.12): APPROVAL is a full valid record (the strict approval
+// gate, D15-6) and T14-80 g4 samples a content media target (a package is content-readable, D15-17).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { jcsBytes } from '../../src/core/hashing'
+import { APPROVAL_CHECKLIST_TEXT, APPROVAL_PRESCREEN_LEGACY } from '../../src/core/package/approval'
+import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { Secret } from './env'
 import { createStorageClient, StorageRefusedError, type StorageClient } from './storage'
 import * as layout from './storage-layout'
@@ -29,7 +33,24 @@ const FAKE_KEY = ['sb', 'secret', 'fake-storage-test-key'].join('_')
 const SHA_A = 'a'.repeat(64)
 const APPROVAL_REF = { kind: 'approval', storyId: 'two-paths', packageSha256: SHA_A } as const
 const WAIVER_REF = { kind: 'waiver', storyId: 'two-paths', waiverSha256: SHA_A } as const
-const APPROVAL = jcsBytes({ storyId: 'two-paths', packageSha256: SHA_A, approvedOn: '2026-11-21' })
+const APPROVAL = jcsBytes({
+  storyId: 'two-paths',
+  packageSha256: SHA_A,
+  ruleSetRef: PANCHATANTRA_RULESET.ref,
+  waiversSha256: 'b'.repeat(64),
+  review: {
+    languagesRead: ['en', 'hi'],
+    allNodesRead: true,
+    imagesViewed: 1,
+    narrationCheck: 'checked',
+    devices: ['phone'],
+    reviewerChecklist: APPROVAL_CHECKLIST_TEXT,
+  },
+  prescreen: APPROVAL_PRESCREEN_LEGACY,
+  decision: 'approved',
+  approvedOn: '2026-11-21',
+  approvedBy: 'owner',
+})
 const BAD_APPROVAL = jcsBytes({
   storyId: 'fox-and-crow',
   packageSha256: SHA_A,
@@ -549,21 +570,25 @@ describe('readContent calls each layout check (Step 14)', () => {
       .soft(pathnameOf(calls[beforeG3]), '(g3) the snapshot path')
       .toBe('/storage/v1/object/authenticated/content/catalogue/snapshots/7.json')
     expect.soft(searchOf(calls[beforeG3]), '(g3) no search on the snapshot read').toBe('')
-    // (g4) routeClass's content branch is pointer and snapshot only
+    // (g4) routeClass's content branch is pointer, snapshot and package only (Step 15a)
     const beforeG4 = calls.length
+    const media: Target = {
+      kind: 'media',
+      bucket: 'content',
+      path: `media/two-paths/${SHA_A}-w640.webp`,
+      contentType: 'image/webp',
+      cacheSeconds: 3600,
+      maxBytes: layout.MAX_JSON_BYTES,
+      fields: Object.freeze({
+        storyId: 'two-paths',
+        sha256: SHA_A,
+        variant: 'w640',
+        mime: 'image/webp',
+      }),
+    }
     expect
-      .soft(
-        await refusalOf(
-          readAs(
-            content('package', `packages/two-paths/${SHA_A}.json`, {
-              storyId: 'two-paths',
-              packageSha256: SHA_A,
-            }),
-          ),
-        ),
-        '(g4) a content package target',
-      )
-      .toBe('refused: package url url-mismatch')
+      .soft(await refusalOf(readAs(media)), '(g4) a content media target')
+      .toBe('refused: media url url-mismatch')
     expect.soft(calls.length - beforeG4, '(g4) 0 requests').toBe(0)
   })
 })

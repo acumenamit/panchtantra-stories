@@ -1303,9 +1303,8 @@ describe('storage-layout: contentReadTarget (Step 14)', () => {
     for (const [name, ref] of positives) {
       expect(contentReadTarget(ref).ok, `precondition: ${name} passes`).toBe(true)
     }
-    // (g1) the kinds
+    // (g1) the kinds (Step 15a: a package ref is content-readable, T15A-62)
     const kinds: [string, unknown, ReturnType<typeof refusal>][] = [
-      ['package', PACKAGE_REF(), refusal('package', 'field', 'kind-not-content-readable')],
       ['media', MEDIA_REF(), refusal('media', 'field', 'kind-not-content-readable')],
       ['approval', APPROVAL_REF(), refusal('approval', 'field', 'kind-not-content-readable')],
       ['waiver', WAIVER_REF(), refusal('waiver', 'field', 'kind-not-content-readable')],
@@ -1434,5 +1433,68 @@ describe('storage-layout: contentReadTarget (Step 14)', () => {
       .toBe('catalogue/snapshots/7.json')
     expect.soft(snapshotProxy.counts.ownKeys, '(g4) snapshot ownKeys called once').toBe(1)
     expect.soft(snapshotProxy.counts.get, '(g4) snapshot get trap never called').toBe(0)
+  })
+
+  // ---- Step 15a (P1-8d part a): the package content read (p1-step15a-design.md §3.17, D15-17) ----
+
+  it("T15A-62 contentReadTarget accepts {kind: 'package', storyId, packageSha256} with targetOf's Target and reads the ref once (A4, D15-17, L23)", () => {
+    const made = targetOf(PACKAGE_REF())
+    expect(made.ok, 'precondition: targetOf(package) is ok').toBe(true)
+    const want = valueOf(made)
+    // (g1) the same Target as targetOf, frozen fields, re-check 1 passes
+    const got = contentReadTarget(PACKAGE_REF())
+    expect.soft(got, '(g1) package').toStrictEqual({ ok: true, value: want })
+    const bare = Object.assign(Object.create(null) as Ref, PACKAGE_REF())
+    expect
+      .soft(contentReadTarget(bare), '(g1) package with a null prototype')
+      .toStrictEqual({ ok: true, value: want })
+    expect.soft(got.ok && Object.isFrozen(got.value.fields), '(g1) fields frozen').toBe(true)
+    expect.soft(got.ok && recheckTarget(got.value).ok, '(g1) passes re-check 1').toBe(true)
+    // (g2) refusals at stage field
+    const shapes: [string, unknown, ReturnType<typeof refusal>][] = [
+      [
+        'an extra nonce key',
+        { ...PACKAGE_REF(), nonce: 1 },
+        refusal('package', 'field', 'ref-keys'),
+      ],
+      ['an extra seq key', { ...PACKAGE_REF(), seq: 7 }, refusal('package', 'field', 'ref-keys')],
+      [
+        'no packageSha256',
+        { kind: 'package', storyId: 'two-paths' },
+        refusal('package', 'field', 'ref-keys'),
+      ],
+      [
+        "storyId 'Two-Paths'",
+        { ...PACKAGE_REF(), storyId: 'Two-Paths' },
+        refusal('package', 'field', 'story-id'),
+      ],
+      [
+        'an upper-case sha',
+        { ...PACKAGE_REF(), packageSha256: PKG_SHA.toUpperCase() },
+        refusal('package', 'field', 'sha256'),
+      ],
+    ]
+    for (const [name, ref, wanted] of shapes) {
+      expect.soft(refusalOf(contentReadTarget(ref)), `(g2) ${name}`).toEqual(wanted)
+    }
+    // (g3) a Proxy whose ownKeys answer differs per call: one ownKeys call, no get trap
+    const counts = { ownKeys: 0, get: 0 }
+    const proxy = new Proxy(PACKAGE_REF() as Ref, {
+      ownKeys(target) {
+        counts.ownKeys++
+        return counts.ownKeys === 1 ? Reflect.ownKeys(target) : ['kind', 'storyId']
+      },
+      get(target, key, receiver) {
+        counts.get++
+        return key === 'storyId' ? 'lion-and-hare' : Reflect.get(target, key, receiver)
+      },
+    })
+    const fromProxy = contentReadTarget(proxy)
+    expect(counts.ownKeys, 'precondition: the ownKeys trap ran').toBeGreaterThan(0)
+    expect
+      .soft(fromProxy.ok && fromProxy.value.path, '(g3) built from the first answer')
+      .toBe(want.path)
+    expect.soft(counts.ownKeys, '(g3) ownKeys called once').toBe(1)
+    expect.soft(counts.get, '(g3) get trap never called').toBe(0)
   })
 })

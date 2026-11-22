@@ -5,11 +5,20 @@
 // own bytes (D14-22; never the asset id), provenance `unknown`; canonical JCS package bytes; and a
 // zero-record waiver file. It reads fixtures/packages and never writes under fixtures/; it imports
 // src/core and node: modules only, holds no key text and no route text, and never prints.
+// Step 15a (design p1-step15a-design.md §2.3, TP-9) adds fullyBoundStory (every node pictured and
+// narrated in every locale, for --feature), approvalRecordOf (an approval record and its JCS bytes)
+// and answersOf (the six approve answers, confirming by default).
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MediaMime } from '../../src/core/content/media'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import {
+  APPROVAL_CHECKLIST_TEXT,
+  APPROVAL_PRESCREEN_LEGACY,
+  type ApprovalRecord,
+  type ApprovalReview,
+} from '../../src/core/package/approval'
 import { StoryPackageV1 } from '../../src/core/package/v1'
 import type { StoryAsset } from '../../src/core/package/v1'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
@@ -197,4 +206,116 @@ export function writeStageInputs(root: string, stories: readonly TestStory[]): S
     }
   }
   return dirs
+}
+
+// ---- Step 15a (P1-8d part a): approve and publish material (TP-9) ----
+
+/** Nodes whose `image` is not null: what an approval record's imagesViewed counts. */
+const imageCountOf = (pkg: StoryPackageV1): number =>
+  pkg.nodes.filter((node) => node.image !== null).length
+
+/**
+ * The story with every node pictured and narrated (A001, A005 and A006 clean under --feature): the
+ * story's one image asset on every node, and one narration per node and locale, each an MP3 named by
+ * the sha256 of its own bytes. Media in order: the two image widths, then the narrations by node,
+ * then locale. The waiver file is kept.
+ */
+export async function fullyBoundStory(story: TestStory): Promise<TestStory> {
+  const id = story.storyId
+  const image = story.pkg.assets.find((asset) => asset.kind === 'image')
+  if (image === undefined) throw new TypeError('a test story has no image asset')
+  const imageMedia = story.media.filter((m) => m.mime !== 'audio/mpeg')
+  const narrations: TestMedia[] = []
+  const audio: StoryAsset[] = []
+  for (const node of story.pkg.nodes) {
+    for (const locale of story.pkg.locales) {
+      const bytes = mp3Bytes(`${id}:${node.id}:${locale}`)
+      const sha256 = await sha256Hex(bytes)
+      const media: TestMedia = {
+        path: `media/${id}/${sha256}-${locale}.mp3`,
+        mime: 'audio/mpeg',
+        bytes,
+        sha256,
+      }
+      narrations.push(media)
+      audio.push({
+        kind: 'audio',
+        id: sha256,
+        nodeId: node.id,
+        locale,
+        durationMs: 1000,
+        variants: [{ path: media.path, mime: media.mime, bytes: bytes.length }],
+        provenance: { origin: 'unknown' },
+        narratedTextSha256: await sha256Hex(
+          encode(story.pkg.text[locale]?.nodes[node.id]?.text ?? ''),
+        ),
+      })
+    }
+  }
+  const pkg = StoryPackageV1.parse({
+    ...story.pkg,
+    nodes: story.pkg.nodes.map((node) => ({ ...node, image: image.id })),
+    assets: [image, ...audio],
+  })
+  const bound = await withPackage(story, pkg)
+  return { ...bound, media: [...imageMedia, ...narrations] }
+}
+
+export interface TestApproval {
+  readonly record: ApprovalRecord
+  /** The record's canonical JCS bytes, as approve writes them. */
+  readonly bytes: Uint8Array<ArrayBuffer>
+  readonly sha256: string
+}
+
+/**
+ * The approval record approve would write for the story on the UTC date `on` with answersOf's
+ * defaults (languages in package order, imagesViewed the pictured nodes, narrationCheck 'checked',
+ * devices phone and laptop); `review` overrides review fields (canary texts, refusal samples). Not
+ * validated: a refusal test may build an invalid record.
+ */
+export async function approvalRecordOf(
+  story: TestStory,
+  options: { readonly on: string; readonly review?: Partial<ApprovalReview> },
+): Promise<TestApproval> {
+  const record: ApprovalRecord = {
+    storyId: story.storyId,
+    packageSha256: story.packageSha256,
+    ruleSetRef: PANCHATANTRA_RULESET.ref,
+    waiversSha256: story.waiverSha256,
+    review: {
+      languagesRead: [...story.pkg.locales],
+      allNodesRead: true,
+      imagesViewed: imageCountOf(story.pkg),
+      narrationCheck: 'checked',
+      devices: ['phone', 'laptop'],
+      reviewerChecklist: APPROVAL_CHECKLIST_TEXT,
+      ...options.review,
+    },
+    prescreen: APPROVAL_PRESCREEN_LEGACY,
+    decision: 'approved',
+    approvedOn: options.on,
+    approvedBy: 'owner',
+  }
+  const bytes = jcsBytes(record)
+  return { record, bytes, sha256: await sha256Hex(bytes) }
+}
+
+/**
+ * The six approve answers for the story, confirming the full review by default (the record
+ * approvalRecordOf builds); `over` replaces or adds keys. Keys in prompt order.
+ */
+export function answersOf(
+  story: TestStory,
+  over: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  return {
+    'languages-read': story.pkg.locales.join(','),
+    'all-nodes-read': 'yes',
+    'images-viewed': String(imageCountOf(story.pkg)),
+    'narration-check': 'checked',
+    devices: 'phone, laptop',
+    'checklist-complete': 'yes',
+    ...over,
+  }
 }

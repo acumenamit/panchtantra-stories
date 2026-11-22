@@ -6,11 +6,18 @@
 // key assembled at run time; a loopback guard on the global fetch refuses and counts any other
 // host. Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 15a (P1-8d part a, design p1-step15a-design.md §14.8) adds T15A-25 to T15A-29: production
+// composition, rollback composition and the production documents.
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkPointer, checkSnapshot, expectedPackagePath } from '../../src/core/content/gates'
+import {
+  checkPointer,
+  checkSnapshot,
+  expectedPackagePath,
+  splitByApproval,
+} from '../../src/core/content/gates'
 import type { SnapshotEntry } from '../../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import type { CatalogueSnapshot, WaiverKeys } from '../../src/core/package/catalogue'
@@ -19,7 +26,10 @@ import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import * as catalogueState from './catalogue-state'
 import {
   allocateSeq,
+  buildProductionDocuments,
   buildStagingDocuments,
+  composeProduction,
+  composeRollback,
   composeStaging,
   createSnapshot,
   movePointer,
@@ -106,7 +116,13 @@ function recordingPort(port: StagePort, calls: string[]) {
       return port.listContent(folder)
     },
     readContent: (ref: ContentReadRef) => {
-      calls.push(ref.kind === 'pointer' ? `read pointer ${ref.mode}` : `read snapshot ${ref.seq}`)
+      calls.push(
+        ref.kind === 'pointer'
+          ? `read pointer ${ref.mode}`
+          : ref.kind === 'snapshot'
+            ? `read snapshot ${ref.seq}`
+            : `read package ${ref.storyId}`,
+      )
       return port.readContent(ref)
     },
     readMaster: (ref: MasterReadRef) => {
@@ -805,6 +821,306 @@ describe('composeStaging', () => {
         '(g2) a fixtures-form packagePath',
       )
       .toBe('plan-gate')
+  })
+})
+
+// ---- Step 15a (P1-8d part a): production composition, rollback, the production documents ----
+// (design migration-input/p1-step15a-design.md §3.9, §3.13, D15-9, D15-12, D15-13; §14.8)
+
+const composeP = (
+  production: CatalogueSnapshot | null,
+  named: { entry: SnapshotEntry; approvalSha256: string | null }[],
+  feature?: string | null,
+) => composeProduction({ production, named, feature })
+const pcomposed = (result: ReturnType<typeof composeProduction>) =>
+  result.ok ? result.composition : null
+const approved = (storyId: string, version: number, sha: string, approval = hex('e')) =>
+  entry(storyId, version, sha, { approvalSha256: approval })
+
+describe('composeProduction, composeRollback and buildProductionDocuments (Step 15a)', () => {
+  it('T15A-25 composeProduction: production plus the named entries only, replaced in place or appended in UTF-16 order, each with its approvalSha256; staged candidates never carried (A9, D15-9)', () => {
+    const pair = ['story-9', 'story-10']
+    expect([...pair].sort(), 'precondition: code-unit order puts story-10 first').toEqual([
+      'story-10',
+      'story-9',
+    ])
+    expect(
+      [...pair].sort((x, y) => x.localeCompare(y, undefined, { numeric: true })),
+      'precondition: a numeric collation puts story-9 first',
+    ).toEqual(['story-9', 'story-10'])
+    const river = approved('river-stones', 1, hex('1'))
+    const two = approved('two-paths', 1, hex('2'))
+    const production = snapshotValue(3, [river, two])
+    expect(
+      production.stories.every((s) => s.approvalSha256 !== undefined),
+      'precondition: both production entries approved',
+    ).toBe(true)
+    const lantern = entry('lantern-walk', 1, hex('3'))
+    const staging = snapshotValue(4, [river, two, lantern])
+    expect(
+      staging.stories.some((s) => s.storyId === 'lantern-walk'),
+      'precondition: staging holds the candidate lantern-walk, not named',
+    ).toBe(true)
+    const riverV2 = entry('river-stones', 2, hex('4'), { waivers: block('f') })
+    const story9 = entry('story-9', 1, hex('5'))
+    const story10 = entry('story-10', 1, hex('6'))
+    const named = [
+      { entry: riverV2, approvalSha256: hex('a') },
+      { entry: story9, approvalSha256: hex('b') },
+      { entry: story10, approvalSha256: hex('c') },
+    ]
+    // The state-shaped input also carries staging: composeProduction must not read it.
+    const input: Parameters<typeof composeProduction>[0] & { staging: CatalogueSnapshot } = {
+      production,
+      staging,
+      named,
+      feature: undefined,
+    }
+    const result = pcomposed(composeProduction(input))
+    expect(result, 'precondition: the composition succeeds').not.toBeNull()
+    // (g1) the order
+    expect
+      .soft(
+        result?.stories.map((s) => [s.storyId, s.packageSha256]),
+        '(g1) river-stones v2 in place, two-paths kept, story-10 then story-9 appended',
+      )
+      .toEqual([
+        ['river-stones', hex('4')],
+        ['two-paths', hex('2')],
+        ['story-10', hex('6')],
+        ['story-9', hex('5')],
+      ])
+    // (g2) newEntry's key set plus approvalSha256, with its own A
+    for (const { entry: staged, approvalSha256 } of named) {
+      const made = result?.stories.find((s) => s.storyId === staged.storyId)
+      expect
+        .soft(Object.keys(made ?? {}).sort(), `(g2) key set ${staged.storyId}`)
+        .toEqual([...Object.keys(staged), 'approvalSha256'].sort())
+      expect
+        .soft(made?.approvalSha256, `(g2) own approvalSha256 ${staged.storyId}`)
+        .toBe(approvalSha256)
+    }
+    // (g3) the staged candidate is not carried
+    expect
+      .soft(
+        result?.stories.some((s) => s.storyId === 'lantern-walk'),
+        '(g3) lantern-walk not in N+1',
+      )
+      .toBe(false)
+    // (g4) the named states
+    expect
+      .soft(
+        result?.named.map((n) => [n.storyId, n.state]),
+        '(g4) replaced, new, new',
+      )
+      .toEqual([
+        ['river-stones', 'replaced'],
+        ['story-9', 'new'],
+        ['story-10', 'new'],
+      ])
+  })
+
+  it('T15A-26 composeProduction states and refusals: in-production keeps production bytes, same package with another block, version-not-increased by unit call only, an unapproved base entry; the first publish (A9, CRIT-11)', () => {
+    const p = entry('x-tale', 2, hex('1'), { approvalSha256: hex('a'), waivers: block('f') })
+    const production = snapshotValue(3, [p])
+    expect(composeP(production, []).ok, 'precondition: production alone composes').toBe(true)
+    // (g1) in-production: P kept byte for byte, its approvalSha256 too
+    const one = pcomposed(
+      composeP(production, [{ entry: withoutApproval(p), approvalSha256: hex('b') }]),
+    )
+    expect.soft(one?.named[0]?.state, '(g1) in-production').toBe('in-production')
+    expect.soft(jcs(one?.stories[0]), "(g1) production's bytes kept").toBe(jcs(p))
+    expect
+      .soft(one?.stories[0]?.approvalSha256, "(g1) production's approvalSha256 kept")
+      .toBe(hex('a'))
+    // (g2) same package, another block
+    expect
+      .soft(
+        composeP(production, [
+          {
+            entry: { ...withoutApproval(p), version: 3, waivers: block('e') },
+            approvalSha256: hex('b'),
+          },
+        ]),
+        '(g2) same package, another block',
+      )
+      .toEqual({ ok: false, code: 'waivers-changed-same-package', storyId: 'x-tale' })
+    // (g3) the defensive version rule
+    const refused = { ok: false, code: 'version-not-increased', storyId: 'x-tale' }
+    expect
+      .soft(
+        composeP(production, [{ entry: entry('x-tale', 2, hex('2')), approvalSha256: hex('b') }]),
+        '(g3) same version with another sha',
+      )
+      .toEqual(refused)
+    expect
+      .soft(
+        composeP(production, [{ entry: entry('x-tale', 1, hex('3')), approvalSha256: hex('b') }]),
+        '(g3) a lower version',
+      )
+      .toEqual(refused)
+    // (g4) an unapproved base entry
+    const unapprovedBase = snapshotValue(3, [p, entry('y-tale', 1, hex('4'))])
+    expect
+      .soft(
+        composeP(unapprovedBase, [
+          { entry: entry('z-tale', 1, hex('5')), approvalSha256: hex('b') },
+        ]),
+        '(g4) a base entry without approvalSha256',
+      )
+      .toEqual({ ok: false, code: 'production-entry-unapproved', storyId: 'y-tale' })
+    // (g5) the first publish
+    const first = pcomposed(
+      composeP(null, [
+        { entry: entry('story-9', 1, hex('6')), approvalSha256: hex('b') },
+        { entry: entry('story-10', 1, hex('7')), approvalSha256: hex('c') },
+      ]),
+    )
+    expect
+      .soft(
+        first?.stories.map((s) => s.storyId),
+        '(g5) no production: the named entries in code-unit order',
+      )
+      .toEqual(['story-10', 'story-9'])
+    expect.soft(first?.unchanged, '(g5) not unchanged').toBe(false)
+  })
+
+  it('T15A-27 composeProduction featured, note and unchanged (A9, D15-12)', () => {
+    const a = approved('a-b', 1, hex('1'))
+    const c = approved('c-d', 1, hex('2'))
+    const production = snapshotValue(3, [a, c], 'c-d')
+    expect(production.featuredStoryId, "precondition: production's featured is c-d").toBe('c-d')
+    const inProd = [
+      { entry: withoutApproval(c), approvalSha256: null },
+      { entry: withoutApproval(a), approvalSha256: null },
+    ]
+    // (g1) featured
+    expect
+      .soft(pcomposed(composeP(production, []))?.featuredStoryId, "(g1) no flag: production's")
+      .toBe('c-d')
+    expect
+      .soft(pcomposed(composeP(production, [], 'a-b'))?.featuredStoryId, '(g1) a flag id')
+      .toBe('a-b')
+    expect
+      .soft(pcomposed(composeP(production, [], null))?.featuredStoryId, '(g1) none: null')
+      .toBeNull()
+    // (g2) notes, named ids sorted
+    expect
+      .soft(pcomposed(composeP(production, inProd))?.note, '(g2) named ids sorted')
+      .toBe('publisher publish: a-b c-d')
+    expect
+      .soft(pcomposed(composeP(production, inProd, null))?.note, '(g2) with feature=none')
+      .toBe('publisher publish: a-b c-d feature=none')
+    expect
+      .soft(pcomposed(composeP(production, [], 'a-b'))?.note, '(g2) a flag alone')
+      .toBe('publisher publish: feature=a-b')
+    // (g3) unchanged
+    expect
+      .soft(pcomposed(composeP(production, inProd))?.unchanged, '(g3) all in production, no flag')
+      .toBe(true)
+    expect
+      .soft(
+        pcomposed(composeP(production, inProd, 'c-d'))?.unchanged,
+        "(g3) the flag equals production's",
+      )
+      .toBe(true)
+    expect
+      .soft(
+        pcomposed(composeP(production, inProd, 'a-b'))?.unchanged,
+        '(g3) a flag that changes it',
+      )
+      .toBe(false)
+    expect
+      .soft(pcomposed(composeP(null, []))?.unchanged, '(g3) never without production')
+      .toBe(false)
+  })
+
+  it('T15A-28 composeRollback: <seq> stories byte for byte, its featured id or the flag, the note, and unchanged by content (A15, CRIT-6)', () => {
+    const b = approved('bee-tale', 1, hex('1'))
+    const a = approved('ant-tale', 1, hex('2'))
+    const three = snapshotValue(3, [b, a], 'bee-tale')
+    expect(
+      three.stories.map((s) => s.storyId),
+      'precondition: <seq> is not in code-unit order',
+    ).not.toEqual(three.stories.map((s) => s.storyId).sort())
+    const production = snapshotValue(5, [approved('ant-tale', 2, hex('3'))], 'ant-tale')
+    expect(
+      production.featuredStoryId,
+      "precondition: production's featured differs from <seq>'s",
+    ).not.toBe(three.featuredStoryId)
+    // (g1) the copy, the featured id, the notes
+    const back = composeRollback({ production, from: three, feature: undefined })
+    expect.soft(jcs(back.stories), "(g1) stories JCS-equal <seq>'s").toBe(jcs(three.stories))
+    expect.soft(back.featuredStoryId, "(g1) <seq>'s featured").toBe('bee-tale')
+    const flagged = composeRollback({ production, from: three, feature: 'ant-tale' })
+    expect.soft(flagged.featuredStoryId, "(g1) the flag's featured").toBe('ant-tale')
+    expect.soft(back.note, '(g1) note').toBe('publisher rollback: 3')
+    expect
+      .soft(composeRollback({ production, from: three, feature: null }).note, '(g1) note with none')
+      .toBe('publisher rollback: 3 feature=none')
+    // (g2) unchanged by content, never by seq
+    const same = composeRollback({ production, from: production, feature: undefined })
+    expect.soft(same.unchanged, "(g2) <seq> equal to production's, no flag").toBe(true)
+    const older = { ...production, seq: 2, note: 'older', createdAt: LATER }
+    expect
+      .soft(
+        composeRollback({ production, from: older, feature: undefined }).unchanged,
+        "(g2) an older <seq> whose content equals production's",
+      )
+      .toBe(true)
+    expect
+      .soft(
+        composeRollback({ production, from: production, feature: null }).unchanged,
+        '(g2) equal <seq> with a flag that changes the featured id',
+      )
+      .toBe(false)
+  })
+
+  it('T15A-29 buildProductionDocuments: the production gates, every entry approved, featured among the entries; any failure plan-gate (A10, L10)', async () => {
+    const a = approved('a-tale', 1, hex('1'))
+    const b = approved('b-tale', 1, hex('2'), hex('f'))
+    const valid = { featuredStoryId: 'b-tale', stories: [a, b], note: 'publisher publish: b-tale' }
+    expect(
+      valid.stories.every((s) => s.approvalSha256 !== undefined) &&
+        valid.stories.some((s) => s.storyId === valid.featuredStoryId),
+      'precondition: every entry approved, the featured id among them',
+    ).toBe(true)
+    const built = await buildProductionDocuments(valid, 6, new Date(NOW))
+    const documents = built.ok ? built.documents : null
+    // (g1) a valid composition builds, and the production gates pass
+    expect.soft(codeOf(built), '(g1) a valid composition builds').toBe('ok')
+    expect
+      .soft(
+        documents
+          ? checkPointer(documents.pointer.bytes, { mode: 'production', root: '' }).ok
+          : null,
+        '(g1) the pointer passes checkPointer (production)',
+      )
+      .toBe(true)
+    const checked = documents
+      ? await checkSnapshot(documents.snapshot.bytes, documents.pointer.value, 'production')
+      : null
+    expect.soft(checked?.ok, '(g1) the snapshot passes checkSnapshot (production)').toBe(true)
+    expect
+      .soft(
+        documents ? splitByApproval(documents.snapshot.value, 'production').excluded : null,
+        '(g1) nothing excluded in production',
+      )
+      .toEqual([])
+    expect.soft(documents?.snapshot.value.featuredStoryId, '(g1) featured kept').toBe('b-tale')
+    // (g2) plan-gate
+    const unapproved = await buildProductionDocuments(
+      { ...valid, stories: [a, entry('b-tale', 1, hex('2'))] },
+      6,
+      new Date(NOW),
+    )
+    expect.soft(codeOf(unapproved), '(g2) an entry without approvalSha256').toBe('plan-gate')
+    const outside = await buildProductionDocuments(
+      { ...valid, featuredStoryId: 'c-tale' },
+      6,
+      new Date(NOW),
+    )
+    expect.soft(codeOf(outside), '(g2) a featured id outside the entries').toBe('plan-gate')
   })
 })
 

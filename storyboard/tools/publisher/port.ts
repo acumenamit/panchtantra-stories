@@ -5,12 +5,17 @@
 // client adds and this port lacks is a compile error there.
 // - StageWriter.create takes package, media and snapshot refs only: an approval create in stage
 //   code is a compile error (D14-21).
+// - Step 15a (p1-step15a-design.md §3.18, D15-18): ApproveWriter.create takes an approval ref only,
+//   with no pointer write; PublishWriter.create takes a snapshot ref only and its writePointer the
+//   production mode only. The CLI holds `const port: ApprovePort = client` and `PublishPort`, so a
+//   wrong create or a staging write in approve or publish code is a compile error.
 // - readOnlyPort gives a plan phase the three read methods and nothing else, so a write call in the
 //   plan path is a TypeError (D23-2, TP-12).
 // - isStorageRefusal recognises the client's refusal by its own name and its fixed text, never by
 //   instanceof, so no library module needs a value import of the client (D14-15).
 // Types come from ./storage-layout only; this module never imports the client, not even as types.
 import type {
+  ApprovalRef,
   ContentReadRef,
   CreateRef,
   MasterReadRef,
@@ -91,6 +96,23 @@ export interface StageWriter {
 
 /** What stage's commit phase holds. */
 export type StagePort = StorageReader & StageWriter
+
+/** The one write approve may make: its approval record in masters (D15-18). */
+export interface ApproveWriter {
+  readonly create: (ref: ApprovalRef, body: Uint8Array) => Promise<CreateResult>
+}
+
+/** What approve's commit phase holds. */
+export type ApprovePort = StorageReader & ApproveWriter
+
+/** The writes publish may make: snapshot N and the production pointer (D15-18). */
+export interface PublishWriter {
+  readonly create: (ref: SnapshotRef, body: Uint8Array) => Promise<CreateResult>
+  readonly writePointer: (mode: 'production', body: Uint8Array) => Promise<PointerResult>
+}
+
+/** What publish's commit phase holds (rollback included). */
+export type PublishPort = StorageReader & PublishWriter
 
 /** A new plain object of exactly the three read methods, each bound to `port` (TP-12). */
 export function readOnlyPort(port: StorageReader): StorageReader {

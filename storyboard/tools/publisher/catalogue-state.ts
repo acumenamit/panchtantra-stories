@@ -3,8 +3,9 @@
 // §3.6, D13-1 to D13-6, D14-8, D14-13, D14-14, D14-16, D14-19, D14-24, D14-27, TP-2, TP-9, TP-13;
 // P1-8c, Step 14). Exported for Step 15 (publish, rollback, unpublish), which composes and moves the
 // production pointer with the same functions.
-// - Reads go through a StorageReader and writes through a StageWriter (./port), never the client
-//   module itself, so the reach walk keeps one F1 row (the CLI).
+// - Reads go through a StorageReader and writes through a writer port (./port: StageWriter, and
+//   from Step 15a ApproveWriter and PublishWriter), never the client module itself, so the reach
+//   walk keeps one F1 row (the CLI).
 // - The state is read from the listing of catalogue/ and both pointers (each with a fresh nonce,
 //   added by the client): a pointer is absent only when the listing and the read agree; every
 //   pointer and snapshot passes the build's own gates.
@@ -13,12 +14,19 @@
 // - movePointer: a pre-check (no snapshot above N, both pointers as expected) at most 10 s before
 //   one write that is never retried, a fresh read-back, then a post-check (re-list, re-read the
 //   other pointer). Detection, not prevention (L6).
+// Step 15a (migration-input/p1-step15a-design.md §3.9, §3.10, §3.13; D15-9, D15-10, D15-12, D15-13)
+// adds the production side: composeProduction (production ⊕ the named stories, each with its
+// approvalSha256), composeRollback (snapshot N+1 copying an older one), buildProductionDocuments
+// (the staging builder in production mode plus two gates), and sameEntry exported. createWithRetry,
+// createSnapshot and movePointer take type-only generic signatures, so approve's and publish's
+// narrower ports fit; their behaviour is unchanged.
 // Results are codes only: no URL, path, body or message leaves this module.
 import {
   checkPackagePaths,
   checkPointer,
   checkSnapshot,
   expectedSnapshotPath,
+  splitByApproval,
 } from '../../src/core/content/gates'
 import { checkUniqueStoryIds, type SnapshotEntry } from '../../src/core/content/packages'
 import { jcsBytes } from '../../src/core/hashing'
@@ -32,16 +40,10 @@ import type {
   ContentReadResult,
   CreateResult,
   ListResult,
-  StageWriter,
+  PointerResult,
   StorageReader,
 } from './port'
-import {
-  classOfPath,
-  type MediaRef,
-  type PackageRef,
-  type PointerMode,
-  type SnapshotRef,
-} from './storage-layout'
+import { classOfPath, type CreateRef, type PointerMode, type SnapshotRef } from './storage-layout'
 
 /** The longest a pointer pre-check may run before the write (D13-3). */
 export const POINTER_WINDOW_MS = 10_000
@@ -254,7 +256,9 @@ function matchBytes(entry: SnapshotEntry): string {
   return new TextDecoder().decode(jcsBytes(waivers === undefined ? fields : { ...fields, waivers }))
 }
 
-const sameEntry = (a: SnapshotEntry, b: SnapshotEntry): boolean => matchBytes(a) === matchBytes(b)
+/** The D14-13 match: the two entries are equal apart from approvalSha256 (Step 15a exports it). */
+export const sameEntry = (a: SnapshotEntry, b: SnapshotEntry): boolean =>
+  matchBytes(a) === matchBytes(b)
 
 /** A new staging entry: exactly these fields, never approvalSha256 (D13-6). */
 function newEntry(entry: SnapshotEntry): SnapshotEntry {
@@ -362,6 +366,176 @@ export function composeStaging(input: ComposeInput): ComposeResult {
   }
 }
 
+// ---- production composition (Step 15a: D15-9, D15-12, D15-13; A9, A15) ----
+
+/** A named story's state in N+1: appended, replacing production's entry in place, or unchanged. */
+export type PublishState = 'new' | 'replaced' | 'in-production'
+/** Where an N+1 entry came from: kept from production, published now, or copied by a rollback. */
+export type ProductionSource = 'production' | 'published' | 'rollback'
+
+export interface NamedProductionEntry {
+  /** The story's staged entry. */
+  readonly entry: SnapshotEntry
+  /**
+   * The sha256 readMaster returned for the story's approval record, or null when no record was read
+   * (a story already in production). A new or replacing entry without one is written without
+   * approvalSha256, which buildProductionDocuments refuses (plan-gate).
+   */
+  readonly approvalSha256: string | null
+}
+
+export interface ProductionComposeInput {
+  /** The current production snapshot, or null without a production pointer. */
+  readonly production: CatalogueSnapshot | null
+  /** The named stories, in the order given. */
+  readonly named: readonly NamedProductionEntry[]
+  /** `--feature`: undefined when the flag was not given, null for `none`, else the story id. */
+  readonly feature: string | null | undefined
+}
+
+export interface PublishOutcome extends StoryOutcome<PublishState> {
+  readonly approvalSha256: string | null
+}
+
+export interface ProductionComposition {
+  readonly featuredStoryId: string | null
+  readonly stories: readonly SnapshotEntry[]
+  readonly note: string
+  /** A production snapshot exists and the composed {featuredStoryId, stories} equal its JCS. */
+  readonly unchanged: boolean
+  readonly named: readonly PublishOutcome[]
+  readonly sources: readonly {
+    readonly storyId: string
+    readonly packageSha256: string
+    readonly approvalSha256: string | null
+    readonly source: ProductionSource
+  }[]
+}
+
+export type ProductionComposeResult =
+  | { readonly ok: true; readonly composition: ProductionComposition }
+  | {
+      readonly ok: false
+      readonly code:
+        'production-entry-unapproved' | 'version-not-increased' | 'waivers-changed-same-package'
+      readonly storyId: string
+    }
+
+/** The JCS text of a snapshot's {featuredStoryId, stories}: the content an unchanged plan compares. */
+const contentView = (featuredStoryId: string | null, stories: readonly SnapshotEntry[]): string =>
+  new TextDecoder().decode(jcsBytes({ featuredStoryId, stories }))
+
+/** ` feature=<id|none>` when the flag was given, else ''. */
+const featureSuffix = (feature: string | null | undefined): string =>
+  feature === undefined ? '' : ` feature=${feature ?? 'none'}`
+
+/**
+ * production ⊕ named (D15-9): production's snapshot.stories in order, every one approved
+ * (production-entry-unapproved); each named entry is in-production (sameEntry with production's, which
+ * is kept byte for byte), refused (same package with another block; not above production's version,
+ * the defensive check: publish refuses those as staged-entry-superseded first), or a new entry
+ * `{...newEntry(E), approvalSha256: A}` replacing production's in place or appended in UTF-16
+ * code-unit order. Staged candidates are never read: only the named entries are published. featured
+ * is the flag's (none → null) or production's; note `publisher publish:` + the named ids sorted +
+ * ` feature=<id|none>` with the flag.
+ */
+export function composeProduction(input: ProductionComposeInput): ProductionComposeResult {
+  const base = input.production?.stories ?? []
+  for (const entry of base) {
+    if (entry.approvalSha256 === undefined) {
+      return { ok: false, code: 'production-entry-unapproved', storyId: entry.storyId }
+    }
+  }
+  const production = new Map(base.map((entry) => [entry.storyId, entry]))
+  const published = new Map<string, SnapshotEntry>()
+  const named: PublishOutcome[] = []
+  for (const { entry, approvalSha256 } of input.named) {
+    const current = production.get(entry.storyId)
+    if (current !== undefined && sameEntry(entry, current)) {
+      named.push({
+        ...outcome(current, 'in-production'),
+        approvalSha256: current.approvalSha256 ?? null,
+      })
+      continue
+    }
+    if (current !== undefined && current.packageSha256 === entry.packageSha256) {
+      return { ok: false, code: 'waivers-changed-same-package', storyId: entry.storyId }
+    }
+    if (current !== undefined && current.version >= entry.version) {
+      return { ok: false, code: 'version-not-increased', storyId: entry.storyId }
+    }
+    const made: SnapshotEntry =
+      approvalSha256 === null ? newEntry(entry) : { ...newEntry(entry), approvalSha256 }
+    published.set(entry.storyId, made)
+    named.push({
+      ...outcome(made, current === undefined ? 'new' : 'replaced'),
+      approvalSha256: made.approvalSha256 ?? null,
+    })
+  }
+  const stories = base.map((entry) => published.get(entry.storyId) ?? entry)
+  const appended = [...published.keys()].filter((id) => !production.has(id)).sort()
+  for (const id of appended) stories.push(published.get(id)!)
+  const featuredStoryId =
+    input.feature === undefined ? (input.production?.featuredStoryId ?? null) : input.feature
+  const namedIds = [...new Set(input.named.map(({ entry }) => entry.storyId))].sort()
+  const unchanged =
+    input.production !== null &&
+    contentView(featuredStoryId, stories) ===
+      contentView(input.production.featuredStoryId, input.production.stories)
+  return {
+    ok: true,
+    composition: {
+      featuredStoryId,
+      stories,
+      note: `publisher publish:${namedIds.map((id) => ` ${id}`).join('')}${featureSuffix(input.feature)}`,
+      unchanged,
+      named,
+      sources: stories.map((entry) => ({
+        storyId: entry.storyId,
+        packageSha256: entry.packageSha256,
+        approvalSha256: entry.approvalSha256 ?? null,
+        source: published.has(entry.storyId) ? 'published' : 'production',
+      })),
+    },
+  }
+}
+
+export interface RollbackComposeInput {
+  /** The current production snapshot, or null without a production pointer. */
+  readonly production: CatalogueSnapshot | null
+  /** The snapshot `--snapshot <seq>` names, already read and checked by the caller. */
+  readonly from: CatalogueSnapshot
+  /** `--feature`: undefined when the flag was not given, null for `none`, else the story id. */
+  readonly feature: string | null | undefined
+}
+
+/**
+ * Snapshot N+1 of a rollback (D15-13): `from`'s stories copied byte for byte and in order, its
+ * featured id or the flag's, note `publisher rollback: <seq>` (+ ` feature=<id|none>` with the flag);
+ * unchanged exactly as composeProduction's, by content and never by seq (CRIT-6).
+ */
+export function composeRollback(input: RollbackComposeInput): ProductionComposition {
+  const stories = [...input.from.stories]
+  const featuredStoryId = input.feature === undefined ? input.from.featuredStoryId : input.feature
+  const unchanged =
+    input.production !== null &&
+    contentView(featuredStoryId, stories) ===
+      contentView(input.production.featuredStoryId, input.production.stories)
+  return {
+    featuredStoryId,
+    stories,
+    note: `publisher rollback: ${input.from.seq}${featureSuffix(input.feature)}`,
+    unchanged,
+    named: [],
+    sources: stories.map((entry) => ({
+      storyId: entry.storyId,
+      packageSha256: entry.packageSha256,
+      approvalSha256: entry.approvalSha256 ?? null,
+      source: 'rollback',
+    })),
+  }
+}
+
 // ---- documents (TP-13, §4.3 step 9) ----
 
 export interface StagingDocuments {
@@ -374,15 +548,21 @@ export type DocumentsResult =
   | { readonly ok: true; readonly documents: StagingDocuments }
   | { readonly ok: false; readonly code: 'plan-gate' }
 
+/** The production snapshot N+1 and its pointer: the same shape as staging's (Step 15a). */
+export type ProductionDocuments = StagingDocuments
+
+type DocumentsInput = Pick<Composition, 'featuredStoryId' | 'stories' | 'note'>
+
 /**
- * The staging snapshot N (makeSnapshot) and its pointer (makePointer), then the build's own checks:
+ * Snapshot N (makeSnapshot) and its pointer (makePointer), then the build's own checks in `mode`:
  * checkPackagePaths, checkUniqueStoryIds, checkPointer, checkSnapshot. Any failure (a design fault)
  * is plan-gate, before any write.
  */
-export async function buildStagingDocuments(
-  composition: Pick<Composition, 'featuredStoryId' | 'stories' | 'note'>,
+async function buildDocuments(
+  composition: DocumentsInput,
   seq: number,
   now: Date,
+  mode: PointerMode,
 ): Promise<DocumentsResult> {
   const gate: DocumentsResult = { ok: false, code: 'plan-gate' }
   try {
@@ -403,14 +583,46 @@ export async function buildStagingDocuments(
       updatedAt: at,
     })
     const stories = snapshot.value.stories
-    if (!checkPackagePaths(stories, 'staging', '').ok) return gate
+    if (!checkPackagePaths(stories, mode, '').ok) return gate
     if (!checkUniqueStoryIds(stories).ok) return gate
-    if (!checkPointer(pointer.bytes, { mode: 'staging', root: '' }).ok) return gate
-    if (!(await checkSnapshot(snapshot.bytes, pointer.value, 'staging')).ok) return gate
+    if (!checkPointer(pointer.bytes, { mode, root: '' }).ok) return gate
+    if (!(await checkSnapshot(snapshot.bytes, pointer.value, mode)).ok) return gate
     return { ok: true, documents: { seq, snapshot, pointer } }
   } catch {
     return gate
   }
+}
+
+/** The staging snapshot N and its pointer, through the shared builder in staging mode. */
+export async function buildStagingDocuments(
+  composition: DocumentsInput,
+  seq: number,
+  now: Date,
+): Promise<DocumentsResult> {
+  return buildDocuments(composition, seq, now, 'staging')
+}
+
+/**
+ * The production snapshot N+1 and its pointer (D15-9): the shared builder in production mode, then
+ * every entry approved (splitByApproval excludes none) and featuredStoryId null or one of the entries.
+ * Any failure is plan-gate.
+ */
+export async function buildProductionDocuments(
+  composition: DocumentsInput,
+  seq: number,
+  now: Date,
+): Promise<DocumentsResult> {
+  const built = await buildDocuments(composition, seq, now, 'production')
+  if (!built.ok) return built
+  const snapshot = built.documents.snapshot.value
+  if (splitByApproval(snapshot, 'production').excluded.length > 0) {
+    return { ok: false, code: 'plan-gate' }
+  }
+  const featured = snapshot.featuredStoryId
+  if (featured !== null && !snapshot.stories.some((entry) => entry.storyId === featured)) {
+    return { ok: false, code: 'plan-gate' }
+  }
+  return built
 }
 
 // ---- creates with one retry (D14-8) ----
@@ -433,11 +645,12 @@ const retryable = (result: CreateResult): boolean =>
 
 /**
  * One create, retried once after RETRY_DELAY_MS when it failed with no status (network, timeout)
- * or a 5xx; a 4xx failure, unauthorized, too-large and mime-refused stop at once.
+ * or a 5xx; a 4xx failure, unauthorized, too-large and mime-refused stop at once. Generic over the
+ * ref (Step 15a, D15-10, type-only): stage passes its content refs, approve its approval ref.
  */
-export async function createWithRetry(
-  writer: Pick<StageWriter, 'create'>,
-  ref: PackageRef | MediaRef | SnapshotRef,
+export async function createWithRetry<R extends CreateRef>(
+  writer: { readonly create: (ref: R, body: Uint8Array) => Promise<CreateResult> },
+  ref: R,
   body: Uint8Array,
   options: CommitOptions,
 ): Promise<CreateOutcome> {
@@ -466,7 +679,10 @@ export type SnapshotOutcome =
  * duplicate holding other bytes is seq-taken; any other read is snapshot-unconfirmed.
  */
 export async function createSnapshot(
-  port: Pick<StageWriter, 'create'> & Pick<StorageReader, 'readContent'>,
+  port: { readonly create: (ref: SnapshotRef, body: Uint8Array) => Promise<CreateResult> } & Pick<
+    StorageReader,
+    'readContent'
+  >,
   seq: number,
   built: { readonly bytes: Uint8Array; readonly sha256: string },
   options: CommitOptions,
@@ -507,15 +723,20 @@ export type MoveResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly code: MoveCode; readonly afterWrite: boolean }
 
-type MovePort = Pick<StorageReader, 'listContent' | 'readContent'> &
-  Pick<StageWriter, 'writePointer'>
+/** The reads a pointer move makes (the pre-check, the read-back, the post-check). */
+type MoveReader = Pick<StorageReader, 'listContent' | 'readContent'>
+
+/** A port that can write the pointer of mode M (Step 15a, D15-10: publish writes production only). */
+type MovePort<M extends PointerMode> = MoveReader & {
+  readonly writePointer: (mode: M, body: Uint8Array) => Promise<PointerResult>
+}
 
 /** True when a read shows exactly the expected bytes: our sha256, or not-found where null. */
 const showsExpected = (read: ContentReadResult, expected: string | null): boolean =>
   expected === null ? read.kind === 'not-found' : read.kind === 'found' && read.sha256 === expected
 
 /** The highest snapshot seq a listing shows, or null when the listing failed. */
-async function highestListed(port: MovePort): Promise<number | 'unauthorized' | 'failed'> {
+async function highestListed(port: MoveReader): Promise<number | 'unauthorized' | 'failed'> {
   const listing = await port.listContent(CATALOGUE_FOLDER)
   if (listing.kind !== 'listed') return listing.kind === 'unauthorized' ? 'unauthorized' : 'failed'
   return Math.max(0, ...decodeListing(listing).seqs)
@@ -529,7 +750,7 @@ const otherMode = (mode: PointerMode): PointerMode =>
  * before the listing and before each pointer read (D14-8, A17).
  */
 async function preCheck(
-  port: MovePort,
+  port: MoveReader,
   seq: number,
   expected: ExpectedPointers,
   deadlinePassed: () => boolean,
@@ -555,9 +776,9 @@ async function preCheck(
  * re-lists catalogue/ and re-reads the other pointer (pointer-raced). `deadlinePassed` is checked
  * before every pre-check request and before the write, never after the write (D14-8).
  */
-export async function movePointer(
-  port: MovePort,
-  mode: PointerMode,
+export async function movePointer<M extends PointerMode>(
+  port: MovePort<M>,
+  mode: M,
   built: { readonly seq: number; readonly bytes: Uint8Array; readonly sha256: string },
   expected: ExpectedPointers,
   clock: () => Date,
