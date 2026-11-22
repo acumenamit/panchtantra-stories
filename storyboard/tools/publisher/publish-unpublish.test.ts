@@ -11,6 +11,9 @@
 // temp root. Every test ends with expectUnpublishSafe (TP-14).
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 16 (P1-8e, design migration-input/p1-step16-design.md §3.17, §14.8, §14.11): T16-22, the
+// neither state with blind or short later listings stopping at plan (T1, T1c); rootForms adds the
+// URL-encoded forms and the root's file URL (TP16-10).
 import {
   existsSync,
   mkdirSync,
@@ -24,6 +27,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { planMediaHeads } from '../../src/core/content/media'
 import type { SnapshotEntry } from '../../src/core/content/packages'
@@ -654,7 +658,8 @@ const channels = (r: Ran) => [...r.out, ...r.err, JSON.stringify(r.report), r.md
 /**
  * Every case and separator form of a temp root, each also as JSON text writes it: `channels` holds
  * `JSON.stringify(r.report)`, which doubles every backslash of a win32 path (S15B-R1 F1, as
- * takedown.test.ts's B15B-mut-3).
+ * takedown.test.ts's B15B-mut-3). Step 16 (TP16-10): each form URL-encoded too, and the root's
+ * file URL.
  */
 const rootForms = (dir: string) => {
   const forms = [
@@ -664,7 +669,12 @@ const rootForms = (dir: string) => {
     dir.replaceAll('\\', '/'),
     dir.replaceAll('/', '\\'),
   ]
-  return [...forms, ...forms.map((form) => JSON.stringify(form).slice(1, -1))]
+  return [
+    ...forms,
+    ...forms.map((form) => JSON.stringify(form).slice(1, -1)),
+    ...forms.map((form) => encodeURIComponent(form)),
+    pathToFileURL(dir).href,
+  ]
 }
 
 describe('publish --unpublish', () => {
@@ -2054,6 +2064,115 @@ describe('publish --unpublish', () => {
         }
         expectUnpublishSafe(dryStub, { seq: null, moves: 'none', storyId: ID, takedown: true })
       }
+    },
+  )
+
+  it(
+    'T16-22 runPublish --takedown in the neither state: blind or short later listings stop at plan, exit 1, before the hook, any write and any DELETE; full listings plan (A14, A15, S15B-R2-SEC-1)',
+    TIMEOUT,
+    async () => {
+      const two = await storyOf()
+      const river = await storyOf(RIVER)
+      const stub = await seed()
+      seedAudio([two, river])
+      expect(
+        (await unpublish(stub, [RIVER])).exit,
+        'precondition: river-stones withdrawn from both pointers (the neither state)',
+      ).toBe(0)
+      const paths = storyPaths(river)
+      const stored = () => paths.map((p) => Buffer.from(stub.object('content', p)?.bytes ?? []))
+      const before = stored()
+      expect(
+        before.every((bytes) => bytes.length > 0),
+        'precondition: every river-stones object stored',
+      ).toBe(true)
+      const unchanged = () => stored().every((bytes, i) => bytes.equals(before[i]!))
+      /**
+       * The first listing of each of the story's two folders is the stub's (D15B-30's); every later
+       * one is `rewrite` of the stub's page.
+       */
+      const later = (
+        rewrite: (prefix: string, page: { name: string }[]) => { name: string }[],
+      ): Before => {
+        const calls = new Map<string, number>()
+        return async (url, init) => {
+          if (!isPost(init, url, LIST_PATH)) return
+          const prefix = (JSON.parse(String(init.body)) as { prefix: string }).prefix
+          if (prefix !== `packages/${RIVER}` && prefix !== `media/${RIVER}`) return
+          const n = calls.get(prefix) ?? 0
+          calls.set(prefix, n + 1)
+          if (n === 0) return
+          const real = await globalThis.fetch(url, init)
+          const page = (await real.json()) as { name: string }[]
+          return new Response(JSON.stringify(rewrite(prefix, page)), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+      }
+      const stopped = `publish: stopped: takedown-check-failed ${RIVER}`
+
+      // g1: every later listing [].
+      const g1 = await unpublish(stub, [RIVER, '--takedown'], { before: later(() => []) })
+      expect
+        .soft(
+          [
+            g1.exit,
+            g1.out.at(-1),
+            g1.calls,
+            objectPosts(stub).length,
+            deletesOf(since(stub)).length,
+            g1.removers,
+            unchanged(),
+          ],
+          '(g1) later listings []: exit 1 takedown-check-failed, no hook, no write, no DELETE, every object stored',
+        )
+        .toEqual([1, stopped, [], 0, 0, 0, true])
+      expectUnpublishSafe(stub, { seq: null, moves: 'none', storyId: RIVER, takedown: true })
+
+      // g2: the later media listing drops one path.
+      const dropped = river.media.find((m) => m.mime !== 'audio/mpeg')!.path
+      const g2 = await unpublish(stub, [RIVER, '--takedown'], {
+        before: later((prefix, page) =>
+          prefix === `media/${RIVER}`
+            ? page.filter((e) => `${prefix}/${e.name}` !== dropped)
+            : page,
+        ),
+      })
+      expect
+        .soft(
+          [
+            g2.exit,
+            g2.out.at(-1),
+            g2.calls,
+            objectPosts(stub).length,
+            deletesOf(since(stub)).length,
+            g2.removers,
+            unchanged(),
+          ],
+          '(g2) the later media listing drops one path: the same stop',
+        )
+        .toEqual([1, stopped, [], 0, 0, 0, true])
+      expectUnpublishSafe(stub, { seq: null, moves: 'none', storyId: RIVER, takedown: true })
+
+      // g3: control, full later listings, a dry run.
+      const mp3 = river.media.filter((m) => m.mime === 'audio/mpeg').length
+      const media = river.media.length
+      const g3 = await unpublish(stub, [RIVER, '--takedown', '--dry-run'], {
+        before: later((_prefix, page) => page),
+      })
+      expect
+        .soft(
+          [g3.exit, g3.out.at(-1), g3.calls, deletesOf(since(stub)).length],
+          '(g3) full later listings, --dry-run: exit 0 with the takedown plan line',
+        )
+        .toEqual([
+          0,
+          `publish: takedown ${RIVER} plan packages=1 media=${media} mp3=${mp3} mp3-unproven=0 images=${media - mp3} (hash list checked)`,
+          [],
+          0,
+        ])
+      expectUnpublishSafe(stub, { seq: null, moves: 'none', storyId: RIVER, takedown: true })
     },
   )
 })

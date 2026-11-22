@@ -219,6 +219,7 @@ const NO_APPROVE_OR_PUBLISH: Pick<
   | 'verify'
   | 'createDeleter'
   | 'publicReads'
+  | 'fixtures'
 > = {
   openStdin: NOT_FOR_STAGE('openStdin'),
   stdinIsTTY: NOT_FOR_STAGE('stdinIsTTY'),
@@ -233,6 +234,7 @@ const NO_APPROVE_OR_PUBLISH: Pick<
     checkRange: NOT_FOR_STAGE('checkRange'),
     checkLanding: NOT_FOR_STAGE('checkLanding'),
   },
+  fixtures: NOT_FOR_STAGE('fixtures'),
 }
 
 type Before = (url: URL, init: RequestInit) => Promise<Response | void> | Response | void

@@ -1,0 +1,90 @@
+# Publisher unpublish (P1-8e, Step 16; storyboard/migration-input/p1-step16-design.md D16-2 to D16-13).
+# --takedown runs on the owner's PC only (spec section 8) and is never offered here. Dispatch only. mode fixtures, the
+# default, runs the publisher on its in-memory fixture store with no secret and no Environment. dry-run reads Storage and
+# writes nothing; run withdraws the story from both pointers and calls the deploy hook. Both need the publisher
+# Environment and run from main only. Inputs are read from the event file by scripts/publisher-dispatch.ts, never by a
+# run line, and no step prints them; a public repository's run page may still show them, so put nothing private here.
+name: publisher-unpublish
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'fixtures: in-memory store, no secret; dry-run: reads Storage, writes nothing; run: withdraws the story'
+        type: choice
+        options:
+          - fixtures
+          - dry-run
+          - run
+        default: fixtures
+      story-id:
+        description: Story id to withdraw from both pointers
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    if: inputs.mode == 'fixtures'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: storyboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: storyboard/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: storyboard/.nvmrc
+          cache: pnpm
+          cache-dependency-path: storyboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Publisher unpublish on the fixture store
+        run: pnpm exec tsx scripts/publisher-dispatch.ts unpublish fixtures
+
+  storage:
+    if: inputs.mode != 'fixtures' && github.ref == 'refs/heads/main'
+    environment: publisher
+    concurrency:
+      group: publisher
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: storyboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: storyboard/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: storyboard/.nvmrc
+          cache: pnpm
+          cache-dependency-path: storyboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Publisher unpublish against the project
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          VERCEL_DEPLOY_HOOK_PRODUCTION: ${{ secrets.VERCEL_DEPLOY_HOOK_PRODUCTION }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: pnpm exec tsx scripts/publisher-dispatch.ts unpublish storage
+
+  refuse-ref:
+    if: inputs.mode != 'fixtures' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: 'Refused: dry-run and run dispatch from main only'
+        run: exit 1

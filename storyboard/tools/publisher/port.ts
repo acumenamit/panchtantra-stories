@@ -18,6 +18,9 @@
 //   RemoveResult and ContentRemover (the deleter as takedown holds it), and the public-read answers
 //   (RangeTarget, RangeAnswer, ObjectAnswer, LandingAnswer, LiveBuild, VerifySite), so no library
 //   module imports verify.ts or the deleter (F4, F6).
+// - Step 16 (p1-step16-design.md §3.14.3, D16-14, D16-32) adds the FixtureSet type only: the
+//   `--fixtures` world (an in-memory store whose writes throw, verify's live answer and the public
+//   reads), so cli.ts names the world's type from here and holds no static import of fixture-store.ts.
 // Types come from ./storage-layout only; this module never imports the client, not even as types.
 import type {
   ApprovalRef,
@@ -228,6 +231,17 @@ export interface VerifySite {
     readonly mime: string
   }) => Promise<ObjectAnswer>
   readonly range: (target: RangeTarget) => Promise<RangeAnswer>
+}
+
+// ---- Step 16 (p1-step16-design.md §3.14.3, D16-14): a type only ----
+
+/** Step 16 (D16-14): the --fixtures world: an in-memory store whose writes throw, verify's live answer and the public reads. */
+export interface FixtureSet {
+  readonly client: StorageReader & StorageWriter
+  readonly live: (
+    expectedSeq: number,
+  ) => Promise<{ readonly kind: 'live'; readonly seq: number; readonly build: LiveBuild }>
+  readonly site: VerifySite
 }
 
 /** A new plain object of exactly the three read methods, each bound to `port` (TP-12). */

@@ -1,5 +1,8 @@
 // Test material for the publisher's stage tests (design migration-input/p1-step14-design.md §2.1,
-// §8, §14.1 "Inputs", D14-22; P1-8c, Step 14). Not a test file, but used only by tests. Builds
+// §8, §14.1 "Inputs", D14-22; P1-8c, Step 14). Not a test file; used by tests and, from Step 16
+// (migration-input/p1-step16-design.md §3.15, D16-15, D16-32), read by fixture-store.ts, the
+// `--fixtures` world, whose code never calls this module's two node:fs writers (below); the CLI
+// loads fixture-store.ts, and so this module, only through the `--fixtures` dynamic import. Builds
 // phase-2 versions of the committed fixture packages in memory: per story one image asset with two
 // WebP widths of distinct bytes and one MP3 narration, each media path named by the sha256 of its
 // own bytes (D14-22; never the asset id), provenance `unknown`; canonical JCS package bytes; and a

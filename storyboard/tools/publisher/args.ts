@@ -7,9 +7,14 @@
 // `--constructor`, `--toString`) are unknown flags. Every message names a flag or a rule from the
 // fixed table, never an input value.
 // - Parse order for every command: the flag loop (unknown, repeated, no value, needs a value), the
-//   scope texts, the id rules, the required flags, the value forms (`--package`, `--snapshot`,
-//   `--feature`, then `--unpublish`), the report dir (device or network, then the win32 segment rule, then the
-//   in-site compare), then `--timeout-ms`.
+//   scope texts, the id rules, the `--fixtures` dry-run rule (Step 16), the required flags, the value
+//   forms (`--package`, `--snapshot`, `--feature`, then `--unpublish`), the report dir (device or
+//   network, then the win32 segment rule, then the in-site compare), then `--timeout-ms`.
+// - Step 16 (migration-input/p1-step16-design.md §3.14.1, D16-14; P1-8e): `--fixtures`, a boolean
+//   flag for approve, publish and verify; approve and publish also need `--dry-run`, checked right
+//   after the id rules. Its default report dir is `<storyboardRoot>/migration-input/reports/fixtures`
+//   (one fixed segment more), so a fixtures report never replaces a real one; a given `--report-dir`
+//   is used as given, and both pass the same form and in-site checks.
 import { resolve, sep } from 'node:path'
 import { StoryId } from '../../src/core/package/v1'
 
@@ -17,12 +22,12 @@ export const USAGE_TEXT = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
   '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  verify [--deep] [--report-dir <dir>] [--timeout-ms <n>]',
+  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  verify [--deep] [--fixtures] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -47,6 +52,7 @@ const FLAGS: ReadonlyMap<string, FlagKind> = new Map([
   ['unpublish', 'value'],
   ['takedown', 'boolean'],
   ['deep', 'boolean'],
+  ['fixtures', 'boolean'],
 ])
 type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
 const COMMANDS: ReadonlySet<string> = new Set<Command>([
@@ -74,6 +80,7 @@ const SCOPE: ReadonlyMap<string, readonly Command[]> = new Map<string, readonly 
   ['unpublish', ['publish']],
   ['takedown', ['publish']],
   ['deep', ['verify']],
+  ['fixtures', ['approve', 'publish', 'verify']],
 ])
 
 const MESSAGE = {
@@ -99,6 +106,7 @@ const MESSAGE = {
   unpublishForm: 'usage: --unpublish takes a story id',
   takedownNeeds: 'usage: --takedown needs --unpublish <id>',
   verifyIds: 'usage: verify takes no story ids',
+  fixturesDryRun: 'usage: --fixtures needs --dry-run for approve and publish',
   timeout: 'usage: --timeout-ms must be a whole number from 1 to 600000',
   reportDir: 'usage: --report-dir may not be at or under public/ or app/ of the storyboard folder',
   reportDirDevice: 'usage: --report-dir may not be a device or network path',
@@ -128,6 +136,7 @@ const SCOPE_TEXT: Readonly<Record<string, string>> = {
   unpublish: 'publish',
   takedown: 'publish',
   deep: 'verify',
+  fixtures: 'approve, publish and verify',
 }
 const outOfScope = (flag: string) => `usage: --${flag} is for ${SCOPE_TEXT[flag] ?? ''} only`
 
@@ -180,6 +189,8 @@ export type ParsedArgs =
       readonly packagePrefix: string
       readonly answersStdin: boolean
       readonly dryRun: boolean
+      /** True for `--fixtures` (Step 16, D16-14): the in-memory fixture dry run; needs dryRun. */
+      readonly fixtures: boolean
       readonly timeoutMs: number
     } & ReportDirArg)
   | ({
@@ -197,6 +208,8 @@ export type ParsedArgs =
       /** True for `--takedown`, which needs `--unpublish` (D15B-8). */
       readonly takedown: boolean
       readonly dryRun: boolean
+      /** True for `--fixtures` (Step 16, D16-14): the in-memory fixture dry run; needs dryRun. */
+      readonly fixtures: boolean
       readonly timeoutMs: number
     } & ReportDirArg)
   | ({
@@ -204,6 +217,8 @@ export type ParsedArgs =
       readonly command: 'verify'
       /** True for `--deep` (D15B-20). */
       readonly deep: boolean
+      /** True for `--fixtures` (Step 16, D16-14): verify's fixture dry run (verify writes nothing). */
+      readonly fixtures: boolean
       readonly timeoutMs: number
     } & ReportDirArg)
   | { readonly ok: false; readonly code: 'usage'; readonly message: string }
@@ -295,6 +310,12 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
   }
   const idProblem = idRule(command, ids, flags)
   if (idProblem !== null) return usage(idProblem)
+  // Step 16 (D16-14): the fixture dry run of approve and publish is a dry run, after the id rules
+  // and before the required flags.
+  const fixtures = flags.has('fixtures')
+  if (fixtures && (command === 'approve' || command === 'publish') && !flags.has('dry-run')) {
+    return usage(MESSAGE.fixturesDryRun)
+  }
 
   const text = (flag: string): string | undefined => {
     const value = flags.get(flag)
@@ -328,9 +349,16 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
 
   const reportDirText = text('report-dir')
   const reportDirGiven = reportDirText !== undefined
+  // With --fixtures the default gains one fixed segment, so a fixtures report never replaces a real
+  // one (D16-14); the form and in-site checks below apply to it unchanged.
   const reportDir =
     reportDirText === undefined
-      ? resolve(context.storyboardRoot, 'migration-input', 'reports')
+      ? resolve(
+          context.storyboardRoot,
+          'migration-input',
+          'reports',
+          ...(fixtures ? ['fixtures'] : []),
+        )
       : resolve(context.cwd, reportDirText)
   const formRefusal = reportDirFormRefusal(reportDir, reportDirGiven, context.platform)
   if (formRefusal !== null) return usage(formRefusal)
@@ -362,7 +390,15 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
     timeoutMs = Number(timeout)
   }
   if (command === 'verify') {
-    return { ok: true, command, deep: flags.has('deep'), timeoutMs, reportDir, reportDirGiven }
+    return {
+      ok: true,
+      command,
+      deep: flags.has('deep'),
+      fixtures,
+      timeoutMs,
+      reportDir,
+      reportDirGiven,
+    }
   }
   const dryRun = flags.has('dry-run')
   if (command === 'approve') {
@@ -373,6 +409,7 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
       packagePrefix: packagePrefix ?? '',
       answersStdin: flags.has('answers-stdin'),
       dryRun,
+      fixtures,
       timeoutMs,
       reportDir,
       reportDirGiven,
@@ -389,6 +426,7 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
       unpublish: unpublishText ?? null,
       takedown: flags.has('takedown'),
       dryRun,
+      fixtures,
       timeoutMs,
       reportDir,
       reportDirGiven,

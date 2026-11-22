@@ -39,6 +39,14 @@
 //   the project check with the site URL only (no hook URL), its client held read-only, verify asked
 //   for the build detail, and the public reads bound to the site URL and the public content base.
 //   CliDeps.publicReads has no default either.
+// - Step 16 (migration-input/p1-step16-design.md §3.14.2, D16-14, D16-32; P1-8e): approve, publish
+//   and verify with `--fixtures` (args.ts: approve and publish also need --dry-run) run after every
+//   run-context refusal and approve's answer channel, before the env file: one fixed line, then the
+//   runner on the in-memory world of CliDeps.fixtures (no default): its client as the ports, verify's
+//   live answer and its site, a tail and a remover that throw. No env read, env file, credential,
+//   project check, URL read, client, hook, verify, deleter or public read happens on that branch. The
+//   world's type comes from ./port only; the entry block loads fixture-store.ts through `import()`, so
+//   a run without `--fixtures` never evaluates it or the test kit it builds from.
 import { realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +65,7 @@ import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
 import type {
   ApprovePort,
   ContentRemover,
+  FixtureSet,
   PublishPort,
   StagePort,
   StorageReader,
@@ -88,6 +97,12 @@ const TAKEDOWN_IN_ACTIONS =
   'publish: --takedown runs on this PC only; GitHub Actions refuses it (spec §8)'
 /** The stdin deadline of the entry block (D15-3). */
 const STDIN_DEADLINE_MS = 30_000
+/** The fixed first line of a --fixtures run (Step 16, S16-CRIT-12): what it promises, no value. */
+const FIXTURES_LINE: Readonly<Record<'approve' | 'publish' | 'verify', string>> = {
+  approve: 'approve: fixtures dry run: an in-memory store; no Storage, deploy hook or site request',
+  publish: 'publish: fixtures dry run: an in-memory store; no Storage, deploy hook or site request',
+  verify: 'verify: fixtures dry run: an in-memory store; no Storage, deploy hook or site request',
+}
 
 export interface CliDeps {
   /** The environment the credentials are read from, after the env file loaded into it. */
@@ -124,6 +139,99 @@ export interface CliDeps {
     readonly checkRange: typeof checkRange
     readonly checkLanding: typeof checkLanding
   }
+  /**
+   * `--fixtures` only (Step 16, D16-14, D16-32): the in-memory fixture world. No default; the entry
+   * block passes fixture-store.ts's openFixtureSet through a dynamic import. Required (L16-1); a
+   * deps object that lacks it anyway still stops a --fixtures run as internal TypeError.
+   */
+  readonly fixtures: () => Promise<FixtureSet>
+}
+
+/** A parsed approve, publish or verify: the commands `--fixtures` is for. */
+type FixturesInput = Extract<
+  ReturnType<typeof parseArgs>,
+  { readonly command: 'approve' | 'publish' | 'verify' }
+>
+
+/** What runFixtures shares with the real branch (runCli's output, run mode and answer channel). */
+interface FixturesContext {
+  readonly output: {
+    readonly storyboardRoot: string
+    readonly platform: string
+    readonly now: () => Date
+    readonly log: (line: string) => void
+    readonly error: (line: string) => void
+  }
+  readonly runMode: 'pc' | 'actions'
+  readonly channel: 'stdin' | 'prompt' | null
+}
+
+/**
+ * The --fixtures run (§3.14.2 item 3): the world from deps.fixtures, its client as approve's,
+ * publish's, the unpublish factory's or verify's port, verify's live answer and site from the world,
+ * a tail and a remover that throw (TP16-12: unreachable in a dry run). Never touches deps.env,
+ * loadEnv, createClient, triggerHook, verify, createDeleter or publicReads.
+ */
+async function runFixtures(
+  input: FixturesInput,
+  deps: CliDeps,
+  context: FixturesContext,
+): Promise<number> {
+  const open = deps.fixtures
+  if (open === undefined) throw new TypeError('fixtures: no fixture world')
+  const set = await open()
+  const { output, runMode } = context
+  if (input.command === 'approve') {
+    const stdin = deps.openStdin()
+    const answers: ApproveAnswers =
+      context.channel === 'stdin'
+        ? { kind: 'stdin', input: stdin, deadline: deps.stdinDeadline() }
+        : { kind: 'prompt', input: stdin, write: deps.promptWrite }
+    return runApprove(input, {
+      ...output,
+      sleep: deps.sleep,
+      runMode,
+      makePort: () => {
+        const port: ApprovePort = set.client
+        return port
+      },
+      answers,
+    })
+  }
+  if (input.command === 'publish') {
+    const noTail = async (): Promise<never> => {
+      throw new TypeError('fixtures: no tail')
+    }
+    return runPublish(input, {
+      ...output,
+      sleep: deps.sleep,
+      runMode,
+      makePort: () => {
+        const port: PublishPort = set.client
+        return port
+      },
+      makeUnpublishPort: () => {
+        const port: UnpublishPort = set.client
+        return port
+      },
+      makeRemover: () => {
+        throw new TypeError('fixtures: no deleter')
+      },
+      realPath: realpathSync.native,
+      tail: { hook: noTail, verify: noTail, range: noTail },
+    })
+  }
+  return runVerify(input, {
+    ...output,
+    sleep: deps.sleep,
+    runMode,
+    makePort: () => {
+      const port: StorageReader = set.client
+      return port
+    },
+    verify: (expectedSeq) => set.live(expectedSeq),
+    site: set.site,
+  })
 }
 
 /** stage runs on this PC only (D14-10): win32 and none of the three names set, in any case. */
@@ -223,6 +331,13 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       deps.error(NO_ANSWER_CHANNEL)
       return 2
     }
+  }
+  // Step 16 (D16-14): the fixtures dry run, after every run-context refusal and the answer channel,
+  // before the env file, the credentials, the project check, any URL read and any client.
+  if (parsed.command !== 'stage' && parsed.fixtures) {
+    const input = parsed
+    deps.log(FIXTURES_LINE[input.command])
+    return guarded(input.command, () => runFixtures(input, deps, { output, runMode, channel }))
   }
   if (runMode === 'pc') {
     try {
@@ -416,6 +531,8 @@ if (isEntryPoint(import.meta.url, process.argv[1])) {
     verify: verifyPublish,
     createDeleter: createContentDeleter,
     publicReads: { readPublicObject, checkRange, checkLanding },
+    // D16-32: only a --fixtures run evaluates the fixture world and the test kit it builds from.
+    fixtures: async () => (await import('./fixture-store')).openFixtureSet(),
   }
   runCli(process.argv.slice(2), deps).then(
     (code) => {

@@ -1,0 +1,87 @@
+# Publisher verify and verify --deep (P1-8e, Step 16; storyboard/migration-input/p1-step16-design.md D16-2 to D16-13).
+# Dispatch only. mode fixtures, the default, runs the publisher on its in-memory fixture store with no secret and no
+# Environment. run reads Storage and the live site and writes nothing; it needs the publisher Environment and runs from
+# main only. Inputs are read from the event file by scripts/publisher-dispatch.ts, never by a run line, and no step
+# prints them; a public repository's run page may still show them, so put nothing private here.
+name: publisher-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'fixtures: in-memory store, no secret; run: reads Storage and the live site'
+        type: choice
+        options:
+          - fixtures
+          - run
+        default: fixtures
+      deep:
+        description: Also check every object against its name (about 0.35 GB of egress; at most monthly)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    if: inputs.mode == 'fixtures'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: storyboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: storyboard/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: storyboard/.nvmrc
+          cache: pnpm
+          cache-dependency-path: storyboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Publisher verify on the fixture store
+        run: pnpm exec tsx scripts/publisher-dispatch.ts verify fixtures
+
+  storage:
+    if: inputs.mode != 'fixtures' && github.ref == 'refs/heads/main'
+    environment: publisher
+    concurrency:
+      group: publisher
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: storyboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: storyboard/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: storyboard/.nvmrc
+          cache: pnpm
+          cache-dependency-path: storyboard/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Publisher verify against the project
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: pnpm exec tsx scripts/publisher-dispatch.ts verify storage
+
+  refuse-ref:
+    if: inputs.mode != 'fixtures' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: 'Refused: mode run dispatches from main only'
+        run: exit 1

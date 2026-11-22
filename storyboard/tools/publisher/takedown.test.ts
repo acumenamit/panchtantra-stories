@@ -10,6 +10,10 @@
 // directory or file symlink that this PC refuses (EPERM) prints its S9 skip line instead.
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 16 (P1-8e, design migration-input/p1-step16-design.md §3.17, §14.7, §14.11): T16-20 (T1,
+// T1c at plan) and T16-21 (T3, T4, T2 at commit); T15B-31 g3's forged plan now ends
+// takedown-check-failed with no DELETE (a stricter reviewed edit); rootForms adds the URL-encoded
+// forms and the root's file URL (TP16-10).
 import { spawnSync } from 'node:child_process'
 import {
   cpSync,
@@ -24,6 +28,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotEntry } from '../../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
@@ -411,6 +416,7 @@ function classes(log: readonly StubLogEntry[]): string[] {
 /**
  * Every case and separator form of a temp root (T15B-25 g6, T15B-26 g5), each also as JSON text
  * writes it: both checks read `JSON.stringify` output, which doubles every backslash of a win32 path.
+ * Step 16 (TP16-10): each form URL-encoded too, and the root's file URL.
  */
 const rootForms = (dir: string) => {
   const forms = [
@@ -420,7 +426,12 @@ const rootForms = (dir: string) => {
     dir.replaceAll('\\', '/'),
     dir.replaceAll('/', '\\'),
   ]
-  return [...forms, ...forms.map((form) => JSON.stringify(form).slice(1, -1))]
+  return [
+    ...forms,
+    ...forms.map((form) => JSON.stringify(form).slice(1, -1)),
+    ...forms.map((form) => encodeURIComponent(form)),
+    pathToFileURL(dir).href,
+  ]
 }
 const leaks = (text: string, dir: string) =>
   [...rootForms(dir), 'SHA256SUMS', 'migration-input'].filter((form) => text.includes(form))
@@ -1249,6 +1260,93 @@ describe('the takedown plan', () => {
           '(g2) its package stored pretty-printed under its sha256',
         )
         .toEqual({ ok: false, code: 'takedown-check-failed' })
+      for (const each of stubs) expectDeletesConfined(each, ID)
+    },
+  )
+
+  it(
+    'T16-20 planTakedown: T1 refuses an empty listing in every state before the own-entry check and the hash list; T1c refuses a plan listing that lost a path the first listing showed; an empty seen checks nothing (A14, A15, D16-17)',
+    TIMEOUT,
+    async () => {
+      const two = await storyOf()
+      const failed = { ok: false, code: 'takedown-check-failed' }
+      const blind = (base: StorageReader) => fakeReader(base, () => listed([]))
+      /** The real listing of `folder` without `path` (the real sizes kept). */
+      const without = (path: string) => (folder: string, real: ListResult) =>
+        real.kind === 'listed' && path.startsWith(folder)
+          ? { ...real, objects: real.objects.filter((o) => o.path !== path) }
+          : real
+
+      // g1: the neither state, both folders listed [] on a root whose audio folder holds no list.
+      const stub = await newStub()
+      await neitherState(stub, two)
+      const control = await planTakedown(client(stub), ID, null, root, native)
+      expect(control.ok, 'precondition: the same state plans with the real listing').toBe(true)
+      const bare = newRoot()
+      mkdirSync(audioDir(bare), { recursive: true })
+      const spy = realPathAnswering(new Map())
+      const g1 = await planTakedown(blind(client(stub)), ID, null, bare, spy.realPath)
+      expect
+        .soft(
+          [g1, spy.asked.length],
+          '(g1) the neither state, both folders listed []: takedown-check-failed, realPath asked 0 times',
+        )
+        .toEqual([failed, 0])
+
+      // g2: the P and S states, the entry given, an empty listing: no package GET.
+      const own = await newStub()
+      await stageIn(own, [two])
+      const stagingEntry = pointed(own, 'staging')!.stories.find((e) => e.storyId === ID)!
+      await putDocuments(own, 'production', 2, [approved(stagingEntry)])
+      const productionEntry = pointed(own, 'production')!.stories.find((e) => e.storyId === ID)!
+      const entryControl = await planTakedown(client(own), ID, productionEntry, root, native)
+      expect(entryControl.ok, 'precondition: the P entry plans with the real listing').toBe(true)
+      for (const [label, entry] of [
+        ['P (the production entry)', productionEntry],
+        ['S (the staging entry)', stagingEntry],
+      ] as const) {
+        const mark = own.requests.length
+        const r = await planTakedown(blind(client(own)), ID, entry, bare, spy.realPath)
+        expect
+          .soft(
+            [r, classes(own.requests.slice(mark)), spy.asked.length],
+            `(g2) ${label}, an empty listing: takedown-check-failed, the two listings only, no package GET`,
+          )
+          .toEqual([failed, ['packages-list', 'media-list'], 0])
+      }
+
+      // g3: `seen` holds the paths D15B-30's first listing showed.
+      const seen = new Set(storyPaths(two))
+      const medium = two.media.find((m) => m.mime !== 'audio/mpeg')!.path
+      const extra = await newStub()
+      putStory(extra, two)
+      const orphan = `media/${ID}/${await hex('t16-20-extra')}-w640.webp`
+      extra.put('content', orphan, webpBytes('t16-20-extra'), 'image/webp')
+      const samples: [string, StorageReader, string][] = [
+        ['the plan listing lacks one medium', fakeReader(client(stub), without(medium)), 'failed'],
+        [
+          'the plan listing lacks the package',
+          fakeReader(client(stub), without(packagePathOf(two))),
+          'failed',
+        ],
+        ['the plan listing holds one extra path', client(extra), 'ok'],
+        ['the plan listing equals seen', client(stub), 'ok'],
+      ]
+      for (const [label, reader, want] of samples) {
+        const r = await planTakedown(reader, ID, null, root, native, seen)
+        expect
+          .soft(r.ok ? 'ok' : r.code, `(g3) ${label}`)
+          .toBe(want === 'ok' ? 'ok' : 'takedown-check-failed')
+      }
+
+      // g4: an empty seen is vacuous (nothing to check); an empty listing still fails by T1.
+      const empty = new Set<string>()
+      const full = await planTakedown(client(stub), ID, null, root, native, empty)
+      expect.soft(full.ok ? 'ok' : full.code, '(g4) seen empty, a full listing: ok').toBe('ok')
+      const none = await planTakedown(blind(client(stub)), ID, null, root, native, empty)
+      expect
+        .soft(none, '(g4) seen empty, an empty listing: takedown-check-failed (T1)')
+        .toEqual(failed)
       for (const each of stubs) expectDeletesConfined(each, ID)
     },
   )
@@ -2148,6 +2246,9 @@ describe('the takedown commit', () => {
           '(g3) a forged plan listed inside the folder',
         )
         .toEqual([{ ok: false, code: 'takedown-unknown-object', removed: 0 }, 0])
+      // Step 16 T2 (§3.27, a stricter reviewed edit): the forged plan's extra paths are not in the
+      // commit listing, so the commit refuses before any DELETE (it removed the own two before).
+      const mark4 = lion.requests.length
       const dropped = await commitTakedown(
         lionReader,
         removers(lion, 'lion').makeRemover,
@@ -2157,8 +2258,15 @@ describe('the takedown commit', () => {
         native,
       )
       expect
-        .soft(dropped, '(g3) a forged plan: only the own objects removed')
-        .toEqual({ ok: true, removed: 2, kept: [] })
+        .soft(
+          [
+            dropped,
+            deletes(lion.requests.slice(mark4)).length,
+            lionPaths.every((p) => lion.object('content', p) !== undefined),
+          ],
+          '(g3) a forged plan whose extra paths the commit listing does not show: takedown-check-failed, no DELETE, the own objects stored',
+        )
+        .toEqual([{ ok: false, code: 'takedown-check-failed', removed: 0 }, 0, true])
       expect
         .soft(
           [
@@ -2209,6 +2317,240 @@ describe('the takedown commit', () => {
           .toThrow(/confined/)
       }
       expectNoUnexpected(stub)
+    },
+  )
+
+  it(
+    'T16-21 commitTakedown: T3 refuses an empty plan before any read; T4 refuses a fresh state without production before step 2; T2 refuses a planned path missing from the fresh listing after the raced check and before the hash list and any DELETE (A16, A17, A18, R2-FID-1, TP16-14)',
+    TIMEOUT,
+    async () => {
+      const two = await storyOf()
+      const river = await storyOf(RIVER)
+      const noop = { onChunk: () => {} }
+      const failed = { ok: false, code: 'takedown-check-failed', removed: 0 }
+      const zeroDeletes = (stub: StorageStub, mark: number) =>
+        deletes(stub.requests.slice(mark)).length
+      /** Every planned path still stored with the bytes it had at `before`. */
+      const allStored = (stub: StorageStub, paths: readonly string[], before: unknown[]) =>
+        paths.every((p, i) => {
+          const now = stub.object('content', p)?.bytes
+          const was = before[i] as Uint8Array | undefined
+          return now !== undefined && was !== undefined && Buffer.from(now).equals(Buffer.from(was))
+        })
+      const blindPackages = (base: StorageReader) =>
+        fakeReader(base, (folder, real) => (folder.startsWith('packages/') ? listed([]) : real))
+      /** A reader whose production pointer reads not-found and is left out of the catalogue list. */
+      const blindProduction = (base: StorageReader): StorageReader => ({
+        listContent: async (folder) => {
+          const real = await base.listContent(folder)
+          return folder === 'catalogue/' && real.kind === 'listed'
+            ? {
+                ...real,
+                objects: real.objects.filter((o) => o.path !== 'catalogue/production.json'),
+              }
+            : real
+        },
+        readContent: async (ref) =>
+          ref.kind === 'pointer' && ref.mode === 'production'
+            ? { kind: 'not-found' }
+            : base.readContent(ref),
+        readMaster: (ref) => base.readMaster(ref),
+      })
+
+      // g1: an empty hand-built plan, on a state whose story folders are empty too.
+      {
+        const stub = await newStub()
+        await stageIn(stub, [river])
+        const staged = pointed(stub, 'staging')!.stories
+        await putDocuments(stub, 'production', 2, [approved(staged[0]!)])
+        seedAudio(root, [two])
+        const empty: TakedownPlan = {
+          storyId: ID,
+          paths: [],
+          kept: [],
+          counts: { packages: 0, media: 0, mp3: 0, mp3Unproven: 0, images: 0 },
+        }
+        const mark = stub.requests.length
+        const { made, makeRemover } = removers(stub, ID)
+        const r = await commitTakedown(client(stub), makeRemover, empty, root, noop, native)
+        expect
+          .soft(
+            [r, stub.requests.length - mark, made.length],
+            '(g1) plan.paths []: takedown-check-failed, no request after the mark, no deleter',
+          )
+          .toEqual([failed, 0, 0])
+      }
+
+      // g2: the production pointer reads not-found at commit (a blind read).
+      {
+        const stub = await newStub()
+        await neitherState(stub, two)
+        const reader = client(stub)
+        const plan = await planTakedown(reader, ID, null, root, native)
+        expect(plan.ok, 'precondition: g2 plan').toBe(true)
+        if (!plan.ok) return
+        const mark = stub.requests.length
+        const { made, makeRemover } = removers(stub, ID)
+        const r = await commitTakedown(
+          blindProduction(reader),
+          makeRemover,
+          plan.plan,
+          root,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [r, zeroDeletes(stub, mark), made.length],
+            '(g2) production blind, staging without the story: takedown-check-failed, no DELETE, no deleter',
+          )
+          .toEqual([failed, 0, 0])
+        const named = await newStub()
+        await stageIn(named, [two, river])
+        const staged = pointed(named, 'staging')!.stories
+        await putDocuments(named, 'production', 2, [
+          approved(staged.find((e) => e.storyId === RIVER)!),
+        ])
+        const namedReader = client(named)
+        const namedPlan = await planTakedown(namedReader, ID, null, root, native)
+        expect(namedPlan.ok, 'precondition: g2 staging-named plan').toBe(true)
+        if (!namedPlan.ok) return
+        const mark2 = named.requests.length
+        const second = removers(named, ID)
+        const r2 = await commitTakedown(
+          blindProduction(namedReader),
+          second.makeRemover,
+          namedPlan.plan,
+          root,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [r2, zeroDeletes(named, mark2), second.made.length],
+            '(g2) production blind, staging naming the story: still takedown-check-failed',
+          )
+          .toEqual([failed, 0, 0])
+      }
+
+      // g3: R2-FID-1, packages/<id>/ blind at commit with the media deletable; and an honest
+      // concurrent delete of one planned medium between plan and commit.
+      {
+        const stub = await newStub()
+        await neitherState(stub, two)
+        const reader = client(stub)
+        const plan = await planTakedown(reader, ID, null, root, native)
+        expect(plan.ok, 'precondition: g3 plan').toBe(true)
+        if (!plan.ok) return
+        const before = plan.plan.paths.map((p) => stub.object('content', p)?.bytes)
+        const mark = stub.requests.length
+        const { made, makeRemover } = removers(stub, ID)
+        const r = await commitTakedown(
+          blindPackages(reader),
+          makeRemover,
+          plan.plan,
+          root,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [r, zeroDeletes(stub, mark), made.length, allStored(stub, plan.plan.paths, before)],
+            '(g3) packages/two-paths/ blind at commit: takedown-check-failed, no DELETE, no deleter, every planned object stored',
+          )
+          .toEqual([failed, 0, 0, true])
+        expectDeletesConfined(stub, ID, plan.plan.paths)
+
+        const honest = await newStub()
+        await neitherState(honest, two)
+        const honestReader = client(honest)
+        const honestPlan = await planTakedown(honestReader, ID, null, root, native)
+        expect(honestPlan.ok, 'precondition: g3 honest plan').toBe(true)
+        if (!honestPlan.ok) return
+        const medium = two.media.find((m) => m.mime !== 'audio/mpeg')!.path
+        const drop = await createContentDeleter({
+          supabaseUrl: honest.origin,
+          secretKey: new Secret(FAKE_KEY),
+          storyId: ID,
+        }).remove('content', [medium])
+        expect(
+          [drop.kind, honest.object('content', medium)],
+          'precondition: the stub dropped one planned medium after the plan',
+        ).toEqual(['removed', undefined])
+        const rest = honestPlan.plan.paths.filter((p) => p !== medium)
+        const restBefore = rest.map((p) => honest.object('content', p)?.bytes)
+        const mark2 = honest.requests.length
+        const second = removers(honest, ID)
+        const r2 = await commitTakedown(
+          honestReader,
+          second.makeRemover,
+          honestPlan.plan,
+          root,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [
+              r2,
+              zeroDeletes(honest, mark2),
+              second.made.length,
+              allStored(honest, rest, restBefore),
+            ],
+            '(g3) an honest concurrent delete: takedown-check-failed, no DELETE, the other planned objects stored',
+          )
+          .toEqual([failed, 0, 0, true])
+      }
+
+      // g4: T2's place: before the hash-list read, after the raced check.
+      {
+        const stub = await newStub()
+        const dir = newRoot()
+        await neitherState(stub, two, dir)
+        const reader = client(stub)
+        const plan = await planTakedown(reader, ID, null, dir, native)
+        expect(plan.ok, 'precondition: g4 plan').toBe(true)
+        if (!plan.ok) return
+        rmSync(listFile(dir))
+        const mark = stub.requests.length
+        const r = await commitTakedown(
+          blindPackages(reader),
+          removers(stub, ID).makeRemover,
+          plan.plan,
+          dir,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [r, zeroDeletes(stub, mark)],
+            '(g4) no hash list plus a blind packages listing: takedown-check-failed, not takedown-not-on-this-pc',
+          )
+          .toEqual([failed, 0])
+        const late = `media/${ID}/${await hex('t16-21-late')}-w9.webp`
+        const medium = two.media.find((m) => m.mime !== 'audio/mpeg')!.path
+        const swapped = fakeReader(reader, (folder, real) =>
+          folder.startsWith('media/') && real.kind === 'listed'
+            ? listed([...real.objects.map((o) => o.path).filter((p) => p !== medium), late])
+            : real,
+        )
+        const mark2 = stub.requests.length
+        const r2 = await commitTakedown(
+          swapped,
+          removers(stub, ID).makeRemover,
+          plan.plan,
+          dir,
+          noop,
+          native,
+        )
+        expect
+          .soft(
+            [r2, zeroDeletes(stub, mark2)],
+            '(g4) a fresh listing that adds an unplanned path and loses a planned one: takedown-raced',
+          )
+          .toEqual([{ ok: false, code: 'takedown-raced', removed: 0 }, 0])
+      }
+      for (const each of stubs) expectDeletesConfined(each, ID)
     },
   )
 })

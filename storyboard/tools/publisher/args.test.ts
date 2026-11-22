@@ -13,6 +13,10 @@
 // D15B-19, D15B-26; test plan §14.2: T15B-1 and T15B-2, and the reviewed edits of §2.5 and 14.16):
 // `publish --unpublish <id> [--takedown]`, the `verify [--deep]` command, the ten-line usage and
 // the new message texts.
+//
+// Step 16 (P1-8e, design migration-input/p1-step16-design.md §3.14.1, D16-14; test plan §14.5:
+// T16-15, and the reviewed edits of §3.27 and 14.11 item 1): `--fixtures` for approve, publish and
+// verify, its --dry-run rule after the id rules, ParsedArgs.fixtures and the fixtures report dir.
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -39,12 +43,12 @@ const PINNED_USAGE = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
   '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
-  '  verify [--deep] [--report-dir <dir>] [--timeout-ms <n>]',
+  '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
+  '  verify [--deep] [--fixtures] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -63,6 +67,7 @@ const FLAGS = [
   'unpublish',
   'takedown',
   'deep',
+  'fixtures',
 ]
 /** Step 15a (TP-1): each flag outside its commands names the commands it is for. */
 const SCOPE_TEXTS: readonly string[] = [
@@ -76,6 +81,7 @@ const SCOPE_TEXTS: readonly string[] = [
     (flag) => `usage: --${flag} is for publish only`,
   ),
   'usage: --deep is for verify only',
+  'usage: --fixtures is for approve, publish and verify only',
 ]
 /** Every usage message args.ts may give, typed here so a changed text turns T14-6 red. */
 const PINNED_MESSAGES: ReadonlySet<string> = new Set([
@@ -105,6 +111,7 @@ const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: --unpublish takes a story id',
   'usage: --takedown needs --unpublish <id>',
   'usage: verify takes no story ids',
+  'usage: --fixtures needs --dry-run for approve and publish',
   'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
   'usage: --report-dir has a segment Windows cannot store as written',
   'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
@@ -462,6 +469,7 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
       packagePrefix: P12,
       answersStdin: false,
       dryRun: false,
+      fixtures: false,
       timeoutMs: 180000,
       reportDir: DEFAULT_REPORTS,
       reportDirGiven: false,
@@ -489,6 +497,7 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
         packagePrefix: P64,
         answersStdin: true,
         dryRun: true,
+        fixtures: false,
         timeoutMs: 5000,
         reportDir: resolve(CWD, 'r'),
         reportDirGiven: true,
@@ -540,6 +549,7 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
       unpublish: null,
       takedown: false,
       dryRun: false,
+      fixtures: false,
       timeoutMs: 180000,
       reportDir: DEFAULT_REPORTS,
       reportDirGiven: false,
@@ -934,6 +944,7 @@ describe('args: Step 15b unpublish, takedown and verify', () => {
       feature: null,
       snapshot: null,
       dryRun: false,
+      fixtures: false,
       timeoutMs: 180000,
       reportDir: DEFAULT_REPORTS,
       reportDirGiven: false,
@@ -1065,6 +1076,7 @@ describe('args: Step 15b unpublish, takedown and verify', () => {
       ok: true,
       command: 'verify',
       deep: false,
+      fixtures: false,
       timeoutMs: 180000,
       reportDir: DEFAULT_REPORTS,
       reportDirGiven: false,
@@ -1078,6 +1090,7 @@ describe('args: Step 15b unpublish, takedown and verify', () => {
         ok: true,
         command: 'verify',
         deep: true,
+        fixtures: false,
         timeoutMs: 5000,
         reportDir: resolve(CWD, 'r'),
         reportDirGiven: true,
@@ -1106,6 +1119,310 @@ describe('args: Step 15b unpublish, takedown and verify', () => {
         .toBe(MSG15B.unknownCommand)
     }
     expect.soft(messageOf(parse([])), '(g3) no command').toBe(MSG15B.noCommand)
+  })
+})
+
+// ---- Step 16 ----
+
+const MSG16 = {
+  dryRunNeeded: 'usage: --fixtures needs --dry-run for approve and publish',
+  scope: 'usage: --fixtures is for approve, publish and verify only',
+  value: 'usage: --fixtures takes no value',
+  twice: 'usage: --fixtures is given more than once',
+  singleDash: 'usage: single-dash flags are not supported',
+  idInvalid: 'usage: a story id must be 3 to 64 characters of a-z, 0-9 and single hyphens',
+} as const
+const FIXTURES_REPORTS = join(ROOT, 'migration-input', 'reports', 'fixtures')
+
+describe('args: Step 16 --fixtures', () => {
+  it('T16-15 --fixtures: a boolean flag for approve, publish and verify; approve and publish need --dry-run, checked after the id rules and before the required flags; ParsedArgs.fixtures; the default report dir gains /fixtures and keeps every path-form refusal (A9)', () => {
+    const approveDry = ['approve', 'a-b', '--package', P12, '--dry-run']
+    // The samples' bases parse without the flag, so a mutant of the flag itself reaches g1.
+    expect(
+      [parse(approveDry).ok, parse(['verify']).ok, parse(['publish', 'a-b', '--dry-run']).ok],
+      'precondition: approve a-b --package <12 hex> --dry-run, verify and publish a-b --dry-run parse',
+    ).toEqual([true, true, true])
+
+    // g1: the flag's own forms (MU16-89 the value half, MU16-158 the repeat, MU16-159 the near names).
+    const g1: [string, string[], string][] = [
+      ['--fixtures=x', [...approveDry, '--fixtures=x'], MSG16.value],
+      ['--fixtures=', [...approveDry, '--fixtures='], MSG16.value],
+      ['--fixtures twice', [...approveDry, '--fixtures', '--fixtures'], MSG16.twice],
+      ['--fixtures twice on verify', ['verify', '--fixtures', '--fixtures'], MSG16.twice],
+      ['--Fixtures', [...approveDry, '--Fixtures'], MSG.unknownFlag],
+      ['--FIXTURES', [...approveDry, '--FIXTURES'], MSG.unknownFlag],
+      ['--fixture', [...approveDry, '--fixture'], MSG.unknownFlag],
+      ['--fixtures-x', [...approveDry, '--fixtures-x'], MSG.unknownFlag],
+      ['--fixturesx on verify', ['verify', '--fixturesx'], MSG.unknownFlag],
+      ['-fixtures', [...approveDry, '-fixtures'], MSG16.singleDash],
+    ]
+    for (const [id, argv, text] of g1) {
+      expect.soft(messageOf(parse(argv)), `(g1) ${id}`).toBe(text)
+    }
+
+    // g2: the scope (MU16-90).
+    const g2: [string, string[]][] = [
+      ['stage', ['stage', 'a-b', ...IO, '--fixtures']],
+      ['stage --dry-run', ['stage', 'a-b', ...IO, '--dry-run', '--fixtures']],
+      ['validate', ['validate', 'a-b', ...IO, '--fixtures']],
+      ['validate --all', ['validate', '--all', ...IO, '--fixtures']],
+    ]
+    for (const [id, argv] of g2) {
+      expect.soft(messageOf(parse(argv)), `(g2) out of scope: ${id}`).toBe(MSG16.scope)
+    }
+
+    // g3: approve and publish need --dry-run; verify does not take it (MU16-91).
+    const forms: [string, string[]][] = [
+      ['approve', ['approve', 'a-b', '--package', P12]],
+      ['approve --answers-stdin', ['approve', 'a-b', '--package', P12, '--answers-stdin']],
+      ['publish ids', ['publish', 'a-b', 'c-d']],
+      ['publish --feature', ['publish', '--feature', 'a-b']],
+      ['publish --feature none', ['publish', '--feature', 'none']],
+      ['publish --snapshot', ['publish', '--snapshot', '1']],
+      ['publish --unpublish', ['publish', '--unpublish', 'a-b']],
+      ['publish --unpublish --takedown', ['publish', '--unpublish', 'a-b', '--takedown']],
+    ]
+    for (const [id, argv] of forms) {
+      expect
+        .soft(messageOf(parse([...argv, '--fixtures'])), `(g3) without --dry-run: ${id}`)
+        .toBe(MSG16.dryRunNeeded)
+      const dry = parse([...argv, '--fixtures', '--dry-run'])
+      expect
+        .soft(
+          dry.ok && (dry.command === 'approve' || dry.command === 'publish') && dry.fixtures,
+          `(g3) with --dry-run: ${id}`,
+        )
+        .toBe(true)
+      const flagFirst = parse([...argv.slice(0, 1), '--fixtures', '--dry-run', ...argv.slice(1)])
+      expect.soft(flagFirst.ok, `(g3) the flags before the ids: ${id}`).toBe(true)
+    }
+    const verifyFixtures = parse(['verify', '--fixtures'])
+    expect
+      .soft(
+        verifyFixtures.ok && verifyFixtures.command === 'verify' && verifyFixtures.fixtures,
+        '(g3) verify --fixtures alone',
+      )
+      .toBe(true)
+    const verifyDeep = parse(['verify', '--deep', '--fixtures'])
+    expect
+      .soft(
+        verifyDeep.ok && verifyDeep.command === 'verify' && [verifyDeep.deep, verifyDeep.fixtures],
+        '(g3) verify --deep --fixtures',
+      )
+      .toEqual([true, true])
+    expect
+      .soft(messageOf(parse(['verify', '--fixtures', '--dry-run'])), '(g3) verify --dry-run')
+      .toBe(MSG15B.dryRunScope)
+
+    // g4: the place in the parse order: after the id rules (MU16-92), before the required flags
+    // (MU16-93).
+    const g4: [string, string[], string][] = [
+      [
+        'approve A-B --package <12 hex> --fixtures',
+        ['approve', 'A-B', '--package', P12, '--fixtures'],
+        MSG16.idInvalid,
+      ],
+      ['approve a-b c-d --fixtures', ['approve', 'a-b', 'c-d', '--fixtures'], MSG.oneId],
+      [
+        'approve a-b --fixtures (no --package)',
+        ['approve', 'a-b', '--fixtures'],
+        MSG16.dryRunNeeded,
+      ],
+      [
+        'approve a-b --package 11 hex --fixtures',
+        ['approve', 'a-b', '--package', P12.slice(0, 11), '--fixtures'],
+        MSG16.dryRunNeeded,
+      ],
+      ['publish --fixtures', ['publish', '--fixtures'], MSG.publishNeeds],
+      ['publish a-b a-b --fixtures', ['publish', 'a-b', 'a-b', '--fixtures'], MSG.idTwice],
+      [
+        'publish --snapshot 0 --fixtures',
+        ['publish', '--snapshot', '0', '--fixtures'],
+        MSG16.dryRunNeeded,
+      ],
+    ]
+    for (const [id, argv, text] of g4) {
+      expect.soft(messageOf(parse(argv)), `(g4) ${id}`).toBe(text)
+    }
+
+    // g5: exact ParsedArgs with fixtures true and false (MU16-94).
+    const g5: [string, string[], ParsedArgs][] = [
+      [
+        'approve --dry-run --fixtures',
+        [...approveDry, '--fixtures'],
+        {
+          ok: true,
+          command: 'approve',
+          storyId: 'a-b',
+          packagePrefix: P12,
+          answersStdin: false,
+          dryRun: true,
+          fixtures: true,
+          timeoutMs: 180000,
+          reportDir: FIXTURES_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+      [
+        'approve --dry-run',
+        approveDry,
+        {
+          ok: true,
+          command: 'approve',
+          storyId: 'a-b',
+          packagePrefix: P12,
+          answersStdin: false,
+          dryRun: true,
+          fixtures: false,
+          timeoutMs: 180000,
+          reportDir: DEFAULT_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+      [
+        'publish --unpublish a-b --takedown --dry-run --fixtures',
+        ['publish', '--unpublish', 'a-b', '--takedown', '--dry-run', '--fixtures'],
+        {
+          ok: true,
+          command: 'publish',
+          ids: [],
+          featureGiven: false,
+          feature: null,
+          snapshot: null,
+          unpublish: 'a-b',
+          takedown: true,
+          dryRun: true,
+          fixtures: true,
+          timeoutMs: 180000,
+          reportDir: FIXTURES_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+      [
+        'publish a-b --dry-run',
+        ['publish', 'a-b', '--dry-run'],
+        {
+          ok: true,
+          command: 'publish',
+          ids: ['a-b'],
+          featureGiven: false,
+          feature: null,
+          snapshot: null,
+          unpublish: null,
+          takedown: false,
+          dryRun: true,
+          fixtures: false,
+          timeoutMs: 180000,
+          reportDir: DEFAULT_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+      [
+        'verify --deep --fixtures',
+        ['verify', '--deep', '--fixtures'],
+        {
+          ok: true,
+          command: 'verify',
+          deep: true,
+          fixtures: true,
+          timeoutMs: 180000,
+          reportDir: FIXTURES_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+      [
+        'verify',
+        ['verify'],
+        {
+          ok: true,
+          command: 'verify',
+          deep: false,
+          fixtures: false,
+          timeoutMs: 180000,
+          reportDir: DEFAULT_REPORTS,
+          reportDirGiven: false,
+        },
+      ],
+    ]
+    for (const [id, argv, want] of g5) {
+      expect.soft(parse(argv), `(g5) exact: ${id}`).toEqual(want)
+    }
+
+    // g6: the default report dir gains /fixtures with the flag only (MU16-95); a given dir is used
+    // as given (MU16-96).
+    const dirOf = (result: ParsedArgs) =>
+      result.ok && result.command !== 'help' ? [result.reportDir, result.reportDirGiven] : null
+    const g6: [string, string[], unknown][] = [
+      ['approve --fixtures', [...approveDry, '--fixtures'], [FIXTURES_REPORTS, false]],
+      [
+        'publish --feature none --dry-run --fixtures',
+        ['publish', '--feature', 'none', '--dry-run', '--fixtures'],
+        [FIXTURES_REPORTS, false],
+      ],
+      ['verify --fixtures', ['verify', '--fixtures'], [FIXTURES_REPORTS, false]],
+      ['verify', ['verify'], [DEFAULT_REPORTS, false]],
+      ['publish a-b --dry-run', ['publish', 'a-b', '--dry-run'], [DEFAULT_REPORTS, false]],
+      [
+        'approve --fixtures --report-dir r',
+        [...approveDry, '--fixtures', '--report-dir', 'r'],
+        [resolve(CWD, 'r'), true],
+      ],
+      [
+        'verify --fixtures --report-dir=r',
+        ['verify', '--fixtures', '--report-dir=r'],
+        [resolve(CWD, 'r'), true],
+      ],
+    ]
+    for (const [id, argv, want] of g6) {
+      expect.soft(dirOf(parse(argv)), `(g6) report dir: ${id}`).toEqual(want)
+    }
+    expect
+      .soft(FIXTURES_REPORTS, '(g6) the fixtures dir is the default dir plus one segment')
+      .toBe(join(DEFAULT_REPORTS, 'fixtures'))
+
+    // g7: every path-form refusal of the default applies to the fixtures default (MU16-97).
+    const at = (root: string, argv: string[]) =>
+      parse(argv, { cwd: CWD, storyboardRoot: root, platform: 'win32' })
+    const fixtureRuns: [string, string[]][] = [
+      ['approve', [...approveDry, '--fixtures']],
+      ['publish', ['publish', 'a-b', '--dry-run', '--fixtures']],
+      ['verify', ['verify', '--fixtures']],
+    ]
+    for (const root of [`${TMP}/sb.`, `${TMP}/CON/sb`, `${TMP}/sb `]) {
+      for (const [id, argv] of fixtureRuns) {
+        expect
+          .soft(
+            messageOf(at(resolve(root), argv)),
+            `(g7) ${id} with the root ${JSON.stringify(root)}`,
+          )
+          .toBe(MSG.segmentDefault)
+      }
+      expect
+        .soft(
+          at(resolve(root), ['verify', '--fixtures', '--report-dir', `${TMP}/ok`]).ok,
+          `(g7) a local --report-dir with the root ${JSON.stringify(root)}`,
+        )
+        .toBe(true)
+    }
+    if (process.platform === 'win32') {
+      const roots = [
+        '\\\\localhost\\share\\sb',
+        '\\\\?\\C:\\sb',
+        '//localhost/share/sb',
+        '\\\\?\\UNC\\localhost\\share\\sb',
+        '\\\\.\\pipe\\sb',
+        '\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\sb',
+      ]
+      for (const root of roots) {
+        for (const [id, argv] of fixtureRuns) {
+          expect
+            .soft(messageOf(at(root, argv)), `(g7) ${id} with the device or network root ${root}`)
+            .toBe(MSG.deviceDefault)
+        }
+      }
+    } else {
+      console.log('skipped: device and network roots need a win32 host')
+    }
   })
 })
 

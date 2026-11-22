@@ -564,18 +564,21 @@ export async function runPublish(input: PublishInput, deps: PublishDeps): Promis
       productionMove: inProduction ? 'not-run' : 'not-needed',
       stagingMove: moves === 'none' ? 'not-needed' : 'not-run',
     }
-    // D15B-30: in neither pointer, the story's folders must list something.
+    // D15B-30: in neither pointer, the story's folders must list something. The listed paths go to
+    // the takedown plan, which refuses a plan listing that lost any of them (Step 16 T1c).
+    let seen: ReadonlySet<string> | undefined
     if (moves === 'none') {
-      let listed = 0
+      const listed = new Set<string>()
       for (const folder of [`packages/${storyId}/`, `media/${storyId}/`]) {
         const listing = await reader.listContent(folder)
         if (listing.kind !== 'listed') stop(failureCode(listing.kind))
-        listed += listing.objects.length
+        for (const object of listing.objects) listed.add(object.path)
       }
-      if (listed === 0) {
+      if (listed.size === 0) {
         deps.log(formatUnpublishUnknown(storyId))
         stop('unpublish-story-unknown', { storyId })
       }
+      seen = listed
     }
     const composition = composeUnpublish({ production: production.snapshot, storyId })
     // D15B-2: any empty N+1 is refused (moves both or staging; the neither state builds none).
@@ -592,7 +595,14 @@ export async function runPublish(input: PublishInput, deps: PublishDeps): Promis
     let takedownPlan: TakedownPlan | null = null
     if (input.takedown) {
       const entry = productionEntry ?? stagingEntry ?? null
-      const planned = await planTakedown(reader, storyId, entry, deps.storyboardRoot, deps.realPath)
+      const planned = await planTakedown(
+        reader,
+        storyId,
+        entry,
+        deps.storyboardRoot,
+        deps.realPath,
+        seen,
+      )
       if (!planned.ok) {
         updateTakedown({ state: TAKEDOWN_STATE[planned.code] ?? 'not-run' })
         stop(planned.code, { storyId })

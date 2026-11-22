@@ -6,12 +6,22 @@ on:
     paths:
       - 'storyboard/**'
       - 'pt/src/stories/**' # legacy source: frozen-hash, conversion and waiver checks
-      - '.github/workflows/ci.yml'
+      - '.github/**'
+      - 'docs/**'
+      - 'README.md'
+      - '.gitignore'
+      - '.gitattributes'
+      - '*'
   pull_request:
     paths:
       - 'storyboard/**'
       - 'pt/src/stories/**'
-      - '.github/workflows/ci.yml'
+      - '.github/**'
+      - 'docs/**'
+      - 'README.md'
+      - '.gitignore'
+      - '.gitattributes'
+      - '*'
 
 permissions:
   contents: read

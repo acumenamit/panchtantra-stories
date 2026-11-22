@@ -193,8 +193,10 @@ const ROOT_FILES_EXCLUDED: ReadonlyMap<string, string> = new Map([
  * kind, each with its reason (an extension of lead decision 14). Any other root entry is a finding
  * `unknown-folder <name>` or `unknown-extension <ext>` and is never read. What an excluded name hides
  * is the §6 T13 residual (review fix SEC3-1): every pt/src/stories/*.js but index.js is evaluated in
- * the unit run through node:vm (tools/migrate/load-legacy.ts, called by migrate.test.ts), and it is
- * not scanned. A reason that says gitignored must be true of the root .gitignore (FS0e g11).
+ * the unit run through node:vm (tools/migrate/load-legacy.ts, called by migrate.test.ts), only after
+ * every file's LF sha256 equals tools/migrate/legacy-manifest.json, in a null-prototype vm context
+ * (Step 16, SEC3-1); still not scanned. A reason that says gitignored must be true of the root
+ * .gitignore (FS0e g11).
  */
 const ROOT_WALKED: ReadonlyMap<string, string> = new Map([
   ['.github', '.github'],
@@ -1037,6 +1039,151 @@ function reachFindings(walk: Walk, tokens: (path: string) => ScriptTokens | null
   return [...findings]
 }
 
+// ---- Step 16: cli.ts loads the fixture world only through import() (p1-step16-design.md D16-32; T16-25) ----
+
+const FIXTURE_STORE = 'tools/publisher/fixture-store.ts'
+/** The fixture world and the test kit it builds from: no static edge from cli.ts reaches either. */
+const FIXTURE_ONLY: readonly string[] = [FIXTURE_STORE, 'tools/publisher/stage-testkit.ts']
+
+interface StaticEdges {
+  /** import and export declarations (type-only included), import-equals, require() and import types. */
+  readonly statics: readonly string[]
+  /** import() specifiers: followed too, but for the entry's own import() of the fixture world. */
+  readonly dynamics: readonly string[]
+  /** Any other literal that names a file by a relative or alias path (the reach walk's SEC-1 forms). */
+  readonly pathLiterals: readonly string[]
+  readonly importDeclarations: number
+}
+
+/** A parsed file's edges by kind, in the reach walk's forms (catalogue lint class 12). */
+function staticEdgesOf(tree: ts.SourceFile): StaticEdges {
+  const statics: string[] = []
+  const dynamics: string[] = []
+  const pathLiterals: string[] = []
+  const specifierNodes = new Set<ts.Node>()
+  let importDeclarations = 0
+  const take = (node: ts.Node | undefined, into: string[]) => {
+    if (node === undefined || !isTextLiteral(node)) return
+    into.push(node.text)
+    specifierNodes.add(node)
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      importDeclarations += 1
+      take(node.moduleSpecifier, statics)
+    } else if (ts.isExportDeclaration(node)) {
+      take(node.moduleSpecifier, statics)
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      take(node.moduleReference.expression, statics)
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      take(node.arguments[0], dynamics)
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require'
+    ) {
+      take(node.arguments[0], statics)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      take(node.argument.literal, statics)
+    }
+    // A specifier's parent is visited first, so only literals of no specifier form remain here.
+    if (isTextLiteral(node) && !specifierNodes.has(node) && isPathLiteral(node.text)) {
+      pathLiterals.push(node.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  return { statics, dynamics, pathLiterals, importDeclarations }
+}
+
+/**
+ * Every file `entry` reaches (T16-25): the reach walk's resolver and forms with one edge skipped, the
+ * entry's own import() that resolves to fixture-store.ts (D16-32's one load). Every other import(),
+ * in the entry and in every module it reaches, is followed like a static edge (S16-R1-SEC-2); a
+ * specifier it cannot follow is a problem (fail closed).
+ */
+function staticReachOf(
+  entry: string,
+  walk: Walk,
+): { parents: Map<string, string | null>; problems: string[] } {
+  const files = repoFilesOf(walk)
+  const parents = new Map<string, string | null>([[entry, null]])
+  const problems: string[] = []
+  const queue = [entry]
+  const edge = (from: string, to: string) => {
+    if (parents.has(to)) return
+    parents.set(to, from)
+    queue.push(to)
+  }
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    const tree = walk.trees.get(file)
+    if (tree === undefined || !WALKED.test(file)) continue
+    const edges = staticEdgesOf(tree)
+    for (const specifier of edges.statics) {
+      const resolved = resolveFrom(file, specifier, files)
+      if ('problem' in resolved) problems.push(`${file}: ${resolved.problem}`)
+      else if ('file' in resolved) edge(file, resolved.file)
+    }
+    for (const specifier of edges.dynamics) {
+      const resolved = resolveFrom(file, specifier, files)
+      if ('problem' in resolved) problems.push(`${file}: ${resolved.problem}`)
+      else if ('file' in resolved) {
+        if (file === entry && resolved.file.toLowerCase() === FIXTURE_STORE) continue
+        edge(file, resolved.file)
+      }
+    }
+    for (const value of edges.pathLiterals) {
+      for (const from of [file, FROM_ROOT]) {
+        const resolved = resolveFrom(from, value, files)
+        if ('file' in resolved) edge(file, resolved.file)
+      }
+    }
+  }
+  return { parents, problems }
+}
+
+interface FixtureFence {
+  /** A chain from cli.ts to the fixture world but its own import(), or a specifier the walk cannot follow. */
+  readonly findings: readonly string[]
+  readonly importDeclarations: number
+  readonly visited: number
+  /** cli.ts's import() specifiers that load fixture-store.ts. */
+  readonly fixtureImports: readonly string[]
+}
+
+/** T16-25's predicate over a walk, the real tree's or an in-memory one. */
+function fixtureFenceOf(walk: Walk): FixtureFence {
+  const files = repoFilesOf(walk)
+  const { parents, problems } = staticReachOf(PUBLISHER_CLI, walk)
+  const findings = problems.map((problem) => `${problem} (walk from ${PUBLISHER_CLI})`)
+  for (const target of FIXTURE_ONLY) {
+    const hit = [...parents.keys()].find((file) => file.toLowerCase() === target)
+    if (hit === undefined) continue
+    const chain: string[] = []
+    for (let file: string | null | undefined = hit; file; file = parents.get(file)) {
+      chain.unshift(file)
+    }
+    findings.push(
+      `${PUBLISHER_CLI}: an edge other than its own import of the fixture world reaches ${target} (${chain.join(' > ')})`,
+    )
+  }
+  const tree = walk.trees.get(PUBLISHER_CLI)
+  const edges = tree === undefined ? null : staticEdgesOf(tree)
+  const fixtureImports = (edges?.dynamics ?? []).filter((specifier) => {
+    const resolved = resolveFrom(PUBLISHER_CLI, specifier, files)
+    return 'file' in resolved && resolved.file.toLowerCase() === FIXTURE_STORE
+  })
+  return {
+    findings,
+    importDeclarations: edges?.importDeclarations ?? 0,
+    visited: parents.size,
+    fixtureImports,
+  }
+}
+
 // ---- the scans S1, S2 and S3 (§3.13.3) ----
 
 type FormId =
@@ -1220,6 +1367,10 @@ function hitsOf(file: WalkedFile, tokens: ScriptTokens | null): Hit[] {
       textForms(value, line)
       if (APIKEY_TEXT.test(value)) add(line, 's1-apikey')
       if (runnable && ENV_FILE_TEXT.test(value)) add(line, 's2-env-file')
+      // Step 16 (TP16-6): a `$` written as a JSON `\u` escape in a double-quoted value (y13).
+      if (yaml && (YAML_SECRETS.some((pattern) => pattern.test(value)) || holdsYamlObject(value))) {
+        add(line, 's2-yaml')
+      }
       if (runnable && namesFencedModule(value, file.path)) add(line, 'fw-path')
     }
   }
@@ -1286,6 +1437,13 @@ const ALLOW_TABLE: ReadonlyMap<string, Partial<Record<FormId, Allowance>>> = new
   // env.ts on exactly two pinned lines (FS2a g4); the narration precedent above.
   ['tools/publisher/cli.ts', { 's2-env-file': 'must-hold' }],
   ['.github/workflows/keep-alive.yml', { 's1-route': 'must-hold', 's1-apikey': 'must-hold' }],
+  // Step 16 (p1-step16-design.md §3.23 item 1, D16-23): each publisher workflow names the key in its
+  // storage step's env, and the public runbook names it; only the key's name is an S-form there.
+  ['.github/workflows/publisher-approve.yml', { 's2-name': 'must-hold' }],
+  ['.github/workflows/publisher-publish.yml', { 's2-name': 'must-hold' }],
+  ['.github/workflows/publisher-unpublish.yml', { 's2-name': 'must-hold' }],
+  ['.github/workflows/publisher-verify.yml', { 's2-name': 'must-hold' }],
+  ['../docs/runbooks/key-rotation.md', { 's2-name': 'must-hold' }],
 ])
 
 /** Every allow-list compare turns '\' into '/' first, then compares the exact path (FS6). */
@@ -1784,6 +1942,13 @@ const YAML_SAMPLES: readonly Sample[] = [
   ['y10', '.github/workflows/x.yml', '      - run: echo "${{ toJSON(env) }}" | base64', 's2-yaml'],
   ['y11', '.github/workflows/x.yml', `      - run: echo "\${{ join(env.*, ',') }}"`, 's2-yaml'],
   ['y12 a quoted key (SEC2-5)', '.github/workflows/x.yml', '    "secrets": inherit', 's2-yaml'],
+  // Step 16 (TP16-6): the dollar written as a JSON `\u` escape in a double-quoted value.
+  [
+    'y13 a JSON-escaped dollar (TP16-6)',
+    '.github/workflows/x.yml',
+    '          ALL: "\\u0024{{ secrets }}"',
+    's2-yaml',
+  ],
   ['yn1', '.github/workflows/x.yml', '          K: ${{ secrets.SOME_NAME }}', null],
   ['yn2', '.github/workflows/x.yml', "        if: ${{ env.FAIL_ON_PURPOSE == 'true' }}", null],
   [
@@ -2399,6 +2564,12 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
       './storage-layout',
     ]),
   ],
+  // Step 16's module (p1-step16-design.md §3.23 item 3, D16-15): the --fixtures world; it imports
+  // neither the stub nor a CLI-only module (g3), and cli.ts loads it only through import() (D16-32).
+  [
+    'tools/publisher/fixture-store.ts',
+    importRow(['./catalogue-state', './port', './stage-testkit', './storage-layout']),
+  ],
   [
     PUBLISHER_CLI,
     importRow(
@@ -2407,6 +2578,7 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
         './args',
         './content-deleter',
         './env',
+        './fixture-store',
         './hook',
         './port',
         './publish',
@@ -3362,6 +3534,134 @@ describe('the reach walk (FW)', () => {
       }
     }
   })
+
+  it(
+    'T16-25 cli.ts reaches fixture-store only through import(): no static edge from cli.ts reaches fixture-store.ts or stage-testkit.ts (A10, CRIT-1)',
+    { timeout: WALK_TIMEOUT },
+    () => {
+      const fence = fixtureFenceOf(real.scan.walk)
+      // B16-integ-3: cli.ts holds 18 import declarations (at a131a66 and now), so the floor is 18.
+      expect(
+        [fence.importDeclarations >= 18, fence.visited >= 10],
+        `precondition: cli.ts parsed with at least 18 import declarations (${fence.importDeclarations}) and the walk visited at least 10 modules (${fence.visited})`,
+      ).toEqual([true, true])
+      expect
+        .soft(
+          fence.findings,
+          '(g1) no static import, export, require or import-equals reaches fixture-store.ts or stage-testkit.ts',
+        )
+        .toEqual([])
+      expect
+        .soft(fence.fixtureImports, "(g1) exactly one import('./fixture-store') in cli.ts")
+        .toEqual(['./fixture-store'])
+
+      // g2: the same predicate over in-memory trees (catalogue lint class 12: every form, two hops,
+      // .js names, case, separators).
+      const world = {
+        [FIXTURE_STORE]:
+          "import { kit } from './stage-testkit'\nexport const openFixtureSet = async () => kit",
+        'tools/publisher/stage-testkit.ts': 'export const kit = 1',
+      }
+      const fenceOf = (files: Readonly<Record<string, string>>) =>
+        fixtureFenceOf(walkTree(memoryReader(files, [])))
+      const cliOf = (text: string) => ({ ...world, [PUBLISHER_CLI]: text })
+      const clean = fenceOf(
+        cliOf("export const open = async () => (await import('./fixture-store')).openFixtureSet()"),
+      )
+      expect
+        .soft([clean.findings, clean.fixtureImports], "(g2) clean: await import('./fixture-store')")
+        .toEqual([[], ['./fixture-store']])
+      const samples: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+        [
+          'a static import',
+          cliOf(
+            "import { openFixtureSet } from './fixture-store'\nexport const o = openFixtureSet",
+          ),
+        ],
+        [
+          'import type { FixtureSet }',
+          cliOf("import type { FixtureSet } from './fixture-store'\nexport type F = FixtureSet"),
+        ],
+        ['export * from', cliOf("export * from './fixture-store'")],
+        ['require()', cliOf("export const m = require('./fixture-store')")],
+        [
+          'import f = require()',
+          cliOf("import f = require('./fixture-store')\nexport const m = f"),
+        ],
+        [
+          './fixture-store.js',
+          cliOf(
+            "import { openFixtureSet } from './fixture-store.js'\nexport const o = openFixtureSet",
+          ),
+        ],
+        [
+          './Fixture-Store',
+          cliOf(
+            "import { openFixtureSet } from './Fixture-Store'\nexport const o = openFixtureSet",
+          ),
+        ],
+        [
+          '.\\fixture-store',
+          cliOf(
+            "import { openFixtureSet } from '.\\\\fixture-store'\nexport const o = openFixtureSet",
+          ),
+        ],
+        [
+          'a two-hop wrapper, cli.ts > fixtures-entry.ts > fixture-store.ts',
+          {
+            ...cliOf("import { o } from './fixtures-entry'\nexport const c = o"),
+            'tools/publisher/fixtures-entry.ts':
+              "import { openFixtureSet } from './fixture-store'\nexport const o = openFixtureSet",
+          },
+        ],
+        [
+          'a static ./stage-testkit',
+          cliOf("import { kit } from './stage-testkit'\nexport const k = kit"),
+        ],
+        // B16-integ-4: the reach walk's path-literal edges count too, and the walk fails closed.
+        [
+          'a path literal held in a const, loaded through createRequire',
+          cliOf(
+            "import { createRequire } from 'node:module'\nconst spec = './fixture-store'\nexport const m = createRequire(import.meta.url)(spec)",
+          ),
+        ],
+        [
+          'a specifier the walk cannot follow',
+          cliOf("import { x } from './no-such-module'\nexport const y = x"),
+        ],
+        // S16-R1-SEC-2: only cli.ts's own import() of the fixture world is skipped; every other
+        // import() is followed, outside tools/publisher (where FS4d does not reach) and inside it.
+        [
+          'an import() of fixture-store in scripts/x.ts, which cli.ts imports',
+          {
+            ...cliOf("import { f } from '../../scripts/x'\nexport const c = f"),
+            'scripts/x.ts': "export const f = () => import('../tools/publisher/fixture-store')",
+          },
+        ],
+        [
+          'an import() of stage-testkit in scripts/x.ts, which cli.ts imports',
+          {
+            ...cliOf("import { f } from '../../scripts/x'\nexport const c = f"),
+            'scripts/x.ts': "export const f = () => import('../tools/publisher/stage-testkit')",
+          },
+        ],
+        [
+          'an import() of stage-testkit in cli.ts',
+          cliOf("export const k = async () => (await import('./stage-testkit')).kit"),
+        ],
+        [
+          'an import() of fixture-store in fixtures-entry.ts, which cli.ts imports',
+          {
+            ...cliOf("import { o } from './fixtures-entry'\nexport const c = o"),
+            'tools/publisher/fixtures-entry.ts': "export const o = () => import('./fixture-store')",
+          },
+        ],
+      ]
+      for (const [id, files] of samples) {
+        expect.soft(fenceOf(files).findings.length, `(g2) ${id} is a finding`).toBeGreaterThan(0)
+      }
+    },
+  )
 })
 
 // ---- the file walker (FS0; A32) ----
@@ -3606,6 +3906,11 @@ describe('the file walker (FS0)', () => {
         '.github/workflows/ci.yml',
         '.github/workflows/keep-alive.yml',
         '.github/workflows/live-check.yml',
+        // Step 16 (p1-step16-design.md §3.23 item 2): the four publisher workflows.
+        '.github/workflows/publisher-approve.yml',
+        '.github/workflows/publisher-publish.yml',
+        '.github/workflows/publisher-unpublish.yml',
+        '.github/workflows/publisher-verify.yml',
       ]) {
         expect.soft(realRead(path), `(g3) ${path} is read`).toBe(true)
       }
@@ -4512,9 +4817,18 @@ describe("S2: the key's reach (FS2)", () => {
     },
   )
 
-  it('T13-FS2e the YAML secret forms in workflow files; the three real workflows are clean', () => {
+  it('T13-FS2e the YAML secret forms in workflow files; the seven real workflows are clean', () => {
     expectSamples('g1', YAML_SAMPLES)
-    for (const name of ['ci.yml', 'keep-alive.yml', 'live-check.yml']) {
+    for (const name of [
+      'ci.yml',
+      'keep-alive.yml',
+      'live-check.yml',
+      // Step 16 (p1-step16-design.md §3.23 item 2): the four publisher workflows.
+      'publisher-approve.yml',
+      'publisher-publish.yml',
+      'publisher-unpublish.yml',
+      'publisher-verify.yml',
+    ]) {
       const path = `.github/workflows/${name}`
       expect(realRead(path), `precondition: ${path} was read`).toBe(true)
       expect.soft(realHits(path, 's2-yaml'), `(g2) ${path} holds no YAML secret form`).toEqual([])

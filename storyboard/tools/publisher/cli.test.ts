@@ -6,6 +6,10 @@
 // host, so even a factory that forwarded the real origin could send nothing.
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 16 (P1-8e, design migration-input/p1-step16-design.md §3.14.2, §3.16, D16-14, D16-16,
+// D16-32; test plan §14.6: T16-16 to T16-19, and the harness edit of 14.11 item 2): the --fixtures
+// branch through runCli with the real runners and the fixture world, the P1-8 exit matrix M1-M9 once
+// (TP16-11), the refusals around the branch and the no-echo canaries.
 import { createHash } from 'node:crypto'
 import {
   existsSync,
@@ -20,22 +24,28 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CONTENT_PUBLIC_BASE, MEDIA_ORIGIN } from '../../src/config/security-headers'
 import { planMediaHeads } from '../../src/core/content/media'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import { StoryPackageV1 } from '../../src/core/package/v1'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { runCli, type CliDeps } from './cli'
 import { createContentDeleter, type ContentDeleterOptions } from './content-deleter'
 import { Secret, readDeployHookUrl, readSiteUrl } from './env'
+import { openFixtureSet } from './fixture-store'
 import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
+import type { FixtureSet } from './port'
 import {
   answersOf,
   approvalRecordOf,
   buildTestStories,
+  fullyBoundStory,
   hashListOf,
   waiverBytesOf,
   waiverFileOf,
+  withPackage,
   writeAudioTree,
   writeStageInputs,
   type StageInputDirs,
@@ -178,6 +188,9 @@ function harness(stub: StorageStub | null, over: Partial<CliDeps> = {}): Harness
     stdinDeadline: unexpected(calls, 'stdinDeadline'),
     triggerHook: unexpected(calls, 'triggerHook'),
     verify: unexpected(calls, 'verify'),
+    // Step 16 (§3.27, 14.11 item 2): real-mode runs never ask for the fixture world; the call is
+    // recorded, so a real-mode call shows (MU16-115).
+    fixtures: unexpected(calls, 'fixtures'),
     // Step 15b (TP-2): the deleter factory throws unless a test passes its own; the Range check
     // answers ok with D15B-16's middle range into publicCalls; the other public reads throw.
     createDeleter: unexpected(calls, 'createDeleter'),
@@ -1899,6 +1912,712 @@ describe('runCli: unpublish, takedown and verify (Step 15b)', () => {
           '(g2) takedown-here-only, a verify configuration stop and verify a-b: no value',
         )
         .toEqual([])
+    },
+  )
+})
+
+// ---- Step 16: the --fixtures dry runs (§14.6: T16-16 to T16-19) ----
+
+type FixtureCommand = 'approve' | 'publish' | 'verify'
+type RunMode = 'pc' | 'actions'
+const fixturesLine = (command: FixtureCommand) =>
+  `${command}: fixtures dry run: an in-memory store; no Storage, deploy hook or site request`
+const FIXTURES_DRY_RUN = 'usage: --fixtures needs --dry-run for approve and publish'
+const reportsBase = () => join(root, 'migration-input', 'reports')
+const fixturesDir = () => join(reportsBase(), 'fixtures')
+const MODES16: readonly (readonly [RunMode, Partial<CliDeps>])[] = [
+  ['pc', { platform: 'win32', runContext: {} }],
+  ['actions', ACTIONS],
+]
+const modeDeps = (mode: RunMode): Partial<CliDeps> => (mode === 'pc' ? MODES16[0]![1] : ACTIONS)
+
+interface Cast16 {
+  readonly L: TestStory
+  readonly R: TestStory
+  readonly T: TestStory
+  readonly R2: TestStory
+}
+let cast16: Promise<Cast16> | null = null
+/** §3.15's stories: L, R, T* (fully bound) and R2 (R at version 2). */
+const stories16 = (): Promise<Cast16> =>
+  (cast16 ??= (async () => {
+    const list = await testStories()
+    const find = (id: string) => list.find((s) => s.storyId === id)!
+    const R = find('river-stones')
+    return {
+      L: find('lantern-walk'),
+      R,
+      T: await fullyBoundStory(find('two-paths')),
+      R2: await withPackage(R, StoryPackageV1.parse({ ...R.pkg, version: 2 })),
+    }
+  })())
+
+interface Row16 {
+  readonly id: string
+  readonly command: FixtureCommand
+  readonly argv: readonly string[]
+  readonly stdin: string | null
+  /** The planned end: the run's last stdout lines, in order. */
+  readonly end: readonly (string | RegExp)[]
+  /** Lines the run must also print somewhere. */
+  readonly has: readonly (string | RegExp)[]
+  /** The pc report's outcome. */
+  readonly outcome: 'dry-run' | 'verified'
+  /** M6: --takedown runs on this PC only. */
+  readonly pcOnly: boolean
+}
+
+const sha12 = (hex: string) => hex.slice(0, 12)
+
+/** §3.16's rows M1-M8, each argv as the dispatch helper builds it (modeFlags last, S16-INT-4). */
+async function rows16(answers?: Record<string, string>): Promise<Row16[]> {
+  const { L, R, T, R2 } = await stories16()
+  const approvalR2 = await approvalRecordOf(R2, { on: '2026-11-22' })
+  const world = await openFixtureSet()
+  const listing = async (folder: string) => {
+    const got = await world.client.listContent(folder)
+    return got.kind === 'listed' ? got.objects : []
+  }
+  const named = [...(await listing('packages/')), ...(await listing('media/'))]
+  const bytes = named.reduce((sum, object) => sum + (object.size ?? 0), 0)
+  const plan = planMediaHeads([{ pkg: T.pkg }, { pkg: R.pkg }], '')
+  const mp3 = plan.ok ? plan.value.heads.find((head) => head.mime === 'audio/mpeg') : undefined
+  const start = Math.floor((mp3?.bytes ?? 0) / 2)
+  const end = Math.min((mp3?.bytes ?? 0) - 1, start + 1023)
+  const mp3Sha = String(classOfPath('content', mp3?.path ?? '')?.fields.sha256)
+  const rangeLine = `verify: range check ok seq=3 bytes=${start}-${end}/${mp3?.bytes} object=${sha12(mp3Sha)}`
+  const verifyHas = [
+    'verify: expected seq=3 (production pointer)',
+    /^verify: live build seq=3 loaded snapshot sha256=[0-9a-f]{12} \(matches the production pointer\)$/,
+  ]
+  const verifyEnd = [
+    /^verify: landing checked=[1-9][0-9]* failed=0$/,
+    'verify: media checked=4 failed=0 skipped=0',
+    'verify: excluded=0',
+    rangeLine,
+  ]
+  const publishRow = (id: string, argv: string[], end: string[], pcOnly = false): Row16 => ({
+    id,
+    command: 'publish',
+    argv,
+    stdin: null,
+    end,
+    has: [],
+    outcome: 'dry-run',
+    pcOnly,
+  })
+  const unpublishEnd = [
+    'publish: unpublish river-stones production=remove staging=remove',
+    'publish: plan kind=unpublish seq=5 stories=1 production=3 staging=4 featured=none from=none',
+  ]
+  return [
+    {
+      id: 'M1',
+      command: 'approve',
+      argv: [
+        'approve',
+        'lantern-walk',
+        '--package',
+        sha12(L.packageSha256),
+        '--answers-stdin',
+        '--dry-run',
+        '--fixtures',
+      ],
+      stdin: `${JSON.stringify(answers ?? answersOf(L))}\n`,
+      end: [
+        `approve: lantern-walk package=${sha12(L.packageSha256)} version=1 waivers=${sha12(L.waiverSha256)} state=new`,
+        /^approve: record sha256=[0-9a-f]{12} planned$/,
+      ],
+      has: [],
+      outcome: 'dry-run',
+      pcOnly: false,
+    },
+    publishRow(
+      'M2',
+      ['publish', 'river-stones', '--dry-run', '--fixtures'],
+      [
+        `publish: river-stones package=${sha12(R2.packageSha256)} version=2 approval=${sha12(approvalR2.sha256)} state=replaced`,
+        'publish: plan kind=publish seq=5 stories=2 production=3 staging=4 featured=none from=none',
+      ],
+    ),
+    publishRow(
+      'M3',
+      ['publish', '--feature', 'two-paths', '--dry-run', '--fixtures'],
+      [
+        'publish: feature two-paths state=set',
+        'publish: plan kind=publish seq=5 stories=2 production=3 staging=4 featured=two-paths from=none',
+      ],
+    ),
+    publishRow(
+      'M4',
+      ['publish', '--snapshot', '1', '--dry-run', '--fixtures'],
+      ['publish: plan kind=rollback seq=5 stories=1 production=3 staging=4 featured=none from=1'],
+    ),
+    publishRow(
+      'M5',
+      ['publish', '--unpublish', 'river-stones', '--dry-run', '--fixtures'],
+      unpublishEnd,
+    ),
+    publishRow(
+      'M6',
+      ['publish', '--unpublish', 'river-stones', '--takedown', '--dry-run', '--fixtures'],
+      [
+        ...unpublishEnd,
+        'publish: takedown river-stones plan packages=2 media=3 mp3=1 mp3-unproven=0 images=2 (hash list checked)',
+      ],
+      true,
+    ),
+    {
+      id: 'M7',
+      command: 'verify',
+      argv: ['verify', '--fixtures'],
+      stdin: null,
+      end: verifyEnd,
+      has: verifyHas,
+      outcome: 'verified',
+      pcOnly: false,
+    },
+    {
+      id: 'M8',
+      command: 'verify',
+      argv: ['verify', '--deep', '--fixtures'],
+      stdin: null,
+      end: [
+        ...verifyEnd,
+        `verify: deep plan objects=${named.length} bytes=${bytes} approvals=2 waivers=3 (Supabase egress; spec §8: at most monthly, and after a suspected key leak)`,
+        `verify: deep checked=${named.length + 5} mismatches=0`,
+      ],
+      has: verifyHas,
+      outcome: 'verified',
+      pcOnly: false,
+    },
+  ]
+}
+
+interface Run16 {
+  readonly row: Row16
+  readonly mode: RunMode
+  readonly exit: number | 'rejected'
+  readonly out: readonly string[]
+  readonly err: readonly string[]
+  readonly calls: readonly string[]
+  readonly publicCalls: readonly string[]
+  readonly envReads: readonly string[]
+  readonly writes: readonly string[]
+  /** The entries of <root>/migration-input/reports/fixtures after the run. */
+  readonly reports: readonly string[]
+  /** publisher-* entries directly under <root>/migration-input/reports. */
+  readonly elsewhere: readonly string[]
+  readonly reportsExist: boolean
+  readonly outcome: unknown
+  /** Both report files' text (empty when none). */
+  readonly reportText: string
+}
+
+/** An env whose every trap records the access, then throws: the fixtures branch never reads it. */
+function throwingEnv(reads: string[]): CliDeps['env'] {
+  const trap = (name: string) => (): never => {
+    reads.push(name)
+    throw new TypeError('test: deps.env was read')
+  }
+  return new Proxy(
+    {},
+    {
+      get: trap('get'),
+      has: trap('has'),
+      ownKeys: trap('ownKeys'),
+      getOwnPropertyDescriptor: trap('getOwnPropertyDescriptor'),
+    },
+  )
+}
+
+/** The world with counting writers that still reject (T16-17 precondition). */
+async function countedWorld(writes: string[]): Promise<FixtureSet> {
+  const base = await openFixtureSet()
+  return {
+    ...base,
+    client: {
+      ...base.client,
+      create: (ref, body) => {
+        writes.push('create')
+        return base.client.create(ref, body)
+      },
+      writePointer: (mode, body) => {
+        writes.push('writePointer')
+        return base.client.writePointer(mode, body)
+      },
+    },
+  }
+}
+
+/** M6's temp root: this PC's hash list and MP3 tree for R only (hashListOf, writeAudioTree). */
+async function writeTakedownTree(): Promise<void> {
+  const { R } = await stories16()
+  writeAudioTree(root, [R])
+  writeFileSync(join(root, 'migration-input', 'audio', 'SHA256SUMS.txt'), hashListOf([R]))
+}
+
+/** One row in one mode through runCli with the world; the report folder is emptied first. */
+async function runRow(row: Row16, mode: RunMode, over: Partial<CliDeps> = {}): Promise<Run16> {
+  rmSync(reportsBase(), { recursive: true, force: true })
+  const envReads: string[] = []
+  const writes: string[] = []
+  const world = await countedWorld(writes)
+  const h = harness(null, {
+    ...modeDeps(mode),
+    env: throwingEnv(envReads),
+    fixtures: async () => world,
+    ...(row.stdin === null ? {} : stdinOf(row.stdin)),
+    ...over,
+  })
+  const exit = await runCli(row.argv, h.deps).catch(() => 'rejected' as const)
+  const reports = existsSync(fixturesDir()) ? readdirSync(fixturesDir()).sort() : []
+  const elsewhere = existsSync(reportsBase())
+    ? readdirSync(reportsBase()).filter((name) => name.startsWith('publisher-'))
+    : []
+  const json = join(fixturesDir(), `publisher-${row.command}.json`)
+  return {
+    row,
+    mode,
+    exit,
+    out: [...h.out],
+    err: [...h.err],
+    calls: [...h.calls],
+    publicCalls: [...h.publicCalls],
+    envReads,
+    writes,
+    reports,
+    elsewhere,
+    reportsExist: existsSync(reportsBase()),
+    outcome: readJson(json)?.outcome,
+    reportText: [readText(json), readText(join(fixturesDir(), `publisher-${row.command}.md`))].join(
+      '\n',
+    ),
+  }
+}
+
+/** Every row in both modes (M6 in pc mode only). */
+async function runAll(rows: readonly Row16[], over: Partial<CliDeps> = {}): Promise<Run16[]> {
+  const runs: Run16[] = []
+  for (const row of rows) {
+    for (const [mode] of MODES16) {
+      if (row.pcOnly && mode !== 'pc') continue
+      runs.push(await runRow(row, mode, over))
+    }
+  }
+  return runs
+}
+
+const matches = (line: string | undefined, want: string | RegExp) =>
+  line !== undefined && (typeof want === 'string' ? line === want : want.test(line))
+/** True when the run's last stdout lines are its row's planned end and its other lines show. */
+const reachedEnd = (run: Run16): boolean => {
+  const tail = run.out.slice(-run.row.end.length)
+  return (
+    tail.length === run.row.end.length &&
+    run.row.end.every((want, i) => matches(tail[i], want)) &&
+    run.row.has.every((want) => run.out.some((line) => matches(line, want)))
+  )
+}
+const label = (run: Run16) => `${run.row.id} ${run.mode}`
+
+describe('runCli: the --fixtures dry runs (Step 16)', () => {
+  it(
+    'T16-16 the fixtures branch calls no env read, env file, credential, client, hook, verify, deleter or public read, prints the fixed line first and sends no request, in pc and actions modes (A10, CRIT-12)',
+    SLOW,
+    async () => {
+      await writeTakedownTree()
+      const runs = await runAll(await rows16())
+      // g1 holds whatever the end of the run, so it is asserted before the precondition that guards
+      // g2 and g3: a mutant that reads deps.env makes the run reject at that read (B16-implB-3).
+      for (const run of runs) {
+        expect
+          .soft(
+            [run.calls, run.publicCalls, run.envReads],
+            `(g1) ${label(run)}: no loadEnv, factory, hook, verify, deleter, public read or env read`,
+          )
+          .toEqual([[], [], []])
+      }
+      expect(
+        runs.map((run) => [label(run), run.exit, reachedEnd(run)]),
+        'precondition: every run reached its planned end with exit 0',
+      ).toEqual(runs.map((run) => [label(run), 0, true]))
+      expect(runs.length, 'precondition: 15 runs (8 rows in pc mode, 7 in actions mode)').toBe(15)
+      for (const run of runs) {
+        expect
+          .soft(run.out[0], `(g2) ${label(run)}: the fixed line first`)
+          .toBe(fixturesLine(run.row.command))
+      }
+      expect
+        .soft([loopbackRequests, escapes], '(g3) no request: loopback 0, escapes 0')
+        .toEqual([0, 0])
+    },
+  )
+
+  it(
+    'T16-17 the P1-8 exit matrix M1-M9 through runCli: each row ends as §3.16 states, writes nothing to the world, and writes its report only in pc mode, into reports/fixtures (A13, D16-16)',
+    SLOW,
+    async () => {
+      await writeTakedownTree()
+      const probeWrites: string[] = []
+      const probe = await countedWorld(probeWrites)
+      const rejected = await probe.client
+        .create({ kind: 'snapshot', seq: 9 }, new Uint8Array([1]))
+        .then(
+          () => false,
+          (thrown: unknown) => thrown instanceof TypeError,
+        )
+      expect(
+        [rejected, probeWrites],
+        'precondition: a counting writer counts the call, then rejects with a TypeError',
+      ).toEqual([true, ['create']])
+      const rows = await rows16()
+      const runs = await runAll(rows)
+      // Each row's end and exit sit in its own group (B16-implB-2), so a row's mutant reaches it.
+      expect(
+        [runs.length, runs.every((run) => typeof run.exit === 'number')],
+        'precondition: 15 runs, each settled with an exit code',
+      ).toEqual([15, true])
+      const groups: [string, string][] = [
+        ['M1', '(g1) M1: the plan line state=new, then the record planned, exit 0'],
+        ['M2', '(g2) M2: river-stones replaced at version 2, snapshot 5 planned, exit 0'],
+        ['M3', '(g3) M3: the feature line sets two-paths, exit 0'],
+        ['M4', '(g4) M4: the rollback plan from snapshot 1, exit 0'],
+        ['M5', '(g5) M5: production remove, staging remove, N+1 seq 5 with one story, exit 0'],
+        ['M6', '(g6) M6 (pc only): the takedown plan, the hash list checked, exit 0'],
+        ['M7', '(g7) M7: verified, exit 0'],
+        ['M8', "(g7) M8: verified with the world's sha-named objects as the deep counts, exit 0"],
+      ]
+      for (const [id, message] of groups) {
+        for (const run of runs.filter((r) => r.row.id === id)) {
+          expect
+            .soft(
+              [run.exit, reachedEnd(run), run.out.slice(-run.row.end.length)],
+              `${message} (${run.mode})`,
+            )
+            .toEqual([0, true, expect.any(Array)])
+        }
+      }
+      // g8: the reports.
+      for (const run of runs) {
+        const want =
+          run.mode === 'pc'
+            ? [
+                [`publisher-${run.row.command}.json`, `publisher-${run.row.command}.md`],
+                run.row.outcome,
+                [],
+                true,
+              ]
+            : [[], undefined, [], false]
+        expect
+          .soft(
+            [run.reports, run.outcome, run.elsewhere, run.reportsExist],
+            `(g8) ${label(run)}: ${run.mode === 'pc' ? 'exactly the two reports under reports/fixtures, none under reports' : 'no reports folder'}`,
+          )
+          .toEqual(want)
+      }
+      // g9: M9, M6's argv in actions mode.
+      const m6 = rows.find((row) => row.id === 'M6')!
+      const m9 = await runRow({ ...m6, id: 'M9' }, 'actions')
+      expect
+        .soft(
+          [m9.exit, m9.out, m9.err, m9.reportsExist],
+          '(g9) M9: takedown-here-only, exit 2, before the fixtures line',
+        )
+        .toEqual([2, ['publish: stopped: takedown-here-only'], [TAKEDOWN_IN_ACTIONS], false])
+      const m9calls = harness(null, ACTIONS)
+      const asked: string[] = []
+      await runCli(m6.argv, {
+        ...m9calls.deps,
+        fixtures: async () => {
+          asked.push('fixtures')
+          return openFixtureSet()
+        },
+      })
+      expect.soft(asked, '(g9) M9: fixtures not called').toEqual([])
+      // g10: no row asked the world to write.
+      for (const run of runs) {
+        expect.soft(run.writes, `(g10) ${label(run)}: no writer call`).toEqual([])
+      }
+    },
+  )
+
+  it(
+    'T16-18 refusals around the branch: --fixtures without --dry-run, a world that throws, the run-context refusals first, real mode never calls fixtures, the fixtures report dir behind a junction (A9, A10, L-T2)',
+    SLOW,
+    async () => {
+      const { L } = await stories16()
+      const answers = `${JSON.stringify(answersOf(L))}\n`
+      const recorded = (h: Harness): Partial<CliDeps> => ({
+        fixtures: async () => {
+          h.calls.push('fixtures')
+          return openFixtureSet()
+        },
+      })
+      const L12 = sha12(L.packageSha256)
+      const approveFix = [
+        'approve',
+        'lantern-walk',
+        '--package',
+        L12,
+        '--answers-stdin',
+        '--fixtures',
+      ]
+      const control = harness(null, stdinOf(answers))
+      const exitControl = await runCli([...approveFix, '--dry-run'], {
+        ...control.deps,
+        ...recorded(control),
+      })
+      expect(
+        [exitControl, control.calls.includes('fixtures')],
+        'precondition: approve --dry-run --fixtures exits 0 and the recorded world was asked',
+      ).toEqual([0, true])
+
+      // g1: --fixtures without --dry-run is usage before anything (layer 1; MU16-91).
+      for (const [mode] of MODES16) {
+        for (const argv of [
+          approveFix,
+          ['publish', 'river-stones', '--fixtures'],
+          ['publish', '--unpublish', 'river-stones', '--fixtures'],
+        ]) {
+          const h = harness(null, { ...modeDeps(mode), ...stdinOf(answers) })
+          const exit = await runCli(argv, { ...h.deps, ...recorded(h) }).catch(() => 'rejected')
+          expect
+            .soft(
+              [exit, h.out, h.err, h.calls],
+              `(g1) ${mode} ${argv.slice(0, 2).join(' ')} without --dry-run: usage, exit 2, nothing on stdout, fixtures not called`,
+            )
+            .toEqual([2, [], [FIXTURES_DRY_RUN], []])
+        }
+      }
+
+      // g2: a world that throws is internal, after the fixed line (MU16-113).
+      const throwing: Partial<CliDeps> = {
+        fixtures: async () => {
+          throw new TypeError('S16WORLDCANARY')
+        },
+      }
+      // B16-implB-10: CliDeps.fixtures has no default; without it a --fixtures run stops the same way.
+      const absent: Partial<CliDeps> = { fixtures: undefined }
+      for (const [world, over] of [
+        ['a throwing world', throwing],
+        ['no fixtures member', absent],
+      ] as const) {
+        for (const [mode] of MODES16) {
+          for (const [command, argv] of [
+            ['approve', [...approveFix, '--dry-run']],
+            ['publish', ['publish', 'river-stones', '--dry-run', '--fixtures']],
+            ['verify', ['verify', '--fixtures']],
+          ] as const) {
+            const h = harness(null, { ...modeDeps(mode), ...stdinOf(answers), ...over })
+            const exit = await runCli(argv, h.deps).catch(() => 'rejected')
+            expect
+              .soft(
+                [exit, h.out, everything(h).includes('S16WORLDCANARY'), escapes],
+                `(g2) ${world}, ${mode} ${command}: the fixed line, then internal TypeError, exit 1`,
+              )
+              .toEqual([
+                1,
+                [fixturesLine(command), `${command}: stopped: internal TypeError`],
+                false,
+                0,
+              ])
+          }
+        }
+      }
+
+      // g3: every run-context refusal comes first (MU16-114 VERCEL, MU16-160 report dir, MU16-161
+      // the answer channel).
+      const before: [string, string[], Partial<CliDeps>, number, string[], string[]][] = [
+        ...(['approve', 'publish', 'verify'] as const).map(
+          (command): [string, string[], Partial<CliDeps>, number, string[], string[]] => [
+            `actions ${command} --report-dir x`,
+            command === 'approve'
+              ? [...approveFix, '--dry-run', '--report-dir', 'x']
+              : command === 'publish'
+                ? ['publish', 'river-stones', '--dry-run', '--fixtures', '--report-dir', 'x']
+                : ['verify', '--fixtures', '--report-dir', 'x'],
+            ACTIONS,
+            2,
+            [],
+            [REPORT_DIR_IN_ACTIONS],
+          ],
+        ),
+        ...(['approve', 'publish', 'verify'] as const).map(
+          (command): [string, string[], Partial<CliDeps>, number, string[], string[]] => [
+            `VERCEL set: ${command}`,
+            command === 'approve'
+              ? [...approveFix, '--dry-run']
+              : command === 'publish'
+                ? ['publish', 'river-stones', '--dry-run', '--fixtures']
+                : ['verify', '--fixtures'],
+            { runContext: { VERCEL: '1' } },
+            2,
+            [`${command}: stopped: run-context-refused`],
+            [],
+          ],
+        ),
+        [
+          'actions approve without --answers-stdin',
+          ['approve', 'lantern-walk', '--package', L12, '--dry-run', '--fixtures'],
+          ACTIONS,
+          2,
+          ['approve: stopped: answers-missing'],
+          [NO_CHANNEL],
+        ],
+      ]
+      for (const [id, argv, over, code, out, err] of before) {
+        const h = harness(null, { ...stdinOf(answers), ...over })
+        const exit = await runCli(argv, { ...h.deps, ...recorded(h) }).catch(() => 'rejected')
+        expect
+          .soft([exit, h.out, h.err, h.calls], `(g3) ${id}: refused before the fixtures line`)
+          .toEqual([code, out, err, []])
+      }
+
+      // g4: a real-mode run never asks for the world (MU16-115).
+      const stub = await publishedStub()
+      const real = harness(stub, { env: publishEnv() })
+      const exitReal = await runCli(['publish', 'two-paths', '--dry-run'], real.deps).catch(
+        () => 'rejected',
+      )
+      expect
+        .soft(
+          [exitReal, real.calls.includes('fixtures'), real.calls.includes('factory')],
+          '(g4) real mode: publish two-paths --dry-run exits 0 through the factory and never calls fixtures',
+        )
+        .toEqual([0, false, true])
+
+      // g5: the fixtures report dir behind a junction to public/ (MU16-116).
+      rmSync(reportsBase(), { recursive: true, force: true })
+      mkdirSync(join(root, 'public', 'x'), { recursive: true })
+      mkdirSync(reportsBase(), { recursive: true })
+      symlinkSync(
+        join(root, 'public', 'x'),
+        fixturesDir(),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      )
+      const linked = harness(null, MODES16[0]![1])
+      const exitLinked = await runCli(['verify', '--fixtures'], {
+        ...linked.deps,
+        fixtures: async () => openFixtureSet(),
+      }).catch(() => 'rejected')
+      expect
+        .soft(
+          [
+            exitLinked,
+            linked.out,
+            linked.err,
+            readdirSync(join(root, 'public'), { recursive: true }),
+          ],
+          '(g5) a junction to public/x: exit 2 at the start check (the fixed line, then usage, no read), the refusal line, nothing under public/ but x',
+        )
+        .toEqual([
+          2,
+          [fixturesLine('verify'), 'verify: stopped: usage'],
+          [
+            'verify: report-dir refused: its real path is at or under public/ or app/ of the storyboard folder',
+          ],
+          ['x'],
+        ])
+    },
+  )
+
+  it(
+    'T16-19 no-echo canaries: answers, fake secrets and the root path are absent from stdout, stderr and every report file in raw and encoded forms (A24, D16-12, D16-27)',
+    SLOW,
+    async () => {
+      rmSync(root, { recursive: true, force: true })
+      root = mkdtempSync(join(tmpdir(), 's16-S16ROOTCANARY-'))
+      const { L } = await stories16()
+      const key = ['sb', 'secret', 'S16KEYCANARY0123456789'].join('_')
+      const hook = ['https://hook.example', 'S16HOOKCANARY'].join('/')
+      const site = ['https://s16sitecanary', 'example'].join('.')
+      const env: Record<string, string> = {
+        SUPABASE_URL: MEDIA_ORIGIN,
+        SUPABASE_SECRET_KEY: key,
+        VERCEL_DEPLOY_HOOK_PRODUCTION: hook,
+        NEXT_PUBLIC_SITE_URL: site,
+      }
+      const rows = (
+        await rows16(
+          answersOf(L, {
+            'narration-check': 'S16ANSWERCANARY checked',
+            devices: 'phone, S16DEVICECANARY',
+          }),
+        )
+      ).filter((row) => ['M1', 'M2', 'M7'].includes(row.id))
+      const runs: Run16[] = []
+      for (const row of rows) {
+        for (const [mode] of MODES16) runs.push(await runRow(row, mode, { env }))
+      }
+      // The planned end line is each run's last line (a mutant that adds text to an earlier line
+      // still reaches g1, MU16-117).
+      const endLine = (run: Run16) => matches(run.out.at(-1), run.row.end.at(-1) ?? '')
+      expect(
+        runs.map((run) => [
+          label(run),
+          run.exit,
+          endLine(run),
+          run.out.length > 0,
+          run.reports.length,
+        ]),
+        'precondition: each run ended exit 0 at its planned end, stdout not empty, pc runs left 2 report files and actions runs 0',
+      ).toEqual(runs.map((run) => [label(run), 0, true, true, run.mode === 'pc' ? 2 : 0]))
+      expect(
+        runs.filter((run) => run.mode === 'pc').every((run) => run.reportText.length > 1),
+        'precondition: the pc report files were read',
+      ).toBe(true)
+      const canaries = [
+        'S16ANSWERCANARY',
+        'S16DEVICECANARY',
+        'S16KEYCANARY',
+        'S16HOOKCANARY',
+        's16sitecanary',
+        'S16ROOTCANARY',
+        key,
+        hook,
+        site,
+      ]
+      const forms = (value: string) => [
+        value,
+        value.toUpperCase(),
+        value.toLowerCase(),
+        JSON.stringify(value).slice(1, -1),
+        encodeURIComponent(value),
+      ]
+      const rootForms16 = (dir: string) => {
+        const base = [
+          dir,
+          dir.toUpperCase(),
+          dir.toLowerCase(),
+          dir.replaceAll('\\', '/'),
+          dir.replaceAll('/', '\\'),
+        ]
+        return [
+          ...base,
+          ...base.map((form) => JSON.stringify(form).slice(1, -1)),
+          ...base.map((form) => encodeURIComponent(form)),
+          pathToFileURL(dir).href,
+        ]
+      }
+      const needles = [...new Set([...canaries.flatMap(forms), ...rootForms16(root)])]
+      expect(
+        [
+          needles.length > canaries.length,
+          canaries.every((c) => needles.includes(c)),
+          needles.includes(root),
+        ],
+        'precondition: every canary and the root among the forms to look for',
+      ).toEqual([true, true, true])
+      for (const run of runs) {
+        const text = [...run.out, ...run.err, run.reportText].join('\n')
+        expect
+          .soft(
+            needles.filter((needle) => text.includes(needle)),
+            `(g1) ${label(run)}: no canary or root form in stdout, stderr or the reports`,
+          )
+          .toEqual([])
+      }
     },
   )
 })

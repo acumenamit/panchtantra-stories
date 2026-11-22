@@ -21,6 +21,15 @@
 // - Results are codes, counts and storage paths only; this module never prints, never builds a URL
 //   and holds no local file API: local reads go through readLocalFile, the real path through the
 //   caller's `realPath` (cli.ts passes realpathSync.native).
+// - Step 16 (migration-input/p1-step16-design.md §3.17, D16-17; S15B-R2-SEC-1, R2-FID-1): every
+//   refusal below is `takedown-check-failed`. At plan, before the own-entry check and the hash
+//   list: T1 an empty listing of the two folders, in every state; T1c, when the caller passes
+//   `seen` (publish.ts's D15B-30 listing, the neither state only), a seen path the plan listing
+//   lost. At commit: T3 an empty plan, before any read; T4 a fresh state without a production
+//   pointer (a blind read: every takedown starts with one and no publisher path deletes it), before
+//   step 2; T2 a planned path the fresh listing no longer shows, after the raced check and before
+//   the hash list and any DELETE. An object hidden at plan and at commit alike is believed, and a
+//   blind staging read lets step 2 check production only (design §9 L-T1).
 import { join } from 'node:path'
 import { MEDIA_MAX_BYTES, planMediaHeads } from '../../src/core/content/media'
 import type { SnapshotEntry } from '../../src/core/content/packages'
@@ -228,9 +237,11 @@ async function unproven(
 }
 
 /**
- * The takedown plan (§4.3): the listings and the class rule, the own-entry check when `entry` is
- * given (production's entry in the P state, else staging's in the S state), then the hash list and
- * the per-object MP3 proof. Reads only through `reader`; local reads only under `root`.
+ * The takedown plan (§4.3): the listings and the class rule, T1 (the listing is not empty) and T1c
+ * (every `seen` path is listed again, when given), the own-entry check when `entry` is given
+ * (production's entry in the P state, else staging's in the S state), then the hash list and the
+ * per-object MP3 proof. Reads only through `reader`; local reads only under `root`. An empty `seen`
+ * checks nothing (T1 still refuses an empty listing).
  */
 export async function planTakedown(
   reader: StorageReader,
@@ -238,6 +249,7 @@ export async function planTakedown(
   entry: SnapshotEntry | null,
   root: string,
   realPath: (path: string) => string,
+  seen?: ReadonlySet<string>,
 ): Promise<PlanResult> {
   const listing = await listStory(reader, storyId, {
     unknown: 'takedown-unknown-object',
@@ -245,8 +257,12 @@ export async function planTakedown(
   })
   if (!listing.ok) return { ok: false, code: listing.code }
   const objects = listing.objects
+  const checkFailed: PlanResult = { ok: false, code: 'takedown-check-failed' }
+  // T1: a listing blind to every object never plans (S15B-R2-SEC-1).
+  if (objects.size === 0) return checkFailed
+  // T1c: the plan listing lost a path the caller's first listing showed.
+  if (seen !== undefined && [...seen].some((path) => !objects.has(path))) return checkFailed
   if (entry !== null) {
-    const checkFailed: PlanResult = { ok: false, code: 'takedown-check-failed' }
     const checked = await readCheckedPackage(reader, entry)
     if (!checked.ok) return checkFailed
     const heads = planMediaHeads([{ pkg: checked.pkg }], '')
@@ -286,9 +302,10 @@ async function pointerShows(
 
 /**
  * The takedown commit (§4.4, D15B-11 steps 1-8), run after verify confirmed the story gone.
- * `makeRemover` is called at most once, only when something is left to delete. An empty delete set
- * is `{ok: true, removed: 0}` only when the fresh listing still shows every planned path; else
- * `takedown-check-failed` (S15B-R1-SEC-1).
+ * `makeRemover` is called at most once, only when something is left to delete. An empty plan (T3),
+ * a fresh state without a production pointer (T4) and a fresh listing that lost a planned path (T2)
+ * are `takedown-check-failed` before any DELETE; so an empty delete set (every listed MP3 kept) is
+ * `{ok: true, removed: 0}` with every planned path still listed (S15B-R1-SEC-1, Step 16).
  */
 export async function commitTakedown(
   reader: StorageReader,
@@ -301,10 +318,15 @@ export async function commitTakedown(
   const storyId = plan.storyId
   let removed = 0
   const stop = (code: string): CommitResult => ({ ok: false, code, removed })
+  // T3: an empty plan (only a hand-built one reaches here after T1) is refused before any read.
+  if (plan.paths.length === 0) return stop('takedown-check-failed')
 
   // 1-3: both current snapshots, the story in neither, every package they name read and planned.
   const state = await readCatalogueState(reader)
   if (!state.ok) return stop('takedown-check-failed')
+  // T4: a fresh state without a production pointer is a blind read; step 2 would check a set that
+  // can be empty.
+  if (state.state.production === null) return stop('takedown-check-failed')
   const snapshots = [state.state.production, state.state.staging].flatMap((p) =>
     p === null ? [] : [p.snapshot],
   )
@@ -320,7 +342,8 @@ export async function commitTakedown(
     if (!planMediaHeads([{ pkg: checked.pkg }], '').ok) return stop('takedown-check-failed')
   }
 
-  // 4: a fresh listing that adds nothing to the plan; planned paths no longer listed are dropped.
+  // 4: a fresh listing that adds nothing to the plan (raced) and still shows every planned path
+  // (T2: a short or blind listing never reaches a DELETE; R2-FID-1).
   const fresh = await listStory(reader, storyId, {
     unknown: 'takedown-unknown-object',
     repeated: 'takedown-check-failed',
@@ -329,6 +352,7 @@ export async function commitTakedown(
   if (!fresh.ok) return stop(fresh.code)
   const planned = new Set(plan.paths)
   if ([...fresh.objects.keys()].some((path) => !planned.has(path))) return stop('takedown-raced')
+  if (plan.paths.some((path) => !fresh.objects.has(path))) return stop('takedown-check-failed')
 
   // 5: the MP3 proof again over what is still listed (never the plan's verdict reused).
   const list = await readHashList(root, realPath)
@@ -343,13 +367,9 @@ export async function commitTakedown(
   const kept = byCodeUnits([...[...fresh.objects.keys()].filter((p) => planKept.has(p)), ...again])
   const keptSet = new Set(kept)
   const doomed = byCodeUnits([...fresh.objects.keys()].filter((path) => !keptSet.has(path)))
-  if (doomed.length === 0) {
-    // Nothing to delete is an answer only when the fresh listing still shows every planned path:
-    // with no DELETE and no final re-list nothing else confirms a vanished one, so a blind or
-    // short listing fails closed and never ends taken-down (S15B-R1-SEC-1, D15B-34's rule).
-    if (plan.paths.some((path) => !fresh.objects.has(path))) return stop('takedown-check-failed')
-    return { ok: true, removed: 0, kept }
-  }
+  // Nothing to delete (every listed MP3 kept): T2 already proved the fresh listing shows every
+  // planned path, so no vanished path is believed here (S15B-R1-SEC-1).
+  if (doomed.length === 0) return { ok: true, removed: 0, kept }
 
   // 6-7: the deleter, then per chunk both pointers re-read and one remove.
   const remover = makeRemover()
