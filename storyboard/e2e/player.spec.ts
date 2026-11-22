@@ -12,7 +12,12 @@
 // - Scroll (F7, C27): after a step the page's scrollY is the header's offset from the page top,
 //   clamped to what the page can scroll (the staging banner sits above the header).
 // - Opening frames: an init-script sampler records, every animation frame, whether the opening
-//   player's passage is painted (computed visibility not hidden); T-a9, T-a10 and T-a14 read it.
+//   player's passage is painted (computed visibility not hidden); T-a9, T-a10, T-a14 and E12-P4 to
+//   P6 read it. Step 16 (P1-8e, design p1-step16-design.md §3.19, D16-19, D16-39): with
+//   `observe: true` (E12-P4, P5, P6 and T-a14 only) a MutationObserver beside it records the same
+//   state at each mutation callback and counts the player's data-run-phase records whose old value
+//   is `opening`; without it no observer is installed (the sampler's init script is unchanged) and
+//   openingFrames first checks that the page has none.
 // - JavaScript chunks are held by page.route where a test needs an unhydrated page; CSS never is.
 // Step 10b (design §4.1, §4.3, D11-P10 to P12, P19, P20, C13, F6; §9.3 T-b1 to T-b8): Back in the
 // run footer, the menu (text size, Start again), the restart dialog, the progress segments and the
@@ -222,8 +227,27 @@ interface OpeningFrame {
   readonly saved: boolean
 }
 
-/** Before any page script: the opening-frame sampler (header comment) and a DOMContentLoaded look. */
-async function sampleOpeningFrames(page: Page): Promise<void> {
+/** One MutationObserver callback's look at the player (the sampler's selectors). */
+interface ObservedState {
+  readonly t: number
+  readonly phase: string
+  readonly passage: boolean
+  /** The rAF sampler's `painted`: computed visibility not hidden, not a paint. */
+  readonly visible: boolean
+  readonly saved: boolean
+}
+
+/**
+ * Before any page script: the opening-frame sampler (header comment) and a DOMContentLoaded look.
+ * With `observe: true` (Step 16, D16-19; E12-P4, P5, P6 and T-a14 only) a second init script adds
+ * the observer: `__e2eObserved` gets one state per callback, read from the DOM at that moment, and
+ * `__e2eLeftOpening` counts the `[data-player]` records of `data-run-phase` whose old value is
+ * `opening` (a record the browser keeps even when the state changed again before the callback).
+ */
+async function sampleOpeningFrames(
+  page: Page,
+  options: { readonly observe?: boolean } = {},
+): Promise<void> {
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>
     const sampled: unknown[] = []
@@ -249,19 +273,80 @@ async function sampleOpeningFrames(page: Page): Promise<void> {
     }
     requestAnimationFrame(tick)
   })
+  if (options.observe !== true) return
+  await page.addInitScript(() => {
+    const w = window as unknown as Record<string, unknown>
+    const observed: unknown[] = []
+    w['__e2eObserved'] = observed
+    w['__e2eLeftOpening'] = 0
+    const record = (mutations: MutationRecord[]): void => {
+      const passage = document.querySelector('[data-run-phase="opening"] [data-passage]')
+      observed.push({
+        t: Math.round(performance.now()),
+        phase: document.querySelector('[data-player]')?.getAttribute('data-run-phase') ?? 'none',
+        passage: passage !== null,
+        visible: passage !== null && getComputedStyle(passage).visibility !== 'hidden',
+        saved: document.documentElement.hasAttribute('data-saved-run'),
+      })
+      for (const mutation of mutations) {
+        if (
+          mutation.type === 'attributes' &&
+          mutation.attributeName === 'data-run-phase' &&
+          mutation.oldValue === 'opening' &&
+          mutation.target instanceof Element &&
+          mutation.target.matches('[data-player]')
+        ) {
+          w['__e2eLeftOpening'] = Number(w['__e2eLeftOpening']) + 1
+        }
+      }
+    }
+    new MutationObserver(record).observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeOldValue: true,
+    })
+  })
 }
 
-async function openingFrames(page: Page) {
+/**
+ * The sampler's counts; with `observed: true` also the observer's (D16-19), where an observer that
+ * recorded nothing counts 0, so the callers' preconditions fail as preconditions, never as a pass.
+ * Without it the observer's counts are null, after the hard check that this page installed no
+ * observer (D16-39: T-a9 and T-a10 turn red if it leaks into them).
+ */
+async function openingFrames(page: Page, options: { readonly observed?: boolean } = {}) {
+  if (options.observed !== true) {
+    const observer = await pageValue<unknown>(page, '__e2eObserved')
+    expect(observer, 'precondition: this page installed no observer').toBeUndefined()
+  }
   const sampled = await pageValue<OpeningFrame[]>(page, '__e2eFrames')
   const opening = sampled.filter((frame) => frame.phase === 'opening' && frame.passage)
+  let observedOpening: number | null = null
+  let observedVisible: number | null = null
+  let leftOpening: number | null = null
+  if (options.observed === true) {
+    const states = (await pageValue<ObservedState[] | undefined>(page, '__e2eObserved')) ?? []
+    const shown = states.filter((state) => state.phase === 'opening' && state.passage)
+    observedOpening = shown.length
+    observedVisible = shown.filter((state) => state.visible).length
+    leftOpening = (await pageValue<number | undefined>(page, '__e2eLeftOpening')) ?? 0
+  }
   return {
     frames: sampled.length,
     opening: opening.length,
     painted: opening.filter((frame) => frame.painted).length,
     saved: sampled.filter((frame) => frame.saved).length,
     firstOpenAt: sampled.find((frame) => frame.phase === 'open')?.t ?? null,
+    observedOpening,
+    observedVisible,
+    leftOpening,
   }
 }
+
+/** The observer's counts as the `[player]` lines print them (grep-able; Step 16 §3.19.6). */
+const observedCounts = (seen: Awaited<ReturnType<typeof openingFrames>>): string =>
+  `observedOpening=${seen.observedOpening} observedVisible=${seen.observedVisible} leftOpening=${seen.leftOpening}`
 
 /**
  * What a fresh run announces after step `index` of the first-choice path (index 0 is the first
@@ -833,7 +918,7 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     await seedProgressOnce(page, {
       'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: 'en' } },
     })
-    await sampleOpeningFrames(page)
+    await sampleOpeningFrames(page, { observe: true })
     await openPlayer(page, playerPath('en', 'river-stones'))
     await expect(page.locator(PART)).toHaveAttribute('data-node', 'flat_stones')
     await page.evaluate(() => {
@@ -845,18 +930,35 @@ test.describe('the story player, Step 10a', { tag: '@review' }, () => {
     ])
     await expect(page.locator('h1')).toHaveText(message('en', 'grownUps.title'))
     await page.evaluate(() => {
-      ;((window as unknown as Record<string, unknown>)['__e2eFrames'] as unknown[]).length = 0
+      const w = window as unknown as Record<string, unknown>
+      ;(w['__e2eFrames'] as unknown[]).length = 0
+      ;(w['__e2eObserved'] as unknown[]).length = 0
+      w['__e2eLeftOpening'] = 0
     })
     await page.goBack()
     await waitOpen(page)
     await expect(page.locator(PART)).toHaveAttribute('data-node', 'flat_stones')
     await frames(page)
     expect(await pageValue(page, '__e2eSameDocument'), 'client navigations only').toBe(true)
-    const seen = await openingFrames(page)
-    const description = `${seen.frames} frames after Back, ${seen.opening} opening, ${seen.painted} painted`
+    const seen = await openingFrames(page, { observed: true })
+    const description = `${seen.frames} frames after Back, ${seen.opening} opening, ${seen.painted} painted; ${observedCounts(seen)}`
     test.info().annotations.push({ type: 'T-a14', description })
     console.log(`[player] T-a14 (${test.info().project.name}): ${description}`)
     expect(seen.frames, 'frames sampled after Back').toBeGreaterThan(0)
+    // Pre-approved fallback (Step 16 design §3.19.4, stop S8): if the lead's repeat run shows
+    // observedOpening 0 in any try on any project (Back kept the player mounted), this test keeps
+    // only the frames check above and g3b below, and design §9 L-E1 records it.
+    expect(
+      seen.observedOpening,
+      'precondition: the observer saw the opening player with its start passage',
+    ).toBeGreaterThan(0)
+    // Back sets no saved-run hint (only the held links and the hard-load script do), so the opening
+    // start passage is visible in style (observedVisible is 1 on every project). It never paints
+    // because open() resolves in the mount's own task: no frame may see the opening player at all
+    // (Step 16 design §9 L-E1, lead decision L16-2).
+    expect
+      .soft(seen.opening, '(g3b) frames that saw the opening player after Back (no hint hides it)')
+      .toBe(0)
     expect(seen.painted, 'opening frames that painted the start passage').toBe(0)
   })
 
@@ -4291,6 +4393,8 @@ test.describe(
 
     // H-12c (T-a14's method): a client navigation into a resumed player never paints the start node
     // first. The sampler records every frame of this document; it is emptied just before the tap.
+    // Step 16 (D16-19): the observer records the same document and is emptied with it; its
+    // precondition holds without a frame landing in the one-frame opening state (g3b reads it).
     for (const from of ['landing', 'home'] as const) {
       const id = from === 'landing' ? 'E12-P4' : 'E12-P5'
       test(`${id} /en: H-12c, ${from === 'landing' ? 'Continue on the landing' : "Home's Continue card"} into a resumed player never paints the start node`, async ({
@@ -4299,7 +4403,7 @@ test.describe(
         await seedProgressOnce(page, {
           'river-stones': { activeRun: { path: ['start', 'flat_stones'], locale: 'en' } },
         })
-        await sampleOpeningFrames(page)
+        await sampleOpeningFrames(page, { observe: true })
         const link =
           from === 'landing'
             ? '[data-actions] a[data-story-action="continue"]'
@@ -4311,6 +4415,8 @@ test.describe(
           const w = window as unknown as Record<string, unknown>
           w['__e2eSameDocument'] = true
           ;(w['__e2eFrames'] as unknown[]).length = 0
+          ;(w['__e2eObserved'] as unknown[]).length = 0
+          w['__e2eLeftOpening'] = 0
         })
         await page.locator(link).click()
         await expect
@@ -4323,12 +4429,19 @@ test.describe(
         expect
           .soft(await pageValue(page, '__e2eSameDocument'), '(g2) a client navigation only')
           .toBe(true)
-        const seen = await openingFrames(page)
-        const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted`
+        const seen = await openingFrames(page, { observed: true })
+        const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted; ${observedCounts(seen)}`
         test.info().annotations.push({ type: id, description })
         console.log(`[player] ${id} (${test.info().project.name}): ${description}`)
         expect(seen.frames, 'precondition: frames sampled after the tap').toBeGreaterThan(0)
+        expect(
+          seen.observedOpening,
+          'precondition: the observer saw the opening player with its start passage',
+        ).toBeGreaterThan(0)
         expect.soft(seen.painted, '(g3) opening frames that painted the start passage').toBe(0)
+        expect
+          .soft(seen.observedVisible, '(g3b) observed opening states that showed the start passage')
+          .toBe(0)
       })
     }
 
@@ -4336,11 +4449,13 @@ test.describe(
     // Start; then a run for the story is saved behind its back (the test writes the bytes another
     // tab's save leaves, which the landing does not follow, N8). Start sets the hint in every state,
     // so the resumed player never paints the start passage first. The sampler records every frame of
-    // this document; it is emptied just before the tap.
+    // this document; it is emptied just before the tap. Step 16 (D16-19, E12-P6's CI flake): the
+    // precondition is the observer's, whose callback runs at the mount commit's microtask, before
+    // open() lands, so it holds on a runner that paints no frame inside the opening state.
     test('E12-P6 /en: H-12c, Start after another tab saved a run opens the resumed player without painting the start node', async ({
       page,
     }) => {
-      await sampleOpeningFrames(page)
+      await sampleOpeningFrames(page, { observe: true })
       const response = await page.goto('/en/stories/river-stones')
       expect(response?.status(), 'precondition: the landing').toBe(200)
       await expect(
@@ -4356,6 +4471,8 @@ test.describe(
           const w = window as unknown as Record<string, unknown>
           w['__e2eSameDocument'] = true
           ;(w['__e2eFrames'] as unknown[]).length = 0
+          ;(w['__e2eObserved'] as unknown[]).length = 0
+          w['__e2eLeftOpening'] = 0
           return {
             stored: window.localStorage.getItem(key) === value,
             shown: document.querySelector('[data-actions]')?.getAttribute('data-shown') ?? null,
@@ -4379,12 +4496,18 @@ test.describe(
       expect
         .soft(await pageValue(page, '__e2eSameDocument'), '(g2) a client navigation only')
         .toBe(true)
-      const seen = await openingFrames(page)
-      const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted, ${seen.saved} with the hint`
+      const seen = await openingFrames(page, { observed: true })
+      const description = `${seen.frames} frames after the tap, ${seen.opening} opening, ${seen.painted} painted, ${seen.saved} with the hint; ${observedCounts(seen)}`
       test.info().annotations.push({ type: 'E12-P6', description })
       console.log(`[player] E12-P6 (${test.info().project.name}): ${description}`)
-      expect(seen.opening, 'precondition: opening frames sampled after the tap').toBeGreaterThan(0)
+      expect(
+        seen.observedOpening,
+        'precondition: the observer saw the opening player with its start passage',
+      ).toBeGreaterThan(0)
       expect.soft(seen.painted, '(g3) opening frames that painted the start passage').toBe(0)
+      expect
+        .soft(seen.observedVisible, '(g3b) observed opening states that showed the start passage')
+        .toBe(0)
     })
   },
 )
