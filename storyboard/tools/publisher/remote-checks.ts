@@ -12,6 +12,8 @@
 //   listed with its size and mime.
 // - checkCarriedEntry runs steps 2 and 4 on an entry publish takes from production (no approval or
 //   waiver read; CRIT-7).
+// - readCheckedPackage (Step 15b, D15B-27) exports step 2 alone with the carried codes, for
+//   takedown and the verify command; the two checks above keep calling the same internal step.
 // - featureCheck is pure: the build's own featuredVerdict decides, and a refusal carries the counts
 //   of the same validatePackage call the verdict makes (waivers never count).
 // Results are codes only: no reason, message or body leaves this module; it never prints.
@@ -125,6 +127,19 @@ async function packageStep(
   if (!gate.ok) return { ok: false, code: codes.packageGate }
   if (gate.value.pkg.assets.length === 0) return { ok: false, code: 'phase-1-package' }
   return { ok: true, pkg: gate.value.pkg, bytes: read.bytes }
+}
+
+/**
+ * Step 2 alone with the carried codes (Step 15b, migration-input/p1-step15b-design.md §3.27,
+ * D15B-27): one content-addressed package read, its sha256, checkPackage with requireJcs and the
+ * phase-1 rule. `carried-package-missing`, `carried-package-gate`, `phase-1-package` or a storage
+ * code; no listing and no masters read. Takedown and the verify command share it.
+ */
+export async function readCheckedPackage(
+  reader: StorageReader,
+  entry: SnapshotEntry,
+): Promise<Checked | { readonly ok: false; readonly code: string }> {
+  return packageStep(reader, entry, CARRIED)
 }
 
 /** Step 4: the media plan, both listings, then the package and every head with size and mime. */

@@ -1,12 +1,14 @@
 // The publisher's argument parser and run context (design migration-input/p1-step14-design.md
 // §3.11 D14-1, D14-17, D14-25; P1-8c, Step 14; migration-input/p1-step15a-design.md §3.1, §3.7,
-// §3.23, §3.29, D15-1, D15-7, D15-23, D15-28; P1-8d part a, Step 15a). Pure: no file, no
+// §3.23, §3.29, D15-1, D15-7, D15-23, D15-28; P1-8d part a, Step 15a; and
+// migration-input/p1-step15b-design.md §3.26, D15B-1, D15B-8, D15B-19, D15B-26; P1-8d part b, Step
+// 15b: `publish --unpublish <id> [--takedown]` and `verify [--deep]`). Pure: no file, no
 // environment, no clock. Flags are held in a Map, so prototype names (`--__proto__`,
 // `--constructor`, `--toString`) are unknown flags. Every message names a flag or a rule from the
 // fixed table, never an input value.
 // - Parse order for every command: the flag loop (unknown, repeated, no value, needs a value), the
 //   scope texts, the id rules, the required flags, the value forms (`--package`, `--snapshot`,
-//   `--feature`), the report dir (device or network, then the win32 segment rule, then the
+//   `--feature`, then `--unpublish`), the report dir (device or network, then the win32 segment rule, then the
 //   in-site compare), then `--timeout-ms`.
 import { resolve, sep } from 'node:path'
 import { StoryId } from '../../src/core/package/v1'
@@ -19,6 +21,8 @@ export const USAGE_TEXT = [
   '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  verify [--deep] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -40,14 +44,18 @@ const FLAGS: ReadonlyMap<string, FlagKind> = new Map([
   ['feature', 'value'],
   ['snapshot', 'value'],
   ['package', 'value'],
+  ['unpublish', 'value'],
+  ['takedown', 'boolean'],
+  ['deep', 'boolean'],
 ])
-type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish'
+type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
 const COMMANDS: ReadonlySet<string> = new Set<Command>([
   'help',
   'validate',
   'stage',
   'approve',
   'publish',
+  'verify',
 ])
 
 /** Each flag's commands (TP-1); `--report-dir` is for every command but help. */
@@ -55,20 +63,23 @@ const SCOPE: ReadonlyMap<string, readonly Command[]> = new Map<string, readonly 
   ['packages', ['validate', 'stage']],
   ['media', ['validate', 'stage']],
   ['waivers', ['validate', 'stage']],
-  ['report-dir', ['validate', 'stage', 'approve', 'publish']],
-  ['timeout-ms', ['stage', 'approve', 'publish']],
+  ['report-dir', ['validate', 'stage', 'approve', 'publish', 'verify']],
+  ['timeout-ms', ['stage', 'approve', 'publish', 'verify']],
   ['dry-run', ['stage', 'approve', 'publish']],
   ['all', ['validate']],
   ['answers-stdin', ['approve']],
   ['package', ['approve']],
   ['feature', ['publish']],
   ['snapshot', ['publish']],
+  ['unpublish', ['publish']],
+  ['takedown', ['publish']],
+  ['deep', ['verify']],
 ])
 
 const MESSAGE = {
   empty: 'usage: an argument is empty or holds a NUL character',
-  noCommand: 'usage: no command (validate, stage, approve, publish or help)',
-  command: 'usage: unknown command (validate, stage, approve, publish or help)',
+  noCommand: 'usage: no command (validate, stage, approve, publish, verify or help)',
+  command: 'usage: unknown command (validate, stage, approve, publish, verify or help)',
   helpArgs: 'usage: help takes no arguments',
   bareDashes: 'usage: a bare -- is not allowed',
   singleDash: 'usage: single-dash flags are not supported',
@@ -80,10 +91,14 @@ const MESSAGE = {
   idTwice: 'usage: a story id is given more than once',
   approveOneId: 'usage: approve takes exactly one story id',
   packageForm: 'usage: --package must be 12 to 64 lowercase hex characters',
-  publishNeeds: 'usage: publish needs story ids, --feature or --snapshot',
+  publishNeeds: 'usage: publish needs story ids, --feature, --snapshot or --unpublish',
   snapshotWithIds: 'usage: --snapshot cannot be combined with story ids',
   snapshotForm: 'usage: --snapshot must be a whole number from 1',
   featureForm: 'usage: --feature takes a story id or none',
+  unpublishWith: 'usage: --unpublish cannot be combined with story ids, --feature or --snapshot',
+  unpublishForm: 'usage: --unpublish takes a story id',
+  takedownNeeds: 'usage: --takedown needs --unpublish <id>',
+  verifyIds: 'usage: verify takes no story ids',
   timeout: 'usage: --timeout-ms must be a whole number from 1 to 600000',
   reportDir: 'usage: --report-dir may not be at or under public/ or app/ of the storyboard folder',
   reportDirDevice: 'usage: --report-dir may not be a device or network path',
@@ -103,13 +118,16 @@ const SCOPE_TEXT: Readonly<Record<string, string>> = {
   packages: 'validate and stage',
   media: 'validate and stage',
   waivers: 'validate and stage',
-  'timeout-ms': 'stage, approve and publish',
+  'timeout-ms': 'stage, approve, publish and verify',
   'dry-run': 'stage, approve and publish',
   all: 'validate',
   'answers-stdin': 'approve',
   package: 'approve',
   feature: 'publish',
   snapshot: 'publish',
+  unpublish: 'publish',
+  takedown: 'publish',
+  deep: 'verify',
 }
 const outOfScope = (flag: string) => `usage: --${flag} is for ${SCOPE_TEXT[flag] ?? ''} only`
 
@@ -174,7 +192,18 @@ export type ParsedArgs =
       readonly feature: string | null
       /** The seq of `--snapshot`, or null. */
       readonly snapshot: number | null
+      /** The story id of `--unpublish` (Step 15b, D15B-1), or null when the flag was not given. */
+      readonly unpublish: string | null
+      /** True for `--takedown`, which needs `--unpublish` (D15B-8). */
+      readonly takedown: boolean
       readonly dryRun: boolean
+      readonly timeoutMs: number
+    } & ReportDirArg)
+  | ({
+      readonly ok: true
+      readonly command: 'verify'
+      /** True for `--deep` (D15B-20). */
+      readonly deep: boolean
       readonly timeoutMs: number
     } & ReportDirArg)
   | { readonly ok: false; readonly code: 'usage'; readonly message: string }
@@ -183,13 +212,18 @@ const usage = (message: string): ParsedArgs => ({ ok: false, code: 'usage', mess
 
 const isStoryId = (id: string): boolean => StoryId.safeParse(id).success
 
-/** The id rules of each command (§3.1, §3.7), in order; null when they pass. */
+/**
+ * The id rules of each command (§3.1, §3.7; Step 15b §3.26), in order; null when they pass. publish:
+ * takedown without unpublish, publish needs, unpublish with, snapshot with ids, the count, the form
+ * and repeats; verify: any id is refused.
+ */
 function idRule(
   command: Exclude<Command, 'help'>,
   ids: readonly string[],
   flags: ReadonlyMap<string, string | true>,
 ): string | null {
   const all = flags.has('all')
+  if (command === 'verify') return ids.length > 0 ? MESSAGE.verifyIds : null
   if (command === 'validate') {
     if (all && ids.length > 0) return MESSAGE.allWithIds
     if (!all && ids.length === 0) return MESSAGE.idsOrAll
@@ -197,8 +231,13 @@ function idRule(
   if (command === 'approve') {
     if (ids.length !== 1) return MESSAGE.approveOneId
   } else if (command === 'publish') {
-    if (ids.length === 0 && !flags.has('feature') && !flags.has('snapshot')) {
+    const unpublish = flags.has('unpublish')
+    if (flags.has('takedown') && !unpublish) return MESSAGE.takedownNeeds
+    if (ids.length === 0 && !flags.has('feature') && !flags.has('snapshot') && !unpublish) {
       return MESSAGE.publishNeeds
+    }
+    if (unpublish && (ids.length > 0 || flags.has('feature') || flags.has('snapshot'))) {
+      return MESSAGE.unpublishWith
     }
     if (flags.has('snapshot') && ids.length > 0) return MESSAGE.snapshotWithIds
     if (ids.length > MAX_IDS) return MESSAGE.idCount
@@ -282,6 +321,10 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
   if (featureText !== undefined && featureText !== 'none' && !isStoryId(featureText)) {
     return usage(MESSAGE.featureForm)
   }
+  const unpublishText = text('unpublish')
+  if (unpublishText !== undefined && !isStoryId(unpublishText)) {
+    return usage(MESSAGE.unpublishForm)
+  }
 
   const reportDirText = text('report-dir')
   const reportDirGiven = reportDirText !== undefined
@@ -318,6 +361,9 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
     }
     timeoutMs = Number(timeout)
   }
+  if (command === 'verify') {
+    return { ok: true, command, deep: flags.has('deep'), timeoutMs, reportDir, reportDirGiven }
+  }
   const dryRun = flags.has('dry-run')
   if (command === 'approve') {
     return {
@@ -340,6 +386,8 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
       featureGiven: featureText !== undefined,
       feature: featureText === undefined || featureText === 'none' ? null : featureText,
       snapshot,
+      unpublish: unpublishText ?? null,
+      takedown: flags.has('takedown'),
       dryRun,
       timeoutMs,
       reportDir,
@@ -392,9 +440,10 @@ const RESERVED_CHARACTERS = '<>"|?*'
 /**
  * True when a segment of the path cannot be stored as written on Windows (D15-28): Node's fs
  * passes `\\?\` paths, so Win32 neither strips a trailing dot or space nor maps a device name, and
- * a `:` names a stream. The first segment may be a drive prefix `X:`.
+ * a `:` names a stream. The first segment may be a drive prefix `X:`. Exported with this body
+ * unchanged for Step 15b's hash-list line rule (D15B-9 rule 6).
  */
-function hasUnstorableSegment(path: string): boolean {
+export function hasUnstorableSegment(path: string): boolean {
   return path.split(/[\\/]/).some((segment, index) => {
     if (segment === '') return false
     if (segment.endsWith('.') || segment.endsWith(' ')) return true

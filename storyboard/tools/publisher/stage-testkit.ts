@@ -8,6 +8,10 @@
 // Step 15a (design p1-step15a-design.md §2.3, TP-9) adds fullyBoundStory (every node pictured and
 // narrated in every locale, for --feature), approvalRecordOf (an approval record and its JCS bytes)
 // and answersOf (the six approve answers, confirming by default).
+// Step 15b (design p1-step15b-design.md §2.3, TP-13) adds hashListOf (this PC's SHA256SUMS.txt text
+// for the stories' MP3 variants) and writeAudioTree (the local MP3 files under
+// <root>/migration-input/audio/), for the takedown tests' temp roots; it still writes only under the
+// root a test passes and never reads the repository's migration-input/audio/.
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -317,5 +321,66 @@ export function answersOf(
     devices: 'phone, laptop',
     'checklist-complete': 'yes',
     ...over,
+  }
+}
+
+// ---- Step 15b (P1-8d part b): this PC's MP3 tree and hash list (TP-13) ----
+
+interface AudioFile {
+  readonly storyId: string
+  /** `<nodeId>.<locale>.mp3`, the file name under migration-input/audio/<storyId>/. */
+  readonly file: string
+  /** The 64 hex of the variant's object name. */
+  readonly sha256: string
+  readonly bytes: Uint8Array<ArrayBuffer>
+}
+
+const VARIANT_HEX = /^media\/[a-z0-9-]+\/([a-f0-9]{64})-[a-z0-9]{1,16}\.mp3$/
+
+/** Every audio variant of the stories, sorted by `<storyId>/<file>` in UTF-16 code-unit order. */
+function audioFilesOf(stories: readonly TestStory[]): AudioFile[] {
+  const files: AudioFile[] = []
+  for (const story of stories) {
+    for (const asset of story.pkg.assets) {
+      if (asset.kind !== 'audio') continue
+      for (const variant of asset.variants) {
+        const hex = VARIANT_HEX.exec(variant.path)?.[1]
+        const media = story.media.find((m) => m.path === variant.path)
+        if (hex === undefined || media === undefined) {
+          throw new TypeError('a test story names an MP3 variant it does not hold')
+        }
+        files.push({
+          storyId: story.storyId,
+          file: `${asset.nodeId}.${asset.locale}.mp3`,
+          sha256: hex,
+          bytes: media.bytes,
+        })
+      }
+    }
+  }
+  const key = (f: AudioFile) => `${f.storyId}/${f.file}`
+  return files.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+}
+
+/**
+ * This PC's SHA256SUMS.txt text for the stories (TP-13): one line per audio variant of each
+ * package, `<variant 64 hex>  <storyId>/<nodeId>.<locale>.mp3` and LF, sorted by path in UTF-16
+ * code-unit order. The tests write the list file themselves.
+ */
+export function hashListOf(stories: readonly TestStory[]): string {
+  return audioFilesOf(stories)
+    .map((f) => `${f.sha256}  ${f.storyId}/${f.file}\n`)
+    .join('')
+}
+
+/**
+ * Writes each audio variant's bytes at `<root>/migration-input/audio/<storyId>/<nodeId>.<locale>.mp3`
+ * and nothing else; `root` is a temp folder the test owns.
+ */
+export function writeAudioTree(root: string, stories: readonly TestStory[]): void {
+  for (const f of audioFilesOf(stories)) {
+    const dir = join(root, 'migration-input', 'audio', f.storyId)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, f.file), f.bytes)
   }
 }

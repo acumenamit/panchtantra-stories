@@ -10,6 +10,12 @@
 // formatters and report sections, the real-path half (isLocalRealPath, checkedReportDir and its
 // brand) and the writer's write-time re-checks. realpathSync.native is wrapped too, so a sample can
 // answer a chosen real path for one input path and call through for every other.
+//
+// Step 15b (P1-8d part b, design migration-input/p1-step15b-design.md §3.23, §4.8, §5, D15B-23,
+// D15B-24; test plan §14.3: T15B-3 to T15B-5, and the PINNED_EXITS edit of §2.5 and 14.16): the 24
+// new codes, verify-timeout at exits 1 and 4, the phase takedown, the command verify, the new
+// formatters, the publish report's optional unpublish, takedown and checks sections and the verify
+// report.
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -52,6 +58,37 @@ import {
   writeReport,
   type ReportInput,
   type ReportSite,
+} from './report'
+import {
+  RANGE_RECOVERY,
+  TAKEDOWN_LAG_NOTE,
+  formatDeepMismatch,
+  formatDeepPlan,
+  formatDeepSummary,
+  formatExcluded,
+  formatExcludedCount,
+  formatLandingFailed,
+  formatLandingSummary,
+  formatMediaFailed,
+  formatMediaSummary,
+  formatMp3Kept,
+  formatNoRollback,
+  formatOlderLive,
+  formatOlderThanBefore,
+  formatRangeFailed,
+  formatRangeOk,
+  formatRangeSkipped,
+  formatSnapshotMatch,
+  formatStagingMoved,
+  formatStagingNotMoved,
+  formatTakedownDone,
+  formatTakedownPlan,
+  formatTakedownRemoved,
+  formatUnpublishPlan,
+  formatUnpublishRecovery,
+  formatUnpublishUnknown,
+  formatVerifyExpected,
+  formatVerifyTimeoutHint,
 } from './report'
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -195,7 +232,42 @@ const PINNED_EXITS: Record<string, number[]> = {
   'approval-raced': [3],
   'approval-unconfirmed': [3],
   'hook-failed': [4],
-  'verify-timeout': [4],
+  'verify-timeout': [1, 4],
+  // Step 15b §5: the 24 new codes, exactly as its table.
+  ...Object.fromEntries(['unpublished', 'taken-down', 'verified'].map((code) => [code, [0]])),
+  ...Object.fromEntries(
+    [
+      'unpublish-last-story',
+      'unpublish-story-unknown',
+      'hash-list-missing',
+      'hash-list-invalid',
+      'landing-page-failed',
+      'site-gated',
+      'media-check-failed',
+      'live-snapshot-mismatch',
+      'deep-over-cap',
+      'deep-unknown-object',
+      'deep-mismatch',
+    ].map((code) => [code, [1]]),
+  ),
+  ...Object.fromEntries(
+    [
+      'takedown-not-on-this-pc',
+      'takedown-unknown-object',
+      'takedown-check-failed',
+      'range-check-failed',
+    ].map((code) => [code, [1, 4]]),
+  ),
+  'takedown-here-only': [2],
+  ...Object.fromEntries(
+    [
+      'staging-not-moved',
+      'takedown-still-named',
+      'takedown-raced',
+      'takedown-incomplete',
+      'takedown-mp3-kept',
+    ].map((code) => [code, [4]]),
+  ),
 }
 
 const finding = (
@@ -1582,5 +1654,730 @@ describe('report: Step 15a real-path half and writer', () => {
         )
         .toEqual([])
     }
+  })
+})
+
+// ---- Step 15b ----
+
+const UNPUBLISH_SECTION = {
+  storyId: 'two-paths',
+  inProduction: true,
+  inStaging: true,
+  productionMove: 'moved',
+  stagingMove: 'moved',
+} as const
+const TAKEDOWN_SECTION = {
+  storyId: 'two-paths',
+  packages: 1,
+  media: 3,
+  mp3: 1,
+  mp3Unproven: 0,
+  images: 2,
+  removed: 4,
+  kept: 0,
+  state: 'removed',
+} as const
+const CHECKS_SECTION = { range: 'ok', rollbackFlag: 'none' } as const
+const UNPUBLISH_INPUT = {
+  ...PUBLISH_INPUT,
+  // Not taken-down: the precondition must hold under MU15B-366 (taken-down dropped), so that
+  // mutant reaches g1.
+  outcome: 'unpublished',
+  publish: {
+    ...PUBLISH_SECTION,
+    kind: 'unpublish',
+    featuredAfter: null,
+    named: [],
+    stories: [
+      { storyId: 'river-stones', packageSha256: SHA2, approvalSha256: SHA, source: 'production' },
+    ],
+  },
+  unpublish: UNPUBLISH_SECTION,
+  takedown: TAKEDOWN_SECTION,
+  checks: CHECKS_SECTION,
+} as const satisfies ReportInput
+const VERIFY_SECTION = {
+  expectedSeq: 2,
+  outcome: 'live',
+  liveSeq: 2,
+  rollbackFlag: 'none',
+  snapshot: 'match',
+  landing: { checked: 4, failed: 0, gated: false },
+  media: { checked: 4, failed: 0, skipped: 0 },
+  excluded: [{ storyId: 'lantern-walk', version: 1, reason: 'approval-missing' }],
+  range: 'ok',
+  deep: null,
+} as const
+const VERIFY_INPUT = {
+  command: 'verify',
+  mode: 'verify',
+  startedAt: '2026-11-22T12:00:00.000Z',
+  finishedAt: '2026-11-22T12:00:30.000Z',
+  outcome: 'verified',
+  exitCode: 0,
+  writes: 0,
+  uploaded: [],
+  skipped: [],
+  orphans: [],
+  superseded: [],
+  ruleSetRef: PANCHATANTRA_RULESET.ref,
+  privateWordLists: 'not loaded',
+  stories: [],
+  verify: VERIFY_SECTION,
+} as const satisfies ReportInput
+
+describe('report: Step 15b codes, formatters and sections', () => {
+  it('T15B-3 publish-side formatters: the unpublish, staging, takedown, range, recovery and rollback lines exactly; every field validated (A23, D15B-24, §4.8, TP-6, CRIT-16)', () => {
+    expect(
+      typeof formatUnpublishPlan({
+        storyId: 'two-paths',
+        production: 'remove',
+        staging: 'absent',
+      }),
+      'precondition: one sample per formatter formats',
+    ).toBe('string')
+    const unpublishPlan = {
+      kind: 'unpublish',
+      seq: 3,
+      stories: 1,
+      production: 2,
+      staging: 1,
+      featured: null,
+      from: null,
+    } as const
+    const takedownPlan = {
+      storyId: 'two-paths',
+      packages: 1,
+      media: 3,
+      mp3: 1,
+      mp3Unproven: 0,
+      images: 2,
+    } as const
+    const range = { seq: 3, start: 2048, end: 3071, size: 4096, sha256: SHA } as const
+    const pinned: [string, () => unknown, string][] = [
+      [
+        'unpublish plan',
+        () =>
+          formatUnpublishPlan({ storyId: 'two-paths', production: 'remove', staging: 'absent' }),
+        'publish: unpublish two-paths production=remove staging=absent',
+      ],
+      [
+        'plan kind=unpublish',
+        () => formatPublishPlan(unpublishPlan),
+        'publish: plan kind=unpublish seq=3 stories=1 production=2 staging=1 featured=none from=none',
+      ],
+      [
+        'plan kind=unpublish seq=none',
+        () => formatPublishPlan({ ...unpublishPlan, seq: null }),
+        'publish: plan kind=unpublish seq=none stories=1 production=2 staging=1 featured=none from=none',
+      ],
+      [
+        'staging moved',
+        () => formatStagingMoved(3),
+        'publish: staging pointer seq=3 moved (read back, post-check clean)',
+      ],
+      [
+        'staging not moved',
+        () => formatStagingNotMoved('concurrent-writer'),
+        'publish: staging pointer not moved: concurrent-writer',
+      ],
+      [
+        'unpublish recovery',
+        () => formatUnpublishRecovery('two-paths', false),
+        'publish: recovery: publish --unpublish two-paths re-runs the remaining steps',
+      ],
+      [
+        'unpublish recovery with --takedown',
+        () => formatUnpublishRecovery('two-paths', true),
+        'publish: recovery: publish --unpublish two-paths --takedown re-runs the remaining steps',
+      ],
+      [
+        'RANGE_RECOVERY',
+        () => RANGE_RECOVERY,
+        'publish: recovery: verify re-checks the live site and one Range answer (no write)',
+      ],
+      [
+        'takedown plan',
+        () => formatTakedownPlan(takedownPlan),
+        'publish: takedown two-paths plan packages=1 media=3 mp3=1 mp3-unproven=0 images=2 (hash list checked)',
+      ],
+      [
+        'takedown removed',
+        () => formatTakedownRemoved({ storyId: 'two-paths', removed: 100, total: 250 }),
+        'publish: takedown two-paths removed 100/250',
+      ],
+      [
+        'takedown done, kept 0',
+        () => formatTakedownDone({ storyId: 'two-paths', removed: 4, kept: 0 }),
+        'publish: takedown two-paths done removed=4 (re-list empty)',
+      ],
+      [
+        'takedown done, kept 1',
+        () => formatTakedownDone({ storyId: 'two-paths', removed: 4, kept: 1 }),
+        'publish: takedown two-paths done removed=4 kept=1 (re-list shows only the kept MP3s)',
+      ],
+      [
+        'TAKEDOWN_LAG_NOTE',
+        () => TAKEDOWN_LAG_NOTE,
+        'publish: takedown: deleted objects can stay readable for a while: the CDN stopped serving deleted probes 3-65 s after the delete (S-1), and a browser may keep a copy for up to 3600 s (spec §8)',
+      ],
+      [
+        'mp3 kept',
+        () => formatMp3Kept({ storyId: 'two-paths', kept: 1 }),
+        'publish: takedown two-paths: 1 MP3 object(s) kept: restore each file under migration-input/audio/two-paths/ and its line in SHA256SUMS.txt, then re-run; or back the object up and remove it by hand',
+      ],
+      [
+        'unpublish unknown',
+        () => formatUnpublishUnknown('two-paths'),
+        'publish: unpublish two-paths: no pointer, package or media object names it',
+      ],
+      [
+        'no rollback',
+        () => formatNoRollback(3, 'two-paths'),
+        'publish: do not use Vercel Instant Rollback past the deployment of seq 3: the previous deployment still serves two-paths',
+      ],
+      [
+        'range ok',
+        () => formatRangeOk('publish', range),
+        'publish: range check ok seq=3 bytes=2048-3071/4096 object=0123456789ab',
+      ],
+      [
+        'range skipped',
+        () => formatRangeSkipped('publish', 3),
+        'publish: range check skipped: no MP3 in seq 3',
+      ],
+      [
+        'range failed',
+        () => formatRangeFailed('publish', 'content-range', SHA),
+        'publish: range check failed reason=content-range object=0123456789ab',
+      ],
+      [
+        'older than before',
+        () => formatOlderThanBefore('publish', 1, 2),
+        "publish: live seq=1 is below seq=2, production's seq before this run: a Vercel Instant Rollback is the likely cause; Undo Rollback in Vercel, then re-run",
+      ],
+      [
+        'older live',
+        () => formatOlderLive('publish', 2, 3),
+        'publish: live seq=2 is below seq=3: production serves an older deployment (a Vercel Instant Rollback stays in force until Undo Rollback; or a build failed or is still running)',
+      ],
+    ]
+    for (const [id, run, want] of pinned) {
+      let got: unknown
+      try {
+        got = run()
+      } catch (error) {
+        got = `threw ${String(error)}`
+      }
+      expect.soft(got, `(g1) ${id}`).toBe(want)
+    }
+
+    const refused: [string, () => unknown][] = [
+      [
+        'storyId Lion (unpublish plan)',
+        () => formatUnpublishPlan({ storyId: 'Lion', production: 'remove', staging: 'absent' }),
+      ],
+      [
+        "production word 'kept' (unpublish plan)",
+        () =>
+          formatUnpublishPlan({
+            storyId: 'two-paths',
+            production: 'kept' as 'remove',
+            staging: 'absent',
+          }),
+      ],
+      ['storyId Lion (no rollback)', () => formatNoRollback(3, 'Lion')],
+      ['storyId two-paths+U+D800 (no rollback)', () => formatNoRollback(3, 'two-paths\uD800')],
+      [
+        'storyId two-paths+U+D800 (takedown plan)',
+        () => formatTakedownPlan({ ...takedownPlan, storyId: 'two-paths\uD800' }),
+      ],
+      ['storyId Lion (recovery)', () => formatUnpublishRecovery('Lion', false)],
+      ['storyId Lion (unknown)', () => formatUnpublishUnknown('Lion')],
+      ['seq 0 (staging moved)', () => formatStagingMoved(0)],
+      ['seq 0 (no rollback)', () => formatNoRollback(0, 'two-paths')],
+      ['seq 0 (range skipped)', () => formatRangeSkipped('publish', 0)],
+      ['seq 0 (range ok)', () => formatRangeOk('publish', { ...range, seq: 0 })],
+      ['count -1 (takedown plan)', () => formatTakedownPlan({ ...takedownPlan, packages: -1 })],
+      ['count 1.5 (takedown plan)', () => formatTakedownPlan({ ...takedownPlan, mp3: 1.5 })],
+      ['count NaN (takedown plan)', () => formatTakedownPlan({ ...takedownPlan, images: NaN })],
+      [
+        'count 1.5 (takedown removed)',
+        () => formatTakedownRemoved({ storyId: 'two-paths', removed: 1.5, total: 2 }),
+      ],
+      [
+        'count -1 (takedown done)',
+        () => formatTakedownDone({ storyId: 'two-paths', removed: -1, kept: 0 }),
+      ],
+      ['kept 0 (mp3 kept needs k >= 1)', () => formatMp3Kept({ storyId: 'two-paths', kept: 0 })],
+      [
+        'removed > total',
+        () => formatTakedownRemoved({ storyId: 'two-paths', removed: 251, total: 250 }),
+      ],
+      ['MoveCode bogus', () => formatStagingNotMoved('bogus')],
+      ['range reason maybe', () => formatRangeFailed('publish', 'maybe', SHA)],
+      ['sha x (range failed)', () => formatRangeFailed('publish', 'status', 'x')],
+      ['sha x (range ok)', () => formatRangeOk('publish', { ...range, sha256: 'x' })],
+      ['range start 1.5', () => formatRangeOk('publish', { ...range, start: 1.5 })],
+      ['command stage (range ok)', () => formatRangeOk('stage' as 'publish', range)],
+      ['command stage (range skipped)', () => formatRangeSkipped('stage' as 'publish', 3)],
+      [
+        'command verify (older than before: no before in verify)',
+        () => formatOlderThanBefore('verify' as 'publish', 1, 2),
+      ],
+      ['seq 0 (older live)', () => formatOlderLive('publish', 0, 3)],
+    ]
+    for (const [id, run] of refused) {
+      expect.soft(throwsTypeError(run), `(g2) TypeError: ${id}`).toBe(true)
+    }
+
+    for (const code of [
+      'takedown-still-named',
+      'takedown-raced',
+      'takedown-incomplete',
+      'takedown-check-failed',
+      'takedown-not-on-this-pc',
+      'takedown-unknown-object',
+      'takedown-mp3-kept',
+      'staging-not-moved',
+      'unpublish-story-unknown',
+    ]) {
+      let line = ''
+      try {
+        line = formatStopped('publish', code, { storyId: 'two-paths' })
+      } catch (error) {
+        line = `threw ${String(error)}`
+      }
+      expect
+        .soft(line, `(g3) the stop names the id: ${code}`)
+        .toBe(`publish: stopped: ${code} two-paths`)
+    }
+    expect
+      .soft(
+        throwsTypeError(() => formatStopped('publish', 'unpublished')),
+        '(g3) an exit-0 code is no stop: unpublished',
+      )
+      .toBe(true)
+  })
+
+  it('T15B-4 verify-side formatters: the §4.8 and TP-11 lines exactly; command verify accepted; every field validated (A23, D15B-19, TP-11)', () => {
+    expect(typeof formatVerifyExpected(2), 'precondition: one sample per formatter formats').toBe(
+      'string',
+    )
+    const pinned: [string, () => unknown, string][] = [
+      ['expected', () => formatVerifyExpected(2), 'verify: expected seq=2 (production pointer)'],
+      [
+        'snapshot match',
+        () => formatSnapshotMatch(2, SHA),
+        'verify: live build seq=2 loaded snapshot sha256=0123456789ab (matches the production pointer)',
+      ],
+      [
+        'landing failed',
+        () =>
+          formatLandingFailed({
+            storyId: 'two-paths',
+            locale: 'hi',
+            reason: 'status',
+            status: 404,
+          }),
+        'verify: landing two-paths hi failed reason=status status=404',
+      ],
+      [
+        'landing failed, no status',
+        () =>
+          formatLandingFailed({
+            storyId: 'two-paths',
+            locale: 'en',
+            reason: 'network',
+            status: null,
+          }),
+        'verify: landing two-paths en failed reason=network status=-',
+      ],
+      [
+        'landing summary',
+        () => formatLandingSummary({ checked: 6, failed: 1 }),
+        'verify: landing checked=6 failed=1',
+      ],
+      [
+        'media failed',
+        () =>
+          formatMediaFailed({ storyId: 'two-paths', kind: 'mp3', reason: 'length', status: 200 }),
+        'verify: media two-paths mp3 failed reason=length status=200',
+      ],
+      [
+        'media summary',
+        () => formatMediaSummary({ checked: 4, failed: 0, skipped: 1 }),
+        'verify: media checked=4 failed=0 skipped=1',
+      ],
+      [
+        'excluded',
+        () => formatExcluded({ storyId: 'lantern-walk', version: 1, reason: 'approval-missing' }),
+        'verify: excluded lantern-walk version=1 reason=approval-missing',
+      ],
+      ['excluded count', () => formatExcludedCount(1), 'verify: excluded=1'],
+      [
+        'deep plan',
+        () => formatDeepPlan({ objects: 120, bytes: 230000000, approvals: 11, waivers: 3 }),
+        'verify: deep plan objects=120 bytes=230000000 approvals=11 waivers=3 (Supabase egress; spec §8: at most monthly, and after a suspected key leak)',
+      ],
+      [
+        'deep mismatch',
+        () =>
+          formatDeepMismatch({ kind: 'waiver', storyId: 'two-paths', sha256: SHA, reason: 'hash' }),
+        'verify: deep mismatch waiver two-paths 0123456789ab reason=hash',
+      ],
+      [
+        'deep summary',
+        () => formatDeepSummary({ checked: 12, mismatches: 1 }),
+        'verify: deep checked=12 mismatches=1',
+      ],
+    ]
+    for (const [id, run, want] of pinned) {
+      let got: unknown
+      try {
+        got = run()
+      } catch (error) {
+        got = `threw ${String(error)}`
+      }
+      expect.soft(got, `(g1) ${id}`).toBe(want)
+    }
+
+    const landing = { storyId: 'two-paths', locale: 'en', reason: 'status', status: 404 } as const
+    const refused: [string, () => unknown][] = [
+      [
+        'deep kind snapshot',
+        () =>
+          formatDeepMismatch({
+            kind: 'snapshot' as 'waiver',
+            storyId: 'two-paths',
+            sha256: SHA,
+            reason: 'hash',
+          }),
+      ],
+      ['landing locale fr', () => formatLandingFailed({ ...landing, locale: 'fr' as 'en' })],
+      ['landing locale ar', () => formatLandingFailed({ ...landing, locale: 'ar' as 'en' })],
+      ['status 1.5', () => formatLandingFailed({ ...landing, status: 1.5 })],
+      [
+        'reason whatever',
+        () => formatLandingFailed({ ...landing, reason: 'whatever' as 'status' }),
+      ],
+      [
+        'excluded reason other',
+        () =>
+          formatExcluded({
+            storyId: 'lantern-walk',
+            version: 1,
+            reason: 'other' as 'approval-missing',
+          }),
+      ],
+    ]
+    for (const [id, run] of refused) {
+      expect.soft(throwsTypeError(run), `(g2) TypeError: ${id}`).toBe(true)
+    }
+
+    const safe = (run: () => string): string => {
+      try {
+        return run()
+      } catch (error) {
+        return `threw ${String(error)}`
+      }
+    }
+    expect
+      .soft(
+        safe(() => formatStopped('verify', 'site-gated')),
+        '(g3) a verify stop',
+      )
+      .toBe('verify: stopped: site-gated')
+    expect
+      .soft(
+        safe(() => formatVerifyTimeoutHint('verify')),
+        '(g3) the verify hint is the publish hint with the verify: prefix',
+      )
+      .toBe(VERIFY_TIMEOUT_HINT.replace(/^publish:/, 'verify:'))
+    expect
+      .soft(
+        safe(() => formatOlderLive('verify', 1, 2)).startsWith(
+          'verify: live seq=1 is below seq=2:',
+        ),
+        '(g3) the older-live line for verify',
+      )
+      .toBe(true)
+    expect
+      .soft(
+        safe(() =>
+          formatRangeOk('verify', { seq: 2, start: 0, end: 0, size: 1, sha256: SHA }),
+        ).startsWith('verify: range check ok'),
+        '(g3) the range line for verify',
+      )
+      .toBe(true)
+  })
+
+  it("T15B-5 exits, phases and report sections: the new codes at their phases, publish's optional sections, the verify report, its file name, and absent sections staying absent (A22, D15B-23, TP-6)", () => {
+    const built = (input: ReportInput) => {
+      try {
+        return buildReport(input)
+      } catch {
+        return null
+      }
+    }
+    expect(
+      built(UNPUBLISH_INPUT) !== null && built(VERIFY_INPUT) !== null,
+      'precondition: a publish input with unpublish, takedown and checks builds, and a verify one',
+    ).toBe(true)
+
+    const exitOf = (code: string, phase: string) => {
+      try {
+        return exitForPhase(code, phase as Parameters<typeof exitForPhase>[1])
+      } catch (error) {
+        return error instanceof TypeError ? 'TypeError' : 'other'
+      }
+    }
+    const phases: [string, string, unknown][] = [
+      ['takedown-raced', 'takedown', 4],
+      ['takedown-incomplete', 'takedown', 4],
+      ['takedown-mp3-kept', 'takedown', 4],
+      ['takedown-not-on-this-pc', 'plan', 1],
+      ['takedown-not-on-this-pc', 'takedown', 4],
+      ['takedown-check-failed', 'plan', 1],
+      ['takedown-check-failed', 'takedown', 4],
+      ['takedown-unknown-object', 'plan', 1],
+      ['takedown-unknown-object', 'takedown', 4],
+      ['range-check-failed', 'plan', 1],
+      ['range-check-failed', 'tail', 4],
+      ['verify-timeout', 'plan', 1],
+      ['verify-timeout', 'tail', 4],
+      ['takedown-here-only', 'configuration', 2],
+      ['unpublish-story-unknown', 'plan', 1],
+      ['staging-not-moved', 'pointer', 4],
+      ['unpublished', 'end', 0],
+      ['taken-down', 'end', 0],
+      ['verified', 'end', 0],
+      ['takedown-raced', 'plan', 'TypeError'],
+      ['unpublished', 'takedown', 'TypeError'],
+    ]
+    for (const [code, phase, want] of phases) {
+      expect.soft(exitOf(code, phase), `(g1) ${code} at ${phase}`).toBe(want)
+    }
+
+    const publish = JSON.parse(built(UNPUBLISH_INPUT)?.json ?? '{}') as Record<string, unknown>
+    const keysOf = (value: unknown) => Object.keys((value ?? {}) as object).sort()
+    expect
+      .soft(keysOf(publish.unpublish), '(g2) unpublish keys exact')
+      .toEqual(['inProduction', 'inStaging', 'productionMove', 'stagingMove', 'storyId'])
+    expect
+      .soft(keysOf(publish.takedown), '(g2) takedown keys exact')
+      .toEqual(
+        [
+          'storyId',
+          'packages',
+          'media',
+          'mp3',
+          'mp3Unproven',
+          'images',
+          'removed',
+          'kept',
+          'state',
+        ].sort(),
+      )
+    expect.soft(keysOf(publish.checks), '(g2) checks keys exact').toEqual(['range', 'rollbackFlag'])
+    for (const state of [
+      'planned',
+      'removed',
+      'mp3-kept',
+      'incomplete',
+      'raced',
+      'still-named',
+      'check-failed',
+      'not-on-this-pc',
+      'unknown-object',
+      'not-run',
+    ] as const) {
+      expect
+        .soft(
+          built({ ...UNPUBLISH_INPUT, takedown: { ...TAKEDOWN_SECTION, state } }) !== null,
+          `(g2) takedown state accepted: ${state}`,
+        )
+        .toBe(true)
+    }
+    const refusedPublish: [string, () => unknown][] = [
+      [
+        'a takedown section on stage',
+        () => buildReport({ ...STAGE_INPUT, takedown: TAKEDOWN_SECTION }),
+      ],
+      [
+        'a verify section on publish',
+        () => buildReport({ ...PUBLISH_INPUT, verify: VERIFY_SECTION }),
+      ],
+      ...(
+        [
+          ['validate', VALIDATE_INPUT],
+          ['approve', APPROVE_INPUT],
+        ] as const
+      ).flatMap(([name, input]): [string, () => unknown][] => [
+        [
+          `an unpublish section on ${name}`,
+          () => buildReport({ ...input, unpublish: UNPUBLISH_SECTION }),
+        ],
+        [
+          `a takedown section on ${name}`,
+          () => buildReport({ ...input, takedown: TAKEDOWN_SECTION }),
+        ],
+        [`a checks section on ${name}`, () => buildReport({ ...input, checks: CHECKS_SECTION })],
+      ]),
+      [
+        "checks.range 'maybe'",
+        () =>
+          buildReport({
+            ...UNPUBLISH_INPUT,
+            checks: { ...CHECKS_SECTION, range: 'maybe' as 'ok' },
+          }),
+      ],
+      [
+        "checks.rollbackFlag 'yes'",
+        () =>
+          buildReport({
+            ...UNPUBLISH_INPUT,
+            checks: { ...CHECKS_SECTION, rollbackFlag: 'yes' as 'none' },
+          }),
+      ],
+      [
+        "unpublish.storyId 'Lion'",
+        () =>
+          buildReport({ ...UNPUBLISH_INPUT, unpublish: { ...UNPUBLISH_SECTION, storyId: 'Lion' } }),
+      ],
+      [
+        "unpublish.stagingMove 'skipped'",
+        () =>
+          buildReport({
+            ...UNPUBLISH_INPUT,
+            unpublish: { ...UNPUBLISH_SECTION, stagingMove: 'skipped' as 'moved' },
+          }),
+      ],
+      [
+        "takedown.state 'gone'",
+        () =>
+          buildReport({
+            ...UNPUBLISH_INPUT,
+            takedown: { ...TAKEDOWN_SECTION, state: 'gone' as 'removed' },
+          }),
+      ],
+      [
+        'takedown.kept -1',
+        () => buildReport({ ...UNPUBLISH_INPUT, takedown: { ...TAKEDOWN_SECTION, kept: -1 } }),
+      ],
+      [
+        'an extra takedown.paths',
+        () =>
+          buildReport({
+            ...UNPUBLISH_INPUT,
+            takedown: { ...TAKEDOWN_SECTION, paths: ['media/x'] } as typeof TAKEDOWN_SECTION,
+          }),
+      ],
+    ]
+    for (const [id, run] of refusedPublish) {
+      expect.soft(throwsTypeError(run), `(g2) TypeError: ${id}`).toBe(true)
+    }
+
+    const verify = JSON.parse(built(VERIFY_INPUT)?.json ?? '{}') as Record<string, unknown>
+    expect
+      .soft(
+        [
+          verify.command,
+          verify.mode,
+          verify.writes,
+          verify.stories,
+          verify.uploaded,
+          verify.skipped,
+          verify.superseded,
+          verify.privateWordLists,
+        ],
+        '(g3) the verify report: command, mode, writes, the empty lists and privateWordLists',
+      )
+      .toEqual(['verify', 'verify', 0, [], [], [], [], 'not loaded'])
+    expect
+      .soft(keysOf(verify.verify), '(g3) the verify section keys exact')
+      .toEqual(
+        [
+          'expectedSeq',
+          'outcome',
+          'liveSeq',
+          'rollbackFlag',
+          'snapshot',
+          'landing',
+          'media',
+          'excluded',
+          'range',
+          'deep',
+        ].sort(),
+      )
+    const refusedVerify: [string, () => unknown][] = [
+      ['writes 1', () => buildReport({ ...VERIFY_INPUT, writes: 1 })],
+      ['mode publish', () => buildReport({ ...VERIFY_INPUT, mode: 'publish' })],
+      [
+        'verify.deep.objects -1',
+        () =>
+          buildReport({
+            ...VERIFY_INPUT,
+            verify: {
+              ...VERIFY_SECTION,
+              deep: { objects: -1, bytes: 0, approvals: 0, waivers: 0, checked: 0, mismatches: 0 },
+            },
+          }),
+      ],
+      [
+        "verify.outcome 'unknown'",
+        () =>
+          buildReport({
+            ...VERIFY_INPUT,
+            verify: { ...VERIFY_SECTION, outcome: 'unknown' as 'live' },
+          }),
+      ],
+      [
+        "an excluded reason 'other'",
+        () =>
+          buildReport({
+            ...VERIFY_INPUT,
+            verify: {
+              ...VERIFY_SECTION,
+              excluded: [
+                { storyId: 'lantern-walk', version: 1, reason: 'other' as 'approval-missing' },
+              ],
+            },
+          }),
+      ],
+    ]
+    for (const [id, run] of refusedVerify) {
+      expect.soft(throwsTypeError(run), `(g3) TypeError: ${id}`).toBe(true)
+    }
+
+    const root = fs.mkdtempSync(join(tmpdir(), 's15b-rp-'))
+    try {
+      const site = { storyboardRoot: join(root, 'sb'), platform: process.platform }
+      const checked = checkedReportDir(join(root, 'reports'), site)
+      const written = checked.ok ? writeReport(checked.realDir, VERIFY_INPUT, site) : null
+      const dir = checked.ok ? checked.realDir : join(root, 'reports')
+      const names = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []
+      expect
+        .soft([written, names], '(g4) a verify report is publisher-verify.json and .md')
+        .toEqual([{ ok: true }, ['publisher-verify.json', 'publisher-verify.md']])
+      const md = names.includes('publisher-verify.md')
+        ? fs.readFileSync(join(dir, 'publisher-verify.md'), 'utf8')
+        : ''
+      expect
+        .soft(
+          md.includes('| expectedSeq | 2 |') && md.includes('| outcome | verified |'),
+          '(g4) the verify md names the expected seq and the outcome',
+        )
+        .toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+    const plain = JSON.parse(built(PUBLISH_INPUT)?.json ?? '{}') as Record<string, unknown>
+    expect
+      .soft(
+        ['unpublish', 'takedown', 'checks'].filter((key) => key in plain),
+        '(g4) a publish input without the three sections writes none of their keys',
+      )
+      .toEqual([])
   })
 })

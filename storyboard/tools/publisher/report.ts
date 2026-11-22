@@ -2,7 +2,11 @@
 // migration-input/p1-step14-design.md §4.8, §4.9, §5, D14-18; P1-8c, Step 14; and
 // migration-input/p1-step15a-design.md §4.7, §4.8, §5, D15-19, D15-22, D15-28, D15-29; P1-8d part
 // a, Step 15a: the approve and publish codes, lines and sections, the phase tail, the real-path
-// half of the report-dir guard and the writer's write-time re-checks). EXIT_BY_CODE is the
+// half of the report-dir guard and the writer's write-time re-checks; and
+// migration-input/p1-step15b-design.md §3.23, §4.8, §5, D15B-18, D15B-23, D15B-24, D15B-33; P1-8d
+// part b, Step 15b: the unpublish, takedown, Range and verify codes and lines, the phase takedown,
+// the command verify and its report, and the publish report's optional unpublish, takedown and
+// checks sections). EXIT_BY_CODE is the
 // one source of the codes and the exits each may carry (§5); a code's exit follows the phase it
 // occurs in. Every formatter and the report builder validate each field (a StoryId, a 64-hex sha, a
 // safe integer, a listed code, a fixed word) and throw a TypeError naming the field, never its
@@ -13,18 +17,19 @@
 import { mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { isSafeStoragePath } from '../../src/core/content/gates'
-import { LOCALE_CODES } from '../../src/core/locales'
+import { ENABLED_LOCALE_CODES, LOCALE_CODES } from '../../src/core/locales'
 import { NodeId, StoryId } from '../../src/core/package/v1'
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4
 /**
  * end 0; local and plan 1 (no Storage write sent); configuration 2; commit 3; pointer 4 (§5); tail
  * 4 (Step 15a: after the production pointer moved, or after an unchanged plan, while the hook and
- * verify run).
+ * verify run); takedown 4 (Step 15b: from the first takedown commit read on, after verify).
  */
-export type Phase = 'end' | 'local' | 'plan' | 'configuration' | 'commit' | 'pointer' | 'tail'
+export type Phase =
+  'end' | 'local' | 'plan' | 'configuration' | 'commit' | 'pointer' | 'tail' | 'takedown'
 /** The publisher's commands that print lines and write reports (help prints the usage only). */
-export type Command = 'validate' | 'stage' | 'approve' | 'publish'
+export type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
 
 const PHASE_EXIT: ReadonlyMap<string, ExitCode> = new Map<string, ExitCode>([
   ['end', 0],
@@ -34,6 +39,7 @@ const PHASE_EXIT: ReadonlyMap<string, ExitCode> = new Map<string, ExitCode>([
   ['commit', 3],
   ['pointer', 4],
   ['tail', 4],
+  ['takedown', 4],
 ])
 
 const group = (exits: readonly ExitCode[], codes: readonly string[]) =>
@@ -159,7 +165,48 @@ export const EXIT_BY_CODE: ReadonlyMap<string, readonly ExitCode[]> = new Map([
   ...group([1, 2], ['answers-missing']),
   ...group([2], ['run-context-refused']),
   ...group([3], ['approval-raced', 'approval-unconfirmed']),
-  ...group([4], ['hook-failed', 'verify-timeout']),
+  ...group([4], ['hook-failed']),
+  // Step 15b §5: verify-timeout widened to exits 1 (the verify command, phase plan) and 4 (publish's
+  // tail); 24 new codes (3 at exit 0, 11 at exit 1 only, 4 at exits 1 and 4, 1 at exit 2, 5 at exit
+  // 4 only).
+  ...group([1, 4], ['verify-timeout']),
+  ...group([0], ['unpublished', 'taken-down', 'verified']),
+  ...group(
+    [1],
+    [
+      'unpublish-last-story',
+      'unpublish-story-unknown',
+      'hash-list-missing',
+      'hash-list-invalid',
+      'landing-page-failed',
+      'site-gated',
+      'media-check-failed',
+      'live-snapshot-mismatch',
+      'deep-over-cap',
+      'deep-unknown-object',
+      'deep-mismatch',
+    ],
+  ),
+  ...group(
+    [1, 4],
+    [
+      'takedown-not-on-this-pc',
+      'takedown-unknown-object',
+      'takedown-check-failed',
+      'range-check-failed',
+    ],
+  ),
+  ...group([2], ['takedown-here-only']),
+  ...group(
+    [4],
+    [
+      'staging-not-moved',
+      'takedown-still-named',
+      'takedown-raced',
+      'takedown-incomplete',
+      'takedown-mp3-kept',
+    ],
+  ),
 ])
 
 export const REVIEW_LINE = 'review: corepack pnpm preview:staging'
@@ -188,7 +235,11 @@ const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const isSeq = (value: unknown): value is number => isCount(value) && value >= 1
 const isCommand = (value: unknown): value is Command =>
-  value === 'validate' || value === 'stage' || value === 'approve' || value === 'publish'
+  value === 'validate' ||
+  value === 'stage' ||
+  value === 'approve' ||
+  value === 'publish' ||
+  value === 'verify'
 const oneOf = (value: unknown, words: readonly string[]): value is string =>
   typeof value === 'string' && words.includes(value)
 const isErrorName = (value: unknown): value is string =>
@@ -353,6 +404,8 @@ const ANSWER_KEYS: readonly string[] = [
 ]
 const APPROVE_STATES = ['new', 'already-approved', 'already-published'] as const
 const PUBLISH_STORY_STATES = ['new', 'replaced', 'in-production'] as const
+/** The publish plan's kinds (Step 15b adds unpublish, D15B-1). */
+const PUBLISH_KINDS = ['publish', 'rollback', 'unpublish'] as const
 const idOrNone = (id: string | null): string => (id === null ? 'none' : id)
 
 export interface ApprovePlanLine {
@@ -434,7 +487,7 @@ export function formatFeatureCounts(line: {
 }
 
 export interface PublishPlanLine {
-  readonly kind: 'publish' | 'rollback'
+  readonly kind: 'publish' | 'rollback' | 'unpublish'
   /** N+1, or null when the plan is unchanged. */
   readonly seq: number | null
   readonly stories: number
@@ -447,7 +500,7 @@ export interface PublishPlanLine {
 
 /** `publish: plan kind=… seq=<N|none> stories=… production=… staging=… featured=… from=…`. */
 export function formatPublishPlan(line: PublishPlanLine): string {
-  field(oneOf(line.kind, ['publish', 'rollback']), 'kind')
+  field(oneOf(line.kind, PUBLISH_KINDS), 'kind')
   for (const key of ['seq', 'production', 'staging', 'from'] as const) {
     field(line[key] === null || isSeq(line[key]), key)
   }
@@ -494,6 +547,351 @@ export const VERIFY_TIMEOUT_HINT =
 export function formatRecovery(seq: number): string {
   field(isSeq(seq), 'seq')
   return `publish: recovery: publish --snapshot ${seq} redeploys production as it is`
+}
+
+// ---- unpublish, takedown, Range and verify lines (Step 15b §4.8) ----
+
+/** catalogue-state.ts's MoveCode, the codes a pointer move may end with (D15B-4). */
+const MOVE_CODES: readonly string[] = [
+  'storage-unauthorized',
+  'storage-failed',
+  'concurrent-writer',
+  'deadline',
+  'pointer-not-moved',
+  'pointer-superseded',
+  'pointer-unconfirmed',
+  'pointer-raced',
+]
+/** checkRange's failure reasons (D15B-16). */
+const RANGE_REASONS: readonly string[] = [
+  'full-status',
+  'full-length',
+  'full-type',
+  'full-encoding',
+  'full-hash',
+  'too-large',
+  'status',
+  'content-range',
+  'length',
+  'bytes',
+  'type',
+  'encoding',
+  'redirect',
+  'network',
+]
+/** readPublicObject's failure reasons (D15B-21). */
+const OBJECT_REASONS: readonly string[] = [
+  'status',
+  'length',
+  'type',
+  'encoding',
+  'hash',
+  'redirect',
+  'network',
+  'too-large',
+]
+/** checkLanding's failure reasons (D15B-21). */
+const LANDING_REASONS: readonly string[] = ['status', 'type', 'redirect', 'network', 'too-large']
+/**
+ * `--deep`'s mismatch reasons per kind (D15B-20); `read-failed` names a read that failed for any
+ * other cause, and `too-large` a waiver file over the client's cap (B15B-implB-4).
+ */
+const DEEP_REASONS: Readonly<Record<string, readonly string[]>> = {
+  package: ['missing', 'read-failed', 'hash', 'size'],
+  media: OBJECT_REASONS,
+  approval: ['missing', 'read-failed', 'approval-sha', 'approval-invalid'],
+  waiver: ['waiver-missing', 'read-failed', 'hash', 'too-large'],
+}
+/** The commands a Range, an older-live or a timeout-hint line may name. */
+const PUBLIC_COMMANDS = ['publish', 'verify'] as const
+type PublicCommand = (typeof PUBLIC_COMMANDS)[number]
+/** An HTTP status, or `-` for none (a network failure). */
+const statusText = (status: number | null): string => {
+  field(status === null || isCount(status), 'status')
+  return status === null ? '-' : String(status)
+}
+
+/** `publish: unpublish <id> production=<remove|absent> staging=<remove|absent>` (D15B-2). */
+export function formatUnpublishPlan(line: {
+  readonly storyId: string
+  readonly production: 'remove' | 'absent'
+  readonly staging: 'remove' | 'absent'
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(oneOf(line.production, ['remove', 'absent']), 'production')
+  field(oneOf(line.staging, ['remove', 'absent']), 'staging')
+  return `publish: unpublish ${line.storyId} production=${line.production} staging=${line.staging}`
+}
+
+/** `publish: staging pointer seq=<N> moved (read back, post-check clean)` (D15B-3). */
+export function formatStagingMoved(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `publish: staging pointer seq=${seq} moved (read back, post-check clean)`
+}
+
+/** `publish: staging pointer not moved: <MoveCode>`: the deferred staging failure (D15B-4). */
+export function formatStagingNotMoved(code: string): string {
+  field(oneOf(code, MOVE_CODES), 'move code')
+  return `publish: staging pointer not moved: ${code}`
+}
+
+/** `publish: recovery: publish --unpublish <id>[ --takedown] re-runs the remaining steps` (D15B-32). */
+export function formatUnpublishRecovery(storyId: string, takedown: boolean): string {
+  field(isStoryId(storyId), 'storyId')
+  field(typeof takedown === 'boolean', 'takedown')
+  const flag = takedown ? ' --takedown' : ''
+  return `publish: recovery: publish --unpublish ${storyId}${flag} re-runs the remaining steps`
+}
+
+/** After a failed Range check (D15B-17): verify re-checks without a write. */
+export const RANGE_RECOVERY =
+  'publish: recovery: verify re-checks the live site and one Range answer (no write)'
+
+export interface TakedownPlanLine {
+  readonly storyId: string
+  readonly packages: number
+  readonly media: number
+  readonly mp3: number
+  readonly mp3Unproven: number
+  readonly images: number
+}
+
+/**
+ * `publish: takedown <id> plan packages=<n> media=<m> mp3=<k> mp3-unproven=<u> images=<i> (hash
+ * list checked)` (D15B-11, D15B-29).
+ */
+export function formatTakedownPlan(line: TakedownPlanLine): string {
+  field(isStoryId(line.storyId), 'storyId')
+  for (const key of ['packages', 'media', 'mp3', 'mp3Unproven', 'images'] as const) {
+    field(isCount(line[key]), key)
+  }
+  return `publish: takedown ${line.storyId} plan packages=${line.packages} media=${line.media} mp3=${line.mp3} mp3-unproven=${line.mp3Unproven} images=${line.images} (hash list checked)`
+}
+
+/** `publish: takedown <id> removed <r>/<t>` after each chunk (removed at most total). */
+export function formatTakedownRemoved(line: {
+  readonly storyId: string
+  readonly removed: number
+  readonly total: number
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isCount(line.removed) && isCount(line.total), 'counts')
+  field(line.removed <= line.total, 'removed at most total')
+  return `publish: takedown ${line.storyId} removed ${line.removed}/${line.total}`
+}
+
+/**
+ * `publish: takedown <id> done removed=<r> (re-list empty)`, or with kept MP3s `… done removed=<r>
+ * kept=<k> (re-list shows only the kept MP3s)` (TP-6).
+ */
+export function formatTakedownDone(line: {
+  readonly storyId: string
+  readonly removed: number
+  readonly kept: number
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isCount(line.removed) && isCount(line.kept), 'counts')
+  return line.kept === 0
+    ? `publish: takedown ${line.storyId} done removed=${line.removed} (re-list empty)`
+    : `publish: takedown ${line.storyId} done removed=${line.removed} kept=${line.kept} (re-list shows only the kept MP3s)`
+}
+
+/** Printed after every takedown that finished (L17): the CDN and browser lag, a fixed sentence. */
+export const TAKEDOWN_LAG_NOTE =
+  'publish: takedown: deleted objects can stay readable for a while: the CDN stopped serving deleted probes 3-65 s after the delete (S-1), and a browser may keep a copy for up to 3600 s (spec §8)'
+
+/** The owner line after takedown-mp3-kept (D15B-29); only fixed relative names, never a local path. */
+export function formatMp3Kept(line: { readonly storyId: string; readonly kept: number }): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isSeq(line.kept), 'kept')
+  return `publish: takedown ${line.storyId}: ${line.kept} MP3 object(s) kept: restore each file under migration-input/audio/${line.storyId}/ and its line in SHA256SUMS.txt, then re-run; or back the object up and remove it by hand`
+}
+
+/** `publish: unpublish <id>: no pointer, package or media object names it` (D15B-30). */
+export function formatUnpublishUnknown(storyId: string): string {
+  field(isStoryId(storyId), 'storyId')
+  return `publish: unpublish ${storyId}: no pointer, package or media object names it`
+}
+
+/** The no-rollback line after an unpublish whose withdrawal is live (D15B-33). */
+export function formatNoRollback(seq: number, storyId: string): string {
+  field(isSeq(seq), 'seq')
+  field(isStoryId(storyId), 'storyId')
+  return `publish: do not use Vercel Instant Rollback past the deployment of seq ${seq}: the previous deployment still serves ${storyId}`
+}
+
+/** `<command>: range check ok seq=<N> bytes=<s>-<e>/<size> object=<sha12>` (D15B-16). */
+export function formatRangeOk(
+  command: PublicCommand,
+  line: {
+    readonly seq: number
+    readonly start: number
+    readonly end: number
+    readonly size: number
+    readonly sha256: string
+  },
+): string {
+  field(oneOf(command, PUBLIC_COMMANDS), 'command')
+  field(isSeq(line.seq), 'seq')
+  field(isCount(line.start) && isCount(line.end) && isSeq(line.size), 'range')
+  field(isSha(line.sha256), 'sha256')
+  return `${command}: range check ok seq=${line.seq} bytes=${line.start}-${line.end}/${line.size} object=${sha12(line.sha256)}`
+}
+
+/** `<command>: range check skipped: no MP3 in seq <N>` (D15B-16). */
+export function formatRangeSkipped(command: PublicCommand, seq: number): string {
+  field(oneOf(command, PUBLIC_COMMANDS), 'command')
+  field(isSeq(seq), 'seq')
+  return `${command}: range check skipped: no MP3 in seq ${seq}`
+}
+
+/** `<command>: range check failed reason=<word> object=<sha12>` (D15B-16). */
+export function formatRangeFailed(command: PublicCommand, reason: string, sha256: string): string {
+  field(oneOf(command, PUBLIC_COMMANDS), 'command')
+  field(oneOf(reason, RANGE_REASONS), 'range reason')
+  field(isSha(sha256), 'sha256')
+  return `${command}: range check failed reason=${reason} object=${sha12(sha256)}`
+}
+
+/**
+ * The Instant Rollback flag at a verify timeout when the live seq is below production's seq before
+ * this run (D15B-18); publish only, as the verify command has no "before" (B15B-implB-3).
+ */
+export function formatOlderThanBefore(command: 'publish', lastSeq: number, before: number): string {
+  field(command === 'publish', 'command')
+  field(isSeq(lastSeq) && isSeq(before), 'seq')
+  return `${command}: live seq=${lastSeq} is below seq=${before}, production's seq before this run: a Vercel Instant Rollback is the likely cause; Undo Rollback in Vercel, then re-run`
+}
+
+/** The older-deployment line at a verify timeout when the live seq is below the expected seq. */
+export function formatOlderLive(
+  command: PublicCommand,
+  lastSeq: number,
+  expectedSeq: number,
+): string {
+  field(oneOf(command, PUBLIC_COMMANDS), 'command')
+  field(isSeq(lastSeq) && isSeq(expectedSeq), 'seq')
+  return `${command}: live seq=${lastSeq} is below seq=${expectedSeq}: production serves an older deployment (a Vercel Instant Rollback stays in force until Undo Rollback; or a build failed or is still running)`
+}
+
+/** VERIFY_TIMEOUT_HINT with the command's prefix (publish gives the hint itself). */
+export function formatVerifyTimeoutHint(command: PublicCommand): string {
+  field(oneOf(command, PUBLIC_COMMANDS), 'command')
+  return `${command}:${VERIFY_TIMEOUT_HINT.slice('publish:'.length)}`
+}
+
+/** `verify: expected seq=<N> (production pointer)` (D15B-19 step 1). */
+export function formatVerifyExpected(seq: number): string {
+  field(isSeq(seq), 'seq')
+  return `verify: expected seq=${seq} (production pointer)`
+}
+
+/** `verify: live build seq=<N> loaded snapshot sha256=<sha12> (matches the production pointer)`. */
+export function formatSnapshotMatch(seq: number, sha256: string): string {
+  field(isSeq(seq), 'seq')
+  field(isSha(sha256), 'sha256')
+  return `verify: live build seq=${seq} loaded snapshot sha256=${sha12(sha256)} (matches the production pointer)`
+}
+
+/** `verify: landing <id> <locale> failed reason=<word> status=<n|->` (an enabled locale only). */
+export function formatLandingFailed(line: {
+  readonly storyId: string
+  readonly locale: string
+  readonly reason: string
+  readonly status: number | null
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(oneOf(line.locale, ENABLED_LOCALE_CODES), 'locale')
+  field(oneOf(line.reason, LANDING_REASONS), 'landing reason')
+  const status = statusText(line.status)
+  return `verify: landing ${line.storyId} ${line.locale} failed reason=${line.reason} status=${status}`
+}
+
+/** `verify: landing checked=<n> failed=<k>` (TP-11). */
+export function formatLandingSummary(line: {
+  readonly checked: number
+  readonly failed: number
+}): string {
+  field(isCount(line.checked) && isCount(line.failed), 'counts')
+  return `verify: landing checked=${line.checked} failed=${line.failed}`
+}
+
+/** `verify: media <id> <image|mp3> failed reason=<word> status=<n|->` (TP-11). */
+export function formatMediaFailed(line: {
+  readonly storyId: string
+  readonly kind: 'image' | 'mp3'
+  readonly reason: string
+  readonly status: number | null
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(oneOf(line.kind, ['image', 'mp3']), 'media kind')
+  field(oneOf(line.reason, OBJECT_REASONS), 'media reason')
+  const status = statusText(line.status)
+  return `verify: media ${line.storyId} ${line.kind} failed reason=${line.reason} status=${status}`
+}
+
+/** `verify: media checked=<n> failed=<k> skipped=<s>` (TP-11). */
+export function formatMediaSummary(line: {
+  readonly checked: number
+  readonly failed: number
+  readonly skipped: number
+}): string {
+  field(isCount(line.checked) && isCount(line.failed) && isCount(line.skipped), 'counts')
+  return `verify: media checked=${line.checked} failed=${line.failed} skipped=${line.skipped}`
+}
+
+/** `verify: excluded <id> version=<v> reason=approval-missing`: build-info's one reason. */
+export function formatExcluded(line: {
+  readonly storyId: string
+  readonly version: number
+  readonly reason: 'approval-missing'
+}): string {
+  field(isStoryId(line.storyId), 'storyId')
+  field(isSeq(line.version), 'version')
+  field(line.reason === 'approval-missing', 'excluded reason')
+  return `verify: excluded ${line.storyId} version=${line.version} reason=${line.reason}`
+}
+
+/** `verify: excluded=<n>`. */
+export function formatExcludedCount(count: number): string {
+  field(isCount(count), 'count')
+  return `verify: excluded=${count}`
+}
+
+/** `--deep`'s plan line (D15B-20): the counts and the egress note. */
+export function formatDeepPlan(line: {
+  readonly objects: number
+  readonly bytes: number
+  readonly approvals: number
+  readonly waivers: number
+}): string {
+  for (const key of ['objects', 'bytes', 'approvals', 'waivers'] as const) {
+    field(isCount(line[key]), key)
+  }
+  return `verify: deep plan objects=${line.objects} bytes=${line.bytes} approvals=${line.approvals} waivers=${line.waivers} (Supabase egress; spec §8: at most monthly, and after a suspected key leak)`
+}
+
+/** `verify: deep mismatch <package|media|approval|waiver> <id> <sha12> reason=<word>` (D15B-20). */
+export function formatDeepMismatch(line: {
+  readonly kind: 'package' | 'media' | 'approval' | 'waiver'
+  readonly storyId: string
+  readonly sha256: string
+  readonly reason: string
+}): string {
+  field(Object.hasOwn(DEEP_REASONS, line.kind), 'deep kind')
+  field(isStoryId(line.storyId), 'storyId')
+  field(isSha(line.sha256), 'sha256')
+  field(oneOf(line.reason, DEEP_REASONS[line.kind] ?? []), 'deep reason')
+  return `verify: deep mismatch ${line.kind} ${line.storyId} ${sha12(line.sha256)} reason=${line.reason}`
+}
+
+/** `verify: deep checked=<n> mismatches=<k>`. */
+export function formatDeepSummary(line: {
+  readonly checked: number
+  readonly mismatches: number
+}): string {
+  field(isCount(line.checked) && isCount(line.mismatches), 'counts')
+  return `verify: deep checked=${line.checked} mismatches=${line.mismatches}`
 }
 
 export interface StopDetail {
@@ -660,6 +1058,91 @@ export interface ReportInput {
   readonly approval?: ReportApproval | null
   /** Publish only (null when the run stopped before the plan); never set for the others. */
   readonly publish?: ReportPublish | null
+  /**
+   * Publish only, optional (Step 15b, D15B-23): written when given, validated field by field; null
+   * unless the run's kind is unpublish. Never set for the other commands.
+   */
+  readonly unpublish?: ReportUnpublish | null
+  /** Publish only, optional: null unless the run had `--takedown`. Never set for the others. */
+  readonly takedown?: ReportTakedown | null
+  /** Publish only, optional: the Range check and the Instant Rollback flag. */
+  readonly checks?: ReportChecks
+  /** Verify only, required (null when the run stopped before its first step); never set for others. */
+  readonly verify?: ReportVerify | null
+}
+
+const MOVE_WORDS = ['moved', 'not-needed', 'failed', 'not-run'] as const
+const TAKEDOWN_STATES = [
+  'planned',
+  'removed',
+  'mp3-kept',
+  'incomplete',
+  'raced',
+  'still-named',
+  'check-failed',
+  'not-on-this-pc',
+  'unknown-object',
+  'not-run',
+] as const
+const RANGE_STATES = ['not-run', 'ok', 'skipped', 'failed'] as const
+const ROLLBACK_FLAGS = ['none', 'older-live', 'older-than-before'] as const
+/** The verify command has no "before" (D15B-18), so only these two flags (B15B-implB-3). */
+const VERIFY_ROLLBACK_FLAGS = ['none', 'older-live'] as const
+const VERIFY_OUTCOMES = ['live', 'superseded', 'timeout', 'not-run'] as const
+const SNAPSHOT_STATES = ['match', 'mismatch', 'not-run'] as const
+
+/** The publish report's unpublish section (§3.23): the story, where it was and each move. */
+export interface ReportUnpublish {
+  readonly storyId: string
+  readonly inProduction: boolean
+  readonly inStaging: boolean
+  readonly productionMove: (typeof MOVE_WORDS)[number]
+  readonly stagingMove: (typeof MOVE_WORDS)[number]
+}
+
+/** The publish report's takedown section (§3.23): counts and a state word, never a path. */
+export interface ReportTakedown {
+  readonly storyId: string
+  readonly packages: number
+  readonly media: number
+  readonly mp3: number
+  readonly mp3Unproven: number
+  readonly images: number
+  readonly removed: number
+  readonly kept: number
+  readonly state: (typeof TAKEDOWN_STATES)[number]
+}
+
+/** The publish report's checks section (§3.23). */
+export interface ReportChecks {
+  readonly range: (typeof RANGE_STATES)[number]
+  readonly rollbackFlag: (typeof ROLLBACK_FLAGS)[number]
+}
+
+/** The verify report's section (§3.23): seqs, counts, ids and fixed words only. */
+export interface ReportVerify {
+  /** The production pointer's seq; null when the run stopped before reading it. */
+  readonly expectedSeq: number | null
+  readonly outcome: (typeof VERIFY_OUTCOMES)[number]
+  readonly liveSeq: number | null
+  readonly rollbackFlag: (typeof VERIFY_ROLLBACK_FLAGS)[number]
+  readonly snapshot: (typeof SNAPSHOT_STATES)[number]
+  readonly landing: { readonly checked: number; readonly failed: number; readonly gated: boolean }
+  readonly media: { readonly checked: number; readonly failed: number; readonly skipped: number }
+  readonly excluded: readonly {
+    readonly storyId: string
+    readonly version: number
+    readonly reason: 'approval-missing'
+  }[]
+  readonly range: (typeof RANGE_STATES)[number]
+  readonly deep: {
+    readonly objects: number
+    readonly bytes: number
+    readonly approvals: number
+    readonly waivers: number
+    readonly checked: number
+    readonly mismatches: number
+  } | null
 }
 
 /** The approve report's section (§4.8): each field null until known; never an answer. */
@@ -691,8 +1174,8 @@ export interface ReportPublishStory {
 
 /** The publish report's section (§4.8): ids, hashes, seqs and fixed words only. */
 export interface ReportPublish {
-  readonly kind: 'publish' | 'rollback'
-  /** The rollback's `<seq>`; null for a publish. */
+  readonly kind: (typeof PUBLISH_KINDS)[number]
+  /** The rollback's `<seq>`; null for a publish or an unpublish. */
   readonly from: number | null
   /** N+1; null when the plan is unchanged or the run stopped before it. */
   readonly seq: number | null
@@ -728,12 +1211,17 @@ const INPUT_KEYS: readonly string[] = [
   'plan',
   'approval',
   'publish',
+  'unpublish',
+  'takedown',
+  'checks',
+  'verify',
 ]
 const MODES: Readonly<Record<Command, readonly string[]>> = {
   validate: ['validate'],
   stage: ['dry-run', 'stage'],
   approve: ['approve', 'dry-run'],
   publish: ['publish', 'dry-run'],
+  verify: ['verify'],
 }
 
 /** A plain object whose own keys are exactly `keys` (a TypeError naming `name` otherwise). */
@@ -885,7 +1373,7 @@ const PUBLISH_KEYS = [
 
 function reportPublish(publish: ReportPublish): Record<string, unknown> {
   exactKeys(publish, PUBLISH_KEYS, 'publish')
-  field(oneOf(publish.kind, ['publish', 'rollback']), 'publish kind')
+  field(oneOf(publish.kind, PUBLISH_KINDS), 'publish kind')
   field(oneOf(publish.hook, ['not-run', 'triggered', 'failed']), 'publish hook')
   field(oneOf(publish.verify, ['not-run', 'live', 'superseded', 'timeout']), 'publish verify')
   field(Array.isArray(publish.named) && Array.isArray(publish.stories), 'publish lists')
@@ -930,6 +1418,113 @@ function reportPublish(publish: ReportPublish): Record<string, unknown> {
   }
 }
 
+const UNPUBLISH_KEYS = ['storyId', 'inProduction', 'inStaging', 'productionMove', 'stagingMove']
+
+function reportUnpublish(unpublish: ReportUnpublish): Record<string, unknown> {
+  exactKeys(unpublish, UNPUBLISH_KEYS, 'unpublish')
+  field(isStoryId(unpublish.storyId), 'unpublish storyId')
+  field(
+    typeof unpublish.inProduction === 'boolean' && typeof unpublish.inStaging === 'boolean',
+    'unpublish states',
+  )
+  field(
+    oneOf(unpublish.productionMove, MOVE_WORDS) && oneOf(unpublish.stagingMove, MOVE_WORDS),
+    'unpublish moves',
+  )
+  return {
+    storyId: unpublish.storyId,
+    inProduction: unpublish.inProduction,
+    inStaging: unpublish.inStaging,
+    productionMove: unpublish.productionMove,
+    stagingMove: unpublish.stagingMove,
+  }
+}
+
+const TAKEDOWN_COUNTS = [
+  'packages',
+  'media',
+  'mp3',
+  'mp3Unproven',
+  'images',
+  'removed',
+  'kept',
+] as const
+const TAKEDOWN_KEYS = ['storyId', ...TAKEDOWN_COUNTS, 'state']
+
+function reportTakedown(takedown: ReportTakedown): Record<string, unknown> {
+  exactKeys(takedown, TAKEDOWN_KEYS, 'takedown')
+  field(isStoryId(takedown.storyId), 'takedown storyId')
+  for (const key of TAKEDOWN_COUNTS) field(isCount(takedown[key]), `takedown ${key}`)
+  field(oneOf(takedown.state, TAKEDOWN_STATES), 'takedown state')
+  return Object.fromEntries(
+    TAKEDOWN_KEYS.map((key) => [key, takedown[key as keyof ReportTakedown]]),
+  )
+}
+
+const CHECKS_KEYS = ['range', 'rollbackFlag']
+
+function reportChecks(checks: ReportChecks): Record<string, unknown> {
+  exactKeys(checks, CHECKS_KEYS, 'checks')
+  field(oneOf(checks.range, RANGE_STATES), 'checks range')
+  field(oneOf(checks.rollbackFlag, ROLLBACK_FLAGS), 'checks rollbackFlag')
+  return { range: checks.range, rollbackFlag: checks.rollbackFlag }
+}
+
+const VERIFY_KEYS = [
+  'expectedSeq',
+  'outcome',
+  'liveSeq',
+  'rollbackFlag',
+  'snapshot',
+  'landing',
+  'media',
+  'excluded',
+  'range',
+  'deep',
+]
+const DEEP_KEYS = ['objects', 'bytes', 'approvals', 'waivers', 'checked', 'mismatches'] as const
+
+function reportVerify(verify: ReportVerify): Record<string, unknown> {
+  exactKeys(verify, VERIFY_KEYS, 'verify')
+  field(oneOf(verify.outcome, VERIFY_OUTCOMES), 'verify outcome')
+  field(oneOf(verify.rollbackFlag, VERIFY_ROLLBACK_FLAGS), 'verify rollbackFlag')
+  field(oneOf(verify.snapshot, SNAPSHOT_STATES), 'verify snapshot')
+  field(oneOf(verify.range, RANGE_STATES), 'verify range')
+  const { landing, media, deep } = verify
+  exactKeys(landing, ['checked', 'failed', 'gated'], 'verify landing')
+  field(
+    isCount(landing.checked) && isCount(landing.failed) && typeof landing.gated === 'boolean',
+    'verify landing values',
+  )
+  exactKeys(media, ['checked', 'failed', 'skipped'], 'verify media')
+  field(
+    isCount(media.checked) && isCount(media.failed) && isCount(media.skipped),
+    'verify media values',
+  )
+  field(Array.isArray(verify.excluded), 'verify excluded')
+  if (deep !== null) {
+    exactKeys(deep, DEEP_KEYS, 'verify deep')
+    for (const key of DEEP_KEYS) field(isCount(deep[key]), `verify deep ${key}`)
+  }
+  return {
+    expectedSeq: seqOrNull(verify.expectedSeq, 'verify expectedSeq'),
+    outcome: verify.outcome,
+    liveSeq: seqOrNull(verify.liveSeq, 'verify liveSeq'),
+    rollbackFlag: verify.rollbackFlag,
+    snapshot: verify.snapshot,
+    landing: { checked: landing.checked, failed: landing.failed, gated: landing.gated },
+    media: { checked: media.checked, failed: media.failed, skipped: media.skipped },
+    excluded: verify.excluded.map((row) => {
+      exactKeys(row, ['storyId', 'version', 'reason'], 'verify excluded row')
+      field(isStoryId(row.storyId) && isSeq(row.version), 'verify excluded story')
+      field(row.reason === 'approval-missing', 'verify excluded reason')
+      return { storyId: row.storyId, version: row.version, reason: row.reason }
+    }),
+    range: verify.range,
+    deep: deep === null ? null : Object.fromEntries(DEEP_KEYS.map((key) => [key, deep[key]])),
+  }
+}
+
 /** The report's JSON text and its Markdown rendering; a TypeError on any field outside the rules. */
 export function buildReport(input: ReportInput): { readonly json: string; readonly md: string } {
   field(isCommand(input.command), 'command')
@@ -967,17 +1562,32 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
     input.command === 'publish' ? input.publish !== undefined : input.publish === undefined,
     'publish',
   )
-  if (input.command === 'approve' || input.command === 'publish') {
-    // §D15-19: approve and publish carry no stories, objects or private word lists.
+  // Step 15b (§3.23): the three optional publish sections exist on publish only; verify's section
+  // is required on verify and exists nowhere else.
+  for (const key of ['unpublish', 'takedown', 'checks'] as const) {
+    field(input.command === 'publish' || input[key] === undefined, key)
+  }
+  field(
+    input.command === 'verify' ? input.verify !== undefined : input.verify === undefined,
+    'verify',
+  )
+  if (input.command === 'approve' || input.command === 'publish' || input.command === 'verify') {
+    // §D15-19: approve and publish carry no stories, objects or private word lists; nor does
+    // verify (Step 15b §3.23).
     field(
       input.stories.length === 0 &&
         input.uploaded.length === 0 &&
         input.skipped.length === 0 &&
         input.superseded.length === 0,
-      'lists for approve and publish',
+      'lists for approve, publish and verify',
     )
-    field(input.privateWordLists === 'not loaded', 'privateWordLists for approve and publish')
+    field(
+      input.privateWordLists === 'not loaded',
+      'privateWordLists for approve, publish and verify',
+    )
   }
+  // verify writes nothing (D15B-19).
+  field(input.command !== 'verify' || input.writes === 0, 'writes for verify')
   const report: Record<string, unknown> = {
     command: input.command,
     mode: input.mode,
@@ -1003,6 +1613,17 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
   }
   if (input.command === 'publish') {
     report.publish = input.publish == null ? null : reportPublish(input.publish)
+    // Written only when given, so a report without them (every Step 15a report) stays as it was.
+    if (input.unpublish !== undefined) {
+      report.unpublish = input.unpublish === null ? null : reportUnpublish(input.unpublish)
+    }
+    if (input.takedown !== undefined) {
+      report.takedown = input.takedown === null ? null : reportTakedown(input.takedown)
+    }
+    if (input.checks !== undefined) report.checks = reportChecks(input.checks)
+  }
+  if (input.command === 'verify') {
+    report.verify = input.verify == null ? null : reportVerify(input.verify)
   }
   return { json: `${JSON.stringify(report, null, 2)}\n`, md: renderMarkdown(report) }
 }
@@ -1204,6 +1825,55 @@ function renderMarkdown(report: Record<string, unknown>): string {
       )
     }
   }
+  // Step 15b: the publish report's optional sections and the verify report's section.
+  const fieldTable = (title: string, section: Record<string, unknown> | null | undefined) => {
+    if (section === undefined) return
+    lines.push('', `## ${title}`, '')
+    if (section === null) lines.push('Not part of this run.')
+    else lines.push(...table(['field', 'value'], Object.entries(section)))
+  }
+  fieldTable('Unpublish', report.unpublish as Record<string, unknown> | null | undefined)
+  fieldTable('Takedown', report.takedown as Record<string, unknown> | null | undefined)
+  fieldTable('Checks', report.checks as Record<string, unknown> | undefined)
+  const verify = report.verify as
+    | (Record<string, unknown> & {
+        landing: Record<string, unknown>
+        media: Record<string, unknown>
+        excluded: Rows
+        deep: Record<string, unknown> | null
+      })
+    | null
+    | undefined
+  if (verify !== undefined) {
+    lines.push('', '## Verify', '')
+    if (verify === null) {
+      lines.push('No verify data: the run stopped before its first step.')
+    } else {
+      const rows: unknown[][] = [
+        ['expectedSeq', verify.expectedSeq],
+        ['outcome', verify.outcome],
+        ['liveSeq', verify.liveSeq],
+        ['rollbackFlag', verify.rollbackFlag],
+        ['snapshot', verify.snapshot],
+        ...Object.entries(verify.landing).map(([key, value]) => [`landing ${key}`, value]),
+        ...Object.entries(verify.media).map(([key, value]) => [`media ${key}`, value]),
+        ['range', verify.range],
+        ...(verify.deep === null
+          ? [['deep', null]]
+          : Object.entries(verify.deep).map(([key, value]) => [`deep ${key}`, value])),
+      ]
+      lines.push(
+        ...table(['field', 'value'], rows),
+        '',
+        '### Excluded',
+        '',
+        ...table(
+          ['story', 'version', 'reason'],
+          verify.excluded.map((row) => [row.storyId, row.version, row.reason]),
+        ),
+      )
+    }
+  }
   return `${lines.join('\n')}\n`
 }
 
@@ -1318,6 +1988,7 @@ const REPORT_NAMES: ReadonlyMap<string, string> = new Map([
   ['stage', 'publisher-stage'],
   ['approve', 'publisher-approve'],
   ['publish', 'publisher-publish'],
+  ['verify', 'publisher-verify'],
 ])
 
 /** Removes a temp file of ours, best effort (a failure leaves it; the run reports unwritten). */

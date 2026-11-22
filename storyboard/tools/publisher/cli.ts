@@ -2,7 +2,8 @@
 // §5; P1-8c, Step 14; and migration-input/p1-step15a-design.md §3.15, §3.16, §4.1, §4.2, D15-3,
 // D15-15, D15-16, D15-18, D15-30, TP-2; P1-8d part a, Step 15a): `validate (<id>... | --all)`,
 // `stage <id>... [--dry-run]`, `approve <id> --package <prefix>`, `publish [<id>...] [--feature]
-// [--snapshot]` and `help`.
+// [--snapshot]`, `publish --unpublish <id> [--takedown]`, `verify [--deep]` (both Step 15b, below)
+// and `help`.
 // - runCli takes every effect as a dependency and holds no default client factory, hook or verify
 //   function, so a test can never build a real client or reach Vercel. validate never builds a
 //   client and never loads the env file.
@@ -22,33 +23,69 @@
 // - A throw that escapes a runner prints `<command>: stopped: internal <class name>` and is exit 1,
 //   so the entry block's rejection handler never ends a run in silence.
 // - This is the only module that builds the Storage client, and it holds it as a StagePort,
-//   ApprovePort or PublishPort, so a result kind the client adds and the port lacks, or a write the
-//   command may not make, is a compile error here (fence F1, one row).
+//   ApprovePort, PublishPort, UnpublishPort (the unpublish factory) or StorageReader (verify), so a
+//   result kind the client adds and the port lacks, or a write the command may not make, is a
+//   compile error here (fence F1, one row).
 // - The entry block runs only as the process entry point; it captures the run context first. Its
 //   stdin deadline timer is unref'd, so a run that read its answers never waits for it (D15-30).
+// - Step 15b (migration-input/p1-step15b-design.md §2.3, §4.1, D15B-6, D15B-8, D15B-14, D15B-18,
+//   D15B-19, D15B-21, D15B-35, D15B-36; P1-8d part b): `--takedown` in actions mode stops with
+//   takedown-here-only right after the report-dir refusal, before the env file, the credentials or
+//   any client. publish hands runPublish the unpublish factory (`const port: UnpublishPort =
+//   client`), the remover factory (the content deleter through CliDeps.createDeleter, no default,
+//   built at most once and only when runPublish calls it in the takedown commit), realPath
+//   (realpathSync.native) and the Range adapter (verify.ts's checkRange on CONTENT_PUBLIC_BASE);
+//   the verify adapter passes lastSeq on a timeout. `verify [--deep]` runs after the credentials and
+//   the project check with the site URL only (no hook URL), its client held read-only, verify asked
+//   for the build detail, and the public reads bound to the site URL and the public content base.
+//   CliDeps.publicReads has no default either.
+import { realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isEntryPoint } from '../../scripts/load-content'
-import { MEDIA_ORIGIN } from '../../src/config/security-headers'
+import { CONTENT_PUBLIC_BASE, MEDIA_ORIGIN } from '../../src/config/security-headers'
 import { RUN_CONTEXT_NAMES, captureRunContext, parseArgs } from './args'
 import { runApprove, type ApproveAnswers, type ApproveStdin } from './approve'
+import {
+  createContentDeleter,
+  type ContentDeleter,
+  type ContentDeleterOptions,
+} from './content-deleter'
 import { loadEnvFile, readStorageCredentials } from './env'
 import { readDeployHookUrl, readSiteUrl } from './env'
 import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
-import type { ApprovePort, PublishPort, StagePort } from './port'
+import type {
+  ApprovePort,
+  ContentRemover,
+  PublishPort,
+  StagePort,
+  StorageReader,
+  UnpublishPort,
+} from './port'
 import { runPublish, type PublishTail } from './publish'
 import { internalLine, stopLine } from './run-kit'
 import { runStage, runValidate } from './stage'
 import { createStorageClient, type StorageClient, type StorageClientOptions } from './storage'
-import { verifyPublish, type VerifyOptions, type VerifyOutcome } from './verify'
+import {
+  checkLanding,
+  checkRange,
+  readPublicObject,
+  verifyPublish,
+  type VerifyOptions,
+  type VerifyOutcome,
+} from './verify'
+import { runVerify, type VerifyCommandAnswer } from './verify-command'
 
 type Values = Readonly<Record<string, string | undefined>>
-type Command = 'validate' | 'stage' | 'approve' | 'publish'
+type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
 
 /** The fixed stderr line when approve has no answer channel (TP-2). */
 const NO_ANSWER_CHANNEL = 'approve: stdin is not a terminal; pass --answers-stdin'
 /** The fixed stderr line for --report-dir in actions mode (TP-2). */
 const REPORT_DIR_IN_ACTIONS = 'usage: --report-dir is not used in GitHub Actions'
+/** The fixed stderr line for --takedown in actions mode (D15B-8). */
+const TAKEDOWN_IN_ACTIONS =
+  'publish: --takedown runs on this PC only; GitHub Actions refuses it (spec §8)'
 /** The stdin deadline of the entry block (D15-3). */
 const STDIN_DEADLINE_MS = 30_000
 
@@ -77,8 +114,16 @@ export interface CliDeps {
   readonly stdinDeadline: () => Promise<void>
   /** publish only: the deploy hook trigger (no default; the entry block passes hook.ts's). */
   readonly triggerHook: (options: HookOptions) => Promise<HookResult>
-  /** publish only: the live check (no default; the entry block passes verify.ts's). */
+  /** publish and verify: the live check (no default; the entry block passes verify.ts's). */
   readonly verify: (options: VerifyOptions) => Promise<VerifyOutcome>
+  /** publish --takedown only: the content deleter (no default; the entry block passes it). */
+  readonly createDeleter: (options: ContentDeleterOptions) => ContentDeleter
+  /** publish and verify: the public reads (no default; the entry block passes verify.ts's). */
+  readonly publicReads: {
+    readonly readPublicObject: typeof readPublicObject
+    readonly checkRange: typeof checkRange
+    readonly checkLanding: typeof checkLanding
+  }
 }
 
 /** stage runs on this PC only (D14-10): win32 and none of the three names set, in any case. */
@@ -161,6 +206,12 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       deps.error(REPORT_DIR_IN_ACTIONS)
       return 2
     }
+    // D15B-8: --takedown runs on this PC only, refused before the env file or any client.
+    if (runMode === 'actions' && parsed.command === 'publish' && parsed.takedown) {
+      deps.log(stopLine('publish', 'takedown-here-only'))
+      deps.error(TAKEDOWN_IN_ACTIONS)
+      return 2
+    }
   }
   // approve's answer channel, before the env file (D15-3, TP-2); stdin is opened later.
   let channel: 'stdin' | 'prompt' | null = null
@@ -230,6 +281,51 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     )
   }
 
+  if (parsed.command === 'verify') {
+    // D15B-19: the site URL only (no hook URL), after the credentials and the project check.
+    const site = readSiteUrl(deps.env)
+    if (!site.ok) {
+      deps.log(stopLine('verify', 'configuration'))
+      deps.error(`verify: ${site.reason}`)
+      return 2
+    }
+    const siteUrl = site.value
+    const base = new URL(CONTENT_PUBLIC_BASE)
+    const verify = async (expectedSeq: number): Promise<VerifyCommandAnswer> => {
+      const outcome = await deps.verify({
+        siteUrl,
+        expectedSeq,
+        log: deps.log,
+        sleep: deps.sleep,
+        now: () => deps.now().getTime(),
+        detail: true,
+      })
+      if (outcome.kind === 'timeout') return { kind: 'timeout', lastSeq: outcome.lastSeq }
+      const build = outcome.sample.build
+      if (build === undefined) throw new TypeError('verify: the live read carried no build detail')
+      return { kind: outcome.kind, seq: outcome.sample.seq, build }
+    }
+    return guarded('verify', () =>
+      runVerify(parsed, {
+        ...output,
+        sleep: deps.sleep,
+        runMode,
+        makePort: () => {
+          const client = deps.createClient(clientOptions)
+          const port: StorageReader = client
+          return port
+        },
+        verify,
+        site: {
+          landing: (storyId, locale) =>
+            deps.publicReads.checkLanding(siteUrl, { storyId, locale }, { sleep: deps.sleep }),
+          object: (head) => deps.publicReads.readPublicObject(base, head, { sleep: deps.sleep }),
+          range: (target) => deps.publicReads.checkRange(base, target, { sleep: deps.sleep }),
+        },
+      }),
+    )
+  }
+
   // publish: the hook and site URLs before any client (D15-16), names only.
   const hookUrl = readDeployHookUrl(deps.env)
   if (!hookUrl.ok) {
@@ -255,10 +351,16 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         ...(absentStoryIds === undefined ? {} : { absentStoryIds }),
       })
       return outcome.kind === 'timeout'
-        ? { kind: 'timeout' }
+        ? { kind: 'timeout', lastSeq: outcome.lastSeq }
         : { kind: outcome.kind, seq: outcome.sample.seq }
     },
+    range: (target) =>
+      deps.publicReads.checkRange(new URL(CONTENT_PUBLIC_BASE), target, { sleep: deps.sleep }),
   }
+  // D15B-14, D15B-35: the deleter, built at most once, only when runPublish asks for it (the
+  // takedown commit); no run-mode check here (actions mode never reaches it, D15B-8).
+  let memo: ContentRemover | null = null
+  const storyId = parsed.unpublish ?? ''
   return guarded('publish', () =>
     runPublish(parsed, {
       ...output,
@@ -269,6 +371,24 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         const port: PublishPort = client
         return port
       },
+      makeUnpublishPort: () => {
+        const client = deps.createClient(clientOptions)
+        const port: UnpublishPort = client
+        return port
+      },
+      makeRemover: () => {
+        if (memo !== null) return memo
+        const deleter = deps.createDeleter({
+          supabaseUrl,
+          secretKey,
+          storyId,
+          timeoutMs: parsed.timeoutMs,
+        })
+        const remover: ContentRemover = deleter
+        memo = remover
+        return remover
+      },
+      realPath: realpathSync.native,
       tail,
     }),
   )
@@ -294,6 +414,8 @@ if (isEntryPoint(import.meta.url, process.argv[1])) {
     stdinDeadline: () => new Promise((done) => setTimeout(done, STDIN_DEADLINE_MS).unref()),
     triggerHook: triggerDeployHook,
     verify: verifyPublish,
+    createDeleter: createContentDeleter,
+    publicReads: { readPublicObject, checkRange, checkLanding },
   }
   runCli(process.argv.slice(2), deps).then(
     (code) => {

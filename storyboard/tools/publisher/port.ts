@@ -13,6 +13,11 @@
 //   plan path is a TypeError (D23-2, TP-12).
 // - isStorageRefusal recognises the client's refusal by its own name and its fixed text, never by
 //   instanceof, so no library module needs a value import of the client (D14-15).
+// - Step 15b (p1-step15b-design.md §2.3, D15B-6, D15B-14, D15B-21) adds types only: UnpublishWriter
+//   and UnpublishPort (snapshot N+1 and either pointer, for the unpublish factory alone),
+//   RemoveResult and ContentRemover (the deleter as takedown holds it), and the public-read answers
+//   (RangeTarget, RangeAnswer, ObjectAnswer, LandingAnswer, LiveBuild, VerifySite), so no library
+//   module imports verify.ts or the deleter (F4, F6).
 // Types come from ./storage-layout only; this module never imports the client, not even as types.
 import type {
   ApprovalRef,
@@ -113,6 +118,117 @@ export interface PublishWriter {
 
 /** What publish's commit phase holds (rollback included). */
 export type PublishPort = StorageReader & PublishWriter
+
+// ---- Step 15b (p1-step15b-design.md §2.3, D15B-6, D15B-14, D15B-21): types only ----
+
+/**
+ * The writes an unpublish may make: snapshot N+1 and either pointer (D15B-6). Only the unpublish
+ * factory holds it (`const port: UnpublishPort = client`); PublishPort stays production-only.
+ */
+export interface UnpublishWriter {
+  readonly create: (ref: SnapshotRef, body: Uint8Array) => Promise<CreateResult>
+  readonly writePointer: (mode: PointerMode, body: Uint8Array) => Promise<PointerResult>
+}
+
+/** What an unpublish's commit phase holds. */
+export type UnpublishPort = StorageReader & UnpublishWriter
+
+/**
+ * A structural copy of content-deleter.ts's remove result, so a result kind the deleter adds is a
+ * compile error at the CLI's `const remover: ContentRemover = deleter` (D15B-14).
+ */
+export type RemoveResult =
+  | { readonly kind: 'removed'; readonly paths: readonly string[] }
+  | {
+      readonly kind: 'count-mismatch'
+      readonly removed: readonly string[]
+      readonly notRemoved: readonly string[]
+      readonly unexpected: readonly string[]
+    }
+  | StorageFailure
+
+/** What takedown holds of the deleter: one remove of content paths (D15B-14). */
+export interface ContentRemover {
+  readonly remove: (bucket: 'content', paths: readonly string[]) => Promise<RemoveResult>
+}
+
+/** The one MP3 a Range check reads (D15B-16): its content path, its size and its name's sha256. */
+export interface RangeTarget {
+  readonly path: string
+  readonly bytes: number
+  readonly sha256: string
+}
+
+/** Why a Range check failed (D15B-16): the full GET's reasons, then the range GET's. */
+export type RangeReason =
+  | 'full-status'
+  | 'full-length'
+  | 'full-type'
+  | 'full-encoding'
+  | 'full-hash'
+  | 'too-large'
+  | 'status'
+  | 'content-range'
+  | 'length'
+  | 'bytes'
+  | 'type'
+  | 'encoding'
+  | 'redirect'
+  | 'network'
+
+export type RangeAnswer =
+  | {
+      readonly kind: 'ok'
+      readonly start: number
+      readonly end: number
+      readonly size: number
+    }
+  | { readonly kind: 'failed'; readonly reason: RangeReason; readonly status: number | null }
+
+/** Why a public object read failed (D15B-21). */
+export type ObjectReason =
+  'status' | 'length' | 'type' | 'encoding' | 'hash' | 'redirect' | 'network' | 'too-large'
+
+export type ObjectAnswer =
+  | { readonly kind: 'ok' }
+  | { readonly kind: 'failed'; readonly reason: ObjectReason; readonly status: number | null }
+
+/** Why a landing page check failed (D15B-21). */
+export type LandingReason = 'status' | 'type' | 'redirect' | 'network' | 'too-large'
+
+export type LandingAnswer =
+  | { readonly kind: 'ok' }
+  | { readonly kind: 'failed'; readonly reason: LandingReason; readonly status: number | null }
+
+/** A structural copy of verify.ts's LiveBuildDetail: what the confirmed live build loaded. */
+export interface LiveBuild {
+  readonly snapshotSha256: string
+  readonly featuredStoryId: string | null
+  readonly stories: readonly {
+    readonly storyId: string
+    readonly version: number
+    readonly packageSha256: string
+  }[]
+  readonly excluded: readonly {
+    readonly storyId: string
+    readonly version: number
+    readonly reason: 'approval-missing'
+  }[]
+}
+
+/**
+ * The public reads the verify command takes (D15B-21): the CLI binds the site URL and the public
+ * content base, so a library module never builds a URL.
+ */
+export interface VerifySite {
+  readonly landing: (storyId: string, locale: string) => Promise<LandingAnswer>
+  readonly object: (head: {
+    readonly path: string
+    readonly bytes: number
+    readonly mime: string
+  }) => Promise<ObjectAnswer>
+  readonly range: (target: RangeTarget) => Promise<RangeAnswer>
+}
 
 /** A new plain object of exactly the three read methods, each bound to `port` (TP-12). */
 export function readOnlyPort(port: StorageReader): StorageReader {

@@ -20,6 +20,8 @@
 // (the staging builder in production mode plus two gates), and sameEntry exported. createWithRetry,
 // createSnapshot and movePointer take type-only generic signatures, so approve's and publish's
 // narrower ports fit; their behaviour is unchanged.
+// Step 15b (migration-input/p1-step15b-design.md §3.2, D15B-2, D15B-31) adds composeUnpublish
+// (production without one story) and nothing else.
 // Results are codes only: no URL, path, body or message leaves this module.
 import {
   checkPackagePaths,
@@ -532,6 +534,41 @@ export function composeRollback(input: RollbackComposeInput): ProductionComposit
       packageSha256: entry.packageSha256,
       approvalSha256: entry.approvalSha256 ?? null,
       source: 'rollback',
+    })),
+  }
+}
+
+export interface UnpublishComposeInput {
+  /** The current production snapshot (publish refuses an unpublish without one first). */
+  readonly production: CatalogueSnapshot
+  /** The story to withdraw. */
+  readonly storyId: string
+}
+
+/**
+ * Snapshot N+1 of an unpublish (Step 15b, migration-input/p1-step15b-design.md §3.2, D15B-2,
+ * D15B-31): production's entries without the story, each kept byte for byte and in order; the
+ * featured id null when it named the story, else production's; note `publisher unpublish: <id>`;
+ * `unchanged` exactly when production does not list the story (its content then equals
+ * production's). Never throws and never mutates its input; an empty result is the caller's
+ * unpublish-last-story.
+ */
+export function composeUnpublish(input: UnpublishComposeInput): ProductionComposition {
+  const { production, storyId } = input
+  const listed = production.stories.some((entry) => entry.storyId === storyId)
+  const stories = production.stories.filter((entry) => entry.storyId !== storyId)
+  const featuredStoryId = production.featuredStoryId === storyId ? null : production.featuredStoryId
+  return {
+    featuredStoryId,
+    stories,
+    note: `publisher unpublish: ${storyId}`,
+    unchanged: !listed,
+    named: [],
+    sources: stories.map((entry) => ({
+      storyId: entry.storyId,
+      packageSha256: entry.packageSha256,
+      approvalSha256: entry.approvalSha256 ?? null,
+      source: 'production',
     })),
   }
 }

@@ -18,6 +18,12 @@ import {
   type LiveSample,
   type VerifyOptions,
 } from './verify'
+// Step 15b (design migration-input/p1-step15b-design.md D15B-16, D15B-21; test plan §14.8): the
+// public reads and the detail option, tested in their own describe with their own loopback guard
+// at the end of this file; every line above is unchanged (S5).
+import { createHash } from 'node:crypto'
+import { afterEach, vi } from 'vitest'
+import { PUBLIC_RETRY_DELAYS_MS, checkLanding, checkRange, readPublicObject } from './verify'
 
 const START = Date.UTC(2026, 10, 7, 10, 0, 0)
 const COMMIT = '1ab6342c0ffee1ab6342c0ffee1ab6342c0ffee0'
@@ -719,5 +725,690 @@ describe('describeSample', () => {
   it('cuts a value to 64 characters', () => {
     const long = 'a'.repeat(64)
     expect(describeSample(sample(`${long}b`, long))).toBe(line(long, long))
+  })
+})
+
+// ---- Step 15b: the public reads and the detail option (T15B-16 to T15B-20) ----
+// Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
+// preconditions are hard expects starting "precondition:". The server is this file's loopback
+// server; the base is `<siteUrl.origin>/s15b-public/content`, a neutral path that also shows the
+// base's pathname is used as given. Retry waits go through a recording sleep.
+
+describe('Step 15b public reads (D15B-16, D15B-21)', () => {
+  // The loopback guard of storage.test.ts, for this describe only: a request to any other host is
+  // counted and refused, and the count must stay 0.
+  const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
+  const realFetch = globalThis.fetch
+  let escapes = 0
+  beforeEach(() => {
+    escapes = 0
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (LOOPBACK.has(url.hostname)) return realFetch(input, init)
+      escapes++
+      return Promise.reject(new TypeError('blocked: not a loopback host'))
+    })
+  })
+  afterEach(() => {
+    const count = escapes
+    vi.unstubAllGlobals()
+    expect(count, 'loopback guard: requests that tried to leave 127.0.0.1').toBe(0)
+  })
+
+  const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+  const bytesOf = (n: number, seed = 7) =>
+    Uint8Array.from({ length: n }, (_, i) => (i * 31 + seed) % 256)
+  const base = () => new URL(`${siteUrl.origin}/s15b-public/content`)
+  const recordSleep = { sleep: async (ms: number) => void sleeps.push(ms) }
+
+  interface Answer {
+    readonly status?: number
+    readonly headers?: Readonly<Record<string, string>>
+    readonly body?: Uint8Array | string
+    /** Sent without a content-length, in two chunks. */
+    readonly chunked?: boolean
+  }
+  const answer =
+    ({ status: code = 200, headers = {}, body = '', chunked = false }: Answer): Handler =>
+    (_req, res) => {
+      const payload = Buffer.from(body)
+      const head: Record<string, string> = { ...headers }
+      if (!chunked && head['content-length'] === undefined) {
+        head['content-length'] = String(payload.length)
+      }
+      res.writeHead(code, head)
+      if (chunked) {
+        res.write(payload.subarray(0, 1))
+        res.end(payload.subarray(1))
+      } else {
+        res.end(payload)
+      }
+    }
+  const destroyed: Handler = (req) => req.socket.destroy()
+  /** Headers sent, then two of the declared bytes, then nothing. */
+  const stalled: Handler = (_req, res) => {
+    res.writeHead(200, { 'content-type': 'audio/mpeg', 'content-length': '10' })
+    res.write(Buffer.from('12'))
+  }
+  const mp3 = { 'content-type': 'audio/mpeg' }
+
+  /** An MP3 object: the full GET and any `range: bytes=s-e` GET, each answer changeable. */
+  const serveMp3 =
+    (
+      body: Uint8Array,
+      change: {
+        readonly full?: (a: Answer) => Answer
+        readonly range?: (a: Answer, start: number, end: number) => Answer
+      } = {},
+    ): Handler =>
+    (req, res) => {
+      const range = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range ?? ''))
+      if (req.headers.range === undefined) {
+        const full: Answer = { headers: mp3, body }
+        answer(change.full ? change.full(full) : full)(req, res)
+        return
+      }
+      const start = Number(range?.[1] ?? 0)
+      const end = Number(range?.[2] ?? 0)
+      const partial: Answer = {
+        status: 206,
+        // accept-ranges: bytes by default, so that only g4 decides whether it is read.
+        headers: {
+          ...mp3,
+          'content-range': `bytes ${start}-${end}/${body.length}`,
+          'accept-ranges': 'bytes',
+        },
+        body: body.subarray(start, end + 1),
+      }
+      answer(change.range ? change.range(partial, start, end) : partial)(req, res)
+    }
+  const targetOf = (body: Uint8Array) => {
+    const hash = sha(body)
+    return { path: `media/two-paths/${hash}-en.mp3`, bytes: body.length, sha256: hash }
+  }
+  const failed = (reason: string, status: number | null) => ({ kind: 'failed', reason, status })
+  /** verify.ts's caller-error TypeErrors name their input, so no other TypeError counts as one. */
+  const CALLER_ERROR = /^(public base|site URL|public object|range target|landing) /
+  const settle = async (run: () => Promise<unknown>) => {
+    try {
+      return await run()
+    } catch (error) {
+      return error instanceof TypeError && CALLER_ERROR.test(error.message)
+        ? 'caller-error'
+        : `threw ${String(error)}`
+    }
+  }
+
+  it("T15B-16 readPublicObject: one GET of base + path; exactly 200, the length, the type, identity and the body's sha256 against the name; each failure its reason; caller errors throw before any request (A20, D15B-21, L22, L24)", async () => {
+    const webp = bytesOf(300)
+    const object = {
+      path: `media/two-paths/${sha(webp)}-w768.webp`,
+      bytes: 300,
+      mime: 'image/webp',
+    }
+    queue = [answer({ headers: { 'content-type': 'image/webp' }, body: webp })]
+    expect(
+      await readPublicObject(base(), object, recordSleep),
+      'precondition: an ok answer',
+    ).toEqual({
+      kind: 'ok',
+    })
+    expect
+      .soft(
+        seen.map((r) => [r.path, r.query]),
+        '(g1) one GET of the base pathname + / + path',
+      )
+      .toEqual([[`/s15b-public/content/${object.path}`, '']])
+
+    const other = bytesOf(300, 99)
+    const samples: [string, Handler[], unknown][] = [
+      [
+        '404 (a body of the right length and type, other bytes)',
+        [answer({ status: 404, headers: { 'content-type': 'image/webp' }, body: other })],
+        failed('status', 404),
+      ],
+      [
+        'content-length + 1',
+        [answer({ headers: { 'content-type': 'image/webp' }, body: bytesOf(301) })],
+        failed('length', 200),
+      ],
+      [
+        'image/png',
+        [answer({ headers: { 'content-type': 'image/png' }, body: webp })],
+        failed('type', 200),
+      ],
+      [
+        'content-encoding: gzip',
+        [
+          answer({
+            headers: { 'content-type': 'image/webp', 'content-encoding': 'gzip' },
+            body: webp,
+          }),
+        ],
+        failed('encoding', 200),
+      ],
+      [
+        'other bytes',
+        [answer({ headers: { 'content-type': 'image/webp' }, body: other })],
+        failed('hash', 200),
+      ],
+      [
+        '302 (to a loopback ok answer)',
+        [
+          answer({
+            status: 302,
+            headers: { location: `/s15b-public/content/${object.path}?moved` },
+          }),
+          answer({ headers: { 'content-type': 'image/webp' }, body: webp }),
+        ],
+        failed('redirect', 302),
+      ],
+      ['a destroyed socket', [destroyed], failed('network', null)],
+      [
+        'a chunked body over bytes',
+        [answer({ headers: { 'content-type': 'image/webp' }, body: bytesOf(305), chunked: true })],
+        failed('too-large', 200),
+      ],
+    ]
+    for (const [id, handlers, want] of samples) {
+      queue = [...handlers]
+      expect
+        .soft(await settle(() => readPublicObject(base(), object, recordSleep)), `(g2) ${id}`)
+        .toEqual(want)
+    }
+
+    const hex = sha(webp)
+    const callerErrors: [string, () => Promise<unknown>][] = [
+      [
+        'catalogue/production.json',
+        () =>
+          readPublicObject(base(), { ...object, path: 'catalogue/production.json' }, recordSleep),
+      ],
+      [
+        'media/two-paths/../x.webp',
+        () =>
+          readPublicObject(base(), { ...object, path: 'media/two-paths/../x.webp' }, recordSleep),
+      ],
+      [
+        'approvals/two-paths/<hex>.json',
+        () =>
+          readPublicObject(
+            base(),
+            { ...object, path: `approvals/two-paths/${hex}.json` },
+            recordSleep,
+          ),
+      ],
+      ['a base with ?q', () => readPublicObject(new URL(`${base().href}?q`), object, recordSleep)],
+      ['a base with #h', () => readPublicObject(new URL(`${base().href}#h`), object, recordSleep)],
+      [
+        'http://example.org/x',
+        () => readPublicObject(new URL('http://example.org/x'), object, recordSleep),
+      ],
+      ['bytes -1', () => readPublicObject(base(), { ...object, bytes: -1 }, recordSleep)],
+    ]
+    for (const [id, run] of callerErrors) {
+      queue = [answer({ headers: { 'content-type': 'image/webp' }, body: webp })]
+      seen = []
+      const got = await settle(run)
+      expect
+        .soft([got, seen.length, escapes], `(g3) a caller error and zero requests: ${id}`)
+        .toEqual(['caller-error', 0, 0])
+    }
+
+    const pkg = new TextEncoder().encode('{"schemaVersion":"1.0"}')
+    const pkgObject = {
+      path: `packages/two-paths/${sha(pkg)}.json`,
+      bytes: pkg.length,
+      mime: 'application/json',
+    }
+    queue = [answer({ headers: { 'content-type': 'application/json' }, body: pkg })]
+    expect
+      .soft(
+        await settle(() => readPublicObject(base(), pkgObject, recordSleep)),
+        '(g4) a package path',
+      )
+      .toEqual({ kind: 'ok' })
+  })
+
+  it("T15B-17 checkRange: the full GET then one middle range; exactly 206, content-range bytes s-e/size, the slice's bytes, type and identity; each failure its reason; Accept-Ranges never read (A16, D15B-16, L18)", async () => {
+    const body4096 = bytesOf(4096)
+    queue = [serveMp3(body4096)]
+    const first = await checkRange(base(), targetOf(body4096), recordSleep)
+    expect(first.kind, 'precondition: a 4,096-byte MP3 gives ok').toBe('ok')
+    expect.soft(first, '(g1) size 4096').toEqual({ kind: 'ok', start: 2048, end: 3071, size: 4096 })
+    expect
+      .soft(
+        seen.map((r) => r.headers.range),
+        '(g1) the second request asks bytes=2048-3071',
+      )
+      .toEqual([undefined, 'bytes=2048-3071'])
+    for (const [size, start, end] of [
+      [2000, 1000, 1999],
+      [3, 1, 2],
+      [1, 0, 0],
+    ] as const) {
+      const body = bytesOf(size)
+      queue = [serveMp3(body)]
+      expect
+        .soft(
+          await settle(() => checkRange(base(), targetOf(body), recordSleep)),
+          `(g1) size ${size}`,
+        )
+        .toEqual({ kind: 'ok', start, end, size })
+    }
+
+    const rangeSamples: [string, Handler, unknown][] = [
+      [
+        '200 for the range',
+        serveMp3(body4096, { range: () => ({ headers: mp3, body: body4096 }) }),
+        failed('status', 200),
+      ],
+      [
+        'bytes 0-1023/4096',
+        serveMp3(body4096, {
+          range: (a) => ({ ...a, headers: { ...mp3, 'content-range': 'bytes 0-1023/4096' } }),
+        }),
+        failed('content-range', 206),
+      ],
+      [
+        'bytes 2048-3071/4097',
+        serveMp3(body4096, {
+          range: (a) => ({ ...a, headers: { ...mp3, 'content-range': 'bytes 2048-3071/4097' } }),
+        }),
+        failed('content-range', 206),
+      ],
+      [
+        'content-range absent',
+        serveMp3(body4096, { range: (a) => ({ ...a, headers: mp3 }) }),
+        failed('content-range', 206),
+      ],
+      [
+        'a body one byte short (its content-length matching)',
+        serveMp3(body4096, { range: (a, s, e) => ({ ...a, body: body4096.subarray(s, e) }) }),
+        failed('length', 206),
+      ],
+      [
+        'a body one byte too long (content-length e - s + 2, matching)',
+        serveMp3(body4096, { range: (a, s, e) => ({ ...a, body: body4096.subarray(s, e + 2) }) }),
+        failed('length', 206),
+      ],
+      [
+        'one byte different',
+        serveMp3(body4096, {
+          range: (a, s, e) => {
+            const slice = Uint8Array.from(body4096.subarray(s, e + 1))
+            slice[10] = (slice[10]! + 1) % 256
+            return { ...a, body: slice }
+          },
+        }),
+        failed('bytes', 206),
+      ],
+      [
+        'audio/mp3',
+        serveMp3(body4096, {
+          range: (a) => ({ ...a, headers: { ...a.headers, 'content-type': 'audio/mp3' } }),
+        }),
+        failed('type', 206),
+      ],
+      [
+        'gzip',
+        serveMp3(body4096, {
+          range: (a) => ({ ...a, headers: { ...a.headers, 'content-encoding': 'gzip' } }),
+        }),
+        failed('encoding', 206),
+      ],
+    ]
+    for (const [id, handler, want] of rangeSamples) {
+      queue = [handler]
+      expect
+        .soft(await settle(() => checkRange(base(), targetOf(body4096), recordSleep)), `(g2) ${id}`)
+        .toEqual(want)
+    }
+
+    const wrong = bytesOf(4096, 99)
+    const fullSamples: [string, Handler, unknown][] = [
+      [
+        '404',
+        serveMp3(body4096, { full: () => ({ status: 404, headers: mp3, body: wrong }) }),
+        failed('full-status', 404),
+      ],
+      [
+        'a content-length other than bytes (one byte short)',
+        serveMp3(body4096, { full: (a) => ({ ...a, body: body4096.subarray(0, 4095) }) }),
+        failed('full-length', 200),
+      ],
+      [
+        'a wrong type',
+        serveMp3(body4096, { full: (a) => ({ ...a, headers: { 'content-type': 'audio/mp3' } }) }),
+        failed('full-type', 200),
+      ],
+      [
+        'gzip',
+        serveMp3(body4096, {
+          full: (a) => ({ ...a, headers: { ...mp3, 'content-encoding': 'gzip' } }),
+        }),
+        failed('full-encoding', 200),
+      ],
+      [
+        'the wrong sha256',
+        serveMp3(body4096, { full: (a) => ({ ...a, body: wrong }) }),
+        failed('full-hash', 200),
+      ],
+      [
+        'a chunked body over the cap',
+        serveMp3(body4096, { full: (a) => ({ ...a, body: bytesOf(4106), chunked: true }) }),
+        failed('too-large', 200),
+      ],
+    ]
+    for (const [id, handler, want] of fullSamples) {
+      queue = [handler]
+      seen = []
+      const got = await settle(() => checkRange(base(), targetOf(body4096), recordSleep))
+      expect.soft([got, seen.length], `(g3) ${id}, one request`).toEqual([want, 1])
+    }
+
+    for (const [id, acceptRanges] of [
+      ['accept-ranges: none', 'none'],
+      ['no accept-ranges', null],
+    ] as const) {
+      const withAcceptRanges = (a: Answer): Answer => {
+        const headers: Record<string, string> = { ...a.headers }
+        delete headers['accept-ranges']
+        if (acceptRanges !== null) headers['accept-ranges'] = acceptRanges
+        return { ...a, headers }
+      }
+      queue = [serveMp3(body4096, { range: withAcceptRanges })]
+      expect
+        .soft(await settle(() => checkRange(base(), targetOf(body4096), recordSleep)), `(g4) ${id}`)
+        .toEqual({ kind: 'ok', start: 2048, end: 3071, size: 4096 })
+    }
+
+    // (g5) Caller errors (TP-3; B15B-implB-6): the target must be an MP3 media path with a whole
+    // byte count from 1 and a 64-hex sha256, else a TypeError before any request.
+    const target = targetOf(body4096)
+    const callerErrors: [string, () => Promise<unknown>][] = [
+      [
+        'a package path',
+        () =>
+          checkRange(
+            base(),
+            { ...target, path: `packages/two-paths/${target.sha256}.json` },
+            recordSleep,
+          ),
+      ],
+      [
+        'a WebP path',
+        () =>
+          checkRange(
+            base(),
+            { ...target, path: `media/two-paths/${target.sha256}-w768.webp` },
+            recordSleep,
+          ),
+      ],
+      ['bytes 0', () => checkRange(base(), { ...target, bytes: 0 }, recordSleep)],
+      ['sha256 x', () => checkRange(base(), { ...target, sha256: 'x' }, recordSleep)],
+      ['a base with ?q', () => checkRange(new URL(`${base().href}?q`), target, recordSleep)],
+    ]
+    for (const [id, run] of callerErrors) {
+      queue = [serveMp3(body4096)]
+      seen = []
+      const got = await settle(run)
+      expect
+        .soft([got, seen.length], `(g5) a caller error and zero requests: ${id}`)
+        .toEqual(['caller-error', 0])
+    }
+  })
+
+  it('T15B-18 public GET policy: identity set on the full GET and left to fetch on the range GET, no cache headers, manual redirect, at most two retries after 1 s and 2 s on network, timeout, 429 and 5xx only (A16, A20, L24, CRIT-2, CRIT-13)', async () => {
+    queue = [live(1)]
+    await readBuildInfo(siteUrl, { now: () => clock })
+    expect(
+      seen.length === 1 &&
+        seen[0]?.headers['cache-control'] === 'no-cache' &&
+        seen[0]?.headers.pragma === 'no-cache',
+      'precondition: readBuildInfo (unchanged) sends cache-control: no-cache and pragma: no-cache',
+    ).toBe(true)
+
+    const body = bytesOf(4096)
+    const target = targetOf(body)
+    seen = []
+    queue = [serveMp3(body)]
+    const range = await checkRange(base(), target, recordSleep)
+    const webp = bytesOf(200)
+    queue = [answer({ headers: { 'content-type': 'image/webp' }, body: webp })]
+    const object = await readPublicObject(
+      base(),
+      { path: `media/two-paths/${sha(webp)}-w768.webp`, bytes: 200, mime: 'image/webp' },
+      recordSleep,
+    )
+    queue = [
+      answer({ headers: { 'content-type': 'text/html; charset=utf-8' }, body: '<html></html>' }),
+    ]
+    const landing = await checkLanding(siteUrl, { storyId: 'two-paths', locale: 'en' }, recordSleep)
+    expect(
+      [range.kind, object.kind, landing.kind, seen.length],
+      'precondition: the four GETs answered ok',
+    ).toEqual(['ok', 'ok', 'ok', 4])
+    const [fullGet, rangeGet, objectGet, landingGet] = seen
+    expect
+      .soft(
+        [fullGet, rangeGet, objectGet, landingGet].map((r) => r?.headers['accept-encoding']),
+        '(g1) accept-encoding is exactly identity on the full, range, object and landing GETs',
+      )
+      .toEqual(['identity', 'identity', 'identity', 'identity'])
+    expect
+      .soft(
+        [fullGet, rangeGet, objectGet, landingGet].map((r) => r?.headers.range),
+        '(g1) only the range GET carries range',
+      )
+      .toEqual([undefined, 'bytes=2048-3071', undefined, undefined])
+    expect
+      .soft(
+        seen.filter(
+          (r) => r.headers['cache-control'] !== undefined || r.headers.pragma !== undefined,
+        ).length,
+        '(g1) no public GET carries cache-control or pragma',
+      )
+      .toBe(0)
+
+    const r503 = status(503)
+    const retries: [string, Handler[], unknown, number[], number][] = [
+      [
+        '503, 503, then the answers',
+        [r503, r503, serveMp3(body)],
+        { kind: 'ok', start: 2048, end: 3071, size: 4096 },
+        [1000, 2000],
+        4,
+      ],
+      ['503 three times', [r503], failed('full-status', 503), [1000, 2000], 3],
+      [
+        '429 then ok',
+        [status(429), serveMp3(body)],
+        { kind: 'ok', start: 2048, end: 3071, size: 4096 },
+        [1000],
+        3,
+      ],
+      ['404', [status(404)], failed('full-status', 404), [], 1],
+      [
+        'a destroyed socket twice, then ok',
+        [destroyed, destroyed, serveMp3(body)],
+        { kind: 'ok', start: 2048, end: 3071, size: 4096 },
+        [1000, 2000],
+        4,
+      ],
+    ]
+    for (const [id, handlers, want, waits, requests] of retries) {
+      queue = [...handlers]
+      seen = []
+      sleeps = []
+      const got = await settle(() => checkRange(base(), target, recordSleep))
+      expect.soft([got, sleeps, seen.length], `(g2) ${id}`).toEqual([want, waits, requests])
+    }
+    expect.soft(PUBLIC_RETRY_DELAYS_MS, '(g2) the retry waits').toEqual([1000, 2000])
+
+    queue = [status(301, { location: `/s15b-public/content/${target.path}` })]
+    seen = []
+    sleeps = []
+    const redirected = await settle(() => checkRange(base(), target, recordSleep))
+    expect
+      .soft(
+        [redirected, seen.length, sleeps],
+        '(g3) a 301 on the full GET is redirect after one request',
+      )
+      .toEqual([failed('redirect', 301), 1, []])
+
+    // (g2) The stalled body, last: headers, two of the ten declared bytes, then nothing. timeoutMs
+    // 300 lets the headers arrive on every try, so each try ends inside the body read (the judge's
+    // catch), never at the fetch; the tries and the answered fetches are counted at the fetch, and
+    // the server is drained before the next test (S15B-R1-SEC-2; B15B-implB-7).
+    queue = [stalled]
+    seen = []
+    sleeps = []
+    let tries = 0
+    let answered = 0
+    const counting: typeof fetch = async (input, init) => {
+      tries++
+      const response = await fetch(input, init)
+      answered++
+      return response
+    }
+    const stalledGot = await settle(() =>
+      checkRange(base(), target, { ...recordSleep, timeoutMs: 300, fetchImpl: counting }),
+    )
+    for (let i = 0; i < 100 && seen.length < 3; i++) {
+      await new Promise((done) => setTimeout(done, 10))
+    }
+    expect
+      .soft(
+        [stalledGot, sleeps, tries, answered],
+        '(g2) a stalled body with timeoutMs 300: network after three tries, the headers answered on each',
+      )
+      .toEqual([failed('network', null), [1000, 2000], 3, 3])
+  })
+
+  it('T15B-19 checkLanding: GET <origin>/<locale>/stories/<id>; exactly 200 text/html, the body capped at 4 MiB and discarded; the story id and the locale re-checked (A20, L21, TP-15)', async () => {
+    const html = answer({
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+      body: '<html></html>',
+    })
+    queue = [html]
+    expect
+      .soft(
+        await settle(() =>
+          checkLanding(siteUrl, { storyId: 'two-paths', locale: 'en' }, recordSleep),
+        ),
+        '(g1) ok',
+      )
+      .toEqual({ kind: 'ok' })
+    expect
+      .soft(
+        seen.map((r) => [r.path, r.query]),
+        '(g1) the server saw /en/stories/two-paths',
+      )
+      .toEqual([['/en/stories/two-paths', '']])
+
+    const samples: [string, Handler[], unknown][] = [
+      [
+        '404',
+        [answer({ status: 404, headers: { 'content-type': 'text/html' }, body: 'x' })],
+        failed('status', 404),
+      ],
+      [
+        '302 (to a loopback 200)',
+        [answer({ status: 302, headers: { location: '/en/stories/two-paths?moved' } }), html],
+        failed('redirect', 302),
+      ],
+      [
+        'application/json',
+        [answer({ headers: { 'content-type': 'application/json' }, body: '{}' })],
+        failed('type', 200),
+      ],
+      [
+        'a chunked 4 MiB + 1 body',
+        [
+          answer({
+            headers: { 'content-type': 'text/html' },
+            body: new Uint8Array(4 * 1024 * 1024 + 1),
+            chunked: true,
+          }),
+        ],
+        failed('too-large', 200),
+      ],
+      ['a destroyed socket', [destroyed], failed('network', null)],
+    ]
+    for (const [id, handlers, want] of samples) {
+      queue = [...handlers]
+      expect
+        .soft(
+          await settle(() =>
+            checkLanding(siteUrl, { storyId: 'two-paths', locale: 'en' }, recordSleep),
+          ),
+          `(g2) ${id}`,
+        )
+        .toEqual(want)
+    }
+
+    const callerErrors: [string, URL, string, string][] = [
+      ['story id Two', siteUrl, 'Two', 'en'],
+      ['story id a/b', siteUrl, 'a/b', 'en'],
+      ['story id two-paths + U+D800', siteUrl, 'two-paths\uD800', 'en'],
+      ['locale ar (disabled)', siteUrl, 'two-paths', 'ar'],
+      ['locale fr', siteUrl, 'two-paths', 'fr'],
+      ['locale EN', siteUrl, 'two-paths', 'EN'],
+      ['a site URL with ?q', new URL(`${siteUrl.href}?q`), 'two-paths', 'en'],
+    ]
+    for (const [id, site, storyId, locale] of callerErrors) {
+      queue = [html]
+      seen = []
+      const got = await settle(() => checkLanding(site, { storyId, locale }, recordSleep))
+      expect
+        .soft([got, seen.length], `(g3) a caller error and zero requests: ${id}`)
+        .toEqual(['caller-error', 0])
+    }
+  })
+
+  it("T15B-20 the detail option: verifyPublish with detail true returns the confirmed read's build; without it the outcome has no build key and the log is byte-identical (A20, D15B-21, L20)", async () => {
+    const S1 = '1'.repeat(64)
+    const S2 = '2'.repeat(64)
+    const read = (snapshotSha256: string) =>
+      body(
+        JSON.stringify(
+          BuildInfo.parse({
+            ...buildInfo(3, { storyIds: [LION] }),
+            snapshotSha256,
+            featuredStoryId: LION,
+            excluded: [{ storyId: CROW, version: 2, reason: 'approval-missing' }],
+          }),
+        ),
+      )
+    const reads = () => [read(S1), read(S1), read(S1), read(S1), read(S1), read(S2)]
+    queue = reads()
+    const detailed = await verifyPublish(options(3, { detail: true }))
+    const detailedLogs = [...logs]
+    queue = reads()
+    logs = []
+    clock = START
+    const plain = await verifyPublish(options(3))
+    expect(
+      [detailed.kind, plain.kind, detailedLogs.length > 0],
+      'precondition: both runs end live after six confirming reads',
+    ).toEqual(['live', 'live', true])
+    expect
+      .soft(
+        detailed.kind === 'live' ? detailed.sample.build : null,
+        '(g1) the build of the last read',
+      )
+      .toEqual({
+        snapshotSha256: S2,
+        featuredStoryId: LION,
+        stories: [{ storyId: LION, version: 1, packageSha256: 'c'.repeat(64) }],
+        excluded: [{ storyId: CROW, version: 2, reason: 'approval-missing' }],
+      })
+    expect
+      .soft(plain.kind === 'live' && 'build' in plain.sample, '(g2) no build key without detail')
+      .toBe(false)
+    expect
+      .soft(logs, '(g2) the logs with and without detail are equal line for line')
+      .toEqual(detailedLogs)
   })
 })

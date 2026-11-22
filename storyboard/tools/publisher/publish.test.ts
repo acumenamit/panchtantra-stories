@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { planMediaHeads } from '../../src/core/content/media'
 import type { SnapshotEntry } from '../../src/core/content/packages'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import type { CatalogueSnapshot } from '../../src/core/package/catalogue'
@@ -38,22 +39,25 @@ import { parseArgs } from './args'
 import { runApprove } from './approve'
 import { buildProductionDocuments, buildStagingDocuments } from './catalogue-state'
 import { Secret } from './env'
-import type { PublishPort } from './port'
+import type { PublishPort, RangeAnswer, RangeTarget } from './port'
 import { runPublish, type PublishTail, type VerifyAnswer } from './publish'
 import { REMOTE_CHECK_STEPS } from './remote-checks'
-import { VERIFY_TIMEOUT_HINT, formatReportDirRefused } from './report'
+import { RANGE_RECOVERY, VERIFY_TIMEOUT_HINT, formatReportDirRefused } from './report'
 import { runStage } from './stage'
 import {
   answersOf,
   approvalRecordOf,
   buildTestStories,
   fullyBoundStory,
+  mp3Bytes,
   waiverBytesOf,
   waiverFileOf,
   withPackage,
   writeStageInputs,
+  type TestMedia,
   type TestStory,
 } from './stage-testkit'
+import { classOfPath } from './storage-layout'
 import { createStorageClient, type StorageClient } from './storage'
 import {
   expectNoUnexpected,
@@ -305,6 +309,8 @@ interface PublishOptions extends FetchOptions {
   readonly verify?: (seq: number) => Promise<VerifyAnswer> | VerifyAnswer
   readonly reportDir?: string
   readonly clock?: ReturnType<typeof fakeClock>
+  /** Step 15b: the Range fake's answer (default ok 0-0/1, TP-1). */
+  readonly range?: (target: RangeTarget) => RangeAnswer
 }
 
 interface Published {
@@ -312,8 +318,15 @@ interface Published {
   readonly out: string[]
   readonly err: string[]
   readonly calls: string[]
+  /** Step 15b (TP-1): each Range call's target and calls.length then, never in `calls`. */
+  readonly rangeCalls: { readonly target: RangeTarget; readonly index: number }[]
   readonly report: Record<string, unknown> | null
   readonly md: string
+}
+
+/** Step 15b (§2.5, TP-1): a dep publish must never call; it throws when called. */
+const notForPublish = (name: string) => (): never => {
+  throw new Error(`test: ${name} is not for publish or rollback`)
 }
 
 /** One runPublish of `args` (after `publish`) through a real client on the stub; the mark first. */
@@ -326,6 +339,7 @@ async function publish(
   const out: string[] = []
   const err: string[] = []
   const calls: string[] = []
+  const rangeCalls: { target: RangeTarget; index: number }[] = []
   const clock = options.clock ?? fakeClock()
   const dir = options.reportDir ?? reportDir()
   const parsed = parseArgs(['publish', ...args, '--report-dir', dir], context())
@@ -343,6 +357,10 @@ async function publish(
       calls.push(`verify ${seq}`)
       return options.verify ? options.verify(seq) : { kind: 'live', seq }
     },
+    range: async (target) => {
+      rangeCalls.push({ target, index: calls.length })
+      return options.range ? options.range(target) : { kind: 'ok', start: 0, end: 0, size: 1 }
+    },
   }
   const exit = await runPublish(parsed, {
     storyboardRoot: root,
@@ -356,6 +374,9 @@ async function publish(
       const writer: PublishPort = port
       return writer
     },
+    makeUnpublishPort: notForPublish('makeUnpublishPort'),
+    makeRemover: notForPublish('makeRemover'),
+    realPath: notForPublish('realPath'),
     tail,
   })
   const json = join(dir, 'publisher-publish.json')
@@ -365,6 +386,7 @@ async function publish(
     out,
     err,
     calls,
+    rangeCalls,
     report: existsSync(json)
       ? (JSON.parse(readFileSync(json, 'utf8')) as Record<string, unknown>)
       : null,
@@ -464,6 +486,22 @@ const storyRequests = (stub: StorageStub, id: string) =>
       (r.pathname === LIST_PATH && decode(r.body).includes(`"prefix":"packages/${id}"`)),
   )
 
+/** Step 15b (TP-1): the first audio/mpeg head of the stories' packages in order, as a target. */
+function firstMp3Of(stories: readonly TestStory[]): RangeTarget {
+  const plan = planMediaHeads(
+    stories.map((s) => ({ pkg: s.pkg })),
+    '',
+  )
+  if (!plan.ok) throw new Error('test setup: media plan')
+  const head = plan.value.heads.find((h) => h.mime === 'audio/mpeg')
+  if (head === undefined) throw new Error('test setup: no MP3 head')
+  const sha256 = String(classOfPath('content', head.path)?.fields.sha256)
+  return { path: head.path, bytes: head.bytes, sha256 }
+}
+/** The range line the TP-1 fake gives: bytes 0-0/1 of the first MP3 of `stories`. */
+const rangeOkLine = (seq: number, stories: readonly TestStory[]) =>
+  `publish: range check ok seq=${seq} bytes=0-0/1 object=${sha12(firstMp3Of(stories).sha256)}`
+
 const publisherUnder = (dir: string): string[] =>
   (readdirSync(dir, { recursive: true }) as string[]).filter((name) =>
     name.split(/[\\/]/).some((part) => part.startsWith('publisher-')),
@@ -539,6 +577,7 @@ describe('publish', () => {
           `publish: snapshot seq=2 sha256=${sha12(snapshotSha ?? '')} created`,
           'publish: production pointer seq=2 moved (read back, post-check clean)',
           'publish: live seq=2',
+          rangeOkLine(2, [two]),
         ])
       const section = run.report?.publish as Record<string, unknown> | undefined
       expect
@@ -981,8 +1020,11 @@ describe('publish', () => {
       const later = await prepared([two])
       const r3 = await publish(later, [ID], { verify: () => ({ kind: 'superseded', seq: 7 }) })
       expect
-        .soft([r3.exit, r3.report?.outcome, r3.out.at(-1)], '(g3) superseded: exit 0')
-        .toEqual([0, 'verify-superseded', 'publish: superseded seq=7'])
+        .soft(
+          [r3.exit, r3.report?.outcome, r3.out.at(-2), r3.out.at(-1)],
+          '(g3) superseded: exit 0',
+        )
+        .toEqual([0, 'verify-superseded', 'publish: superseded seq=7', rangeOkLine(2, [two])])
       expectPublishSafe(later, 2)
 
       const plan = await prepared([two])
@@ -1119,10 +1161,22 @@ describe('publish', () => {
       const redeploy = await publish(movedOn, ['--snapshot', String(productionSeq)])
       expect
         .soft(
-          [redeploy.exit, objectPosts(movedOn).length, redeploy.calls, redeploy.out.at(-1)],
+          [
+            redeploy.exit,
+            objectPosts(movedOn).length,
+            redeploy.calls,
+            redeploy.out.at(-2),
+            redeploy.out.at(-1),
+          ],
           '(g4) --snapshot <production seq>: zero POSTs, one hook, live',
         )
-        .toEqual([0, 0, ['hook', `verify ${productionSeq}`], `publish: live seq=${productionSeq}`])
+        .toEqual([
+          0,
+          0,
+          ['hook', `verify ${productionSeq}`],
+          `publish: live seq=${productionSeq}`,
+          rangeOkLine(productionSeq, [two]),
+        ])
       expectPublishSafe(movedOn, null)
       // g2's re-run is checked last, so a re-run that writes cannot stop g3 and g4 before they
       // run; nothing publishes to `dropped` after it, so the mark and the checked requests match.
@@ -1425,6 +1479,229 @@ describe('publish', () => {
         )
         .toBe(false)
       expectPublishSafe(stub, null)
+    },
+  )
+})
+
+// ---- Step 15b: the Range check and the Instant Rollback flag (§14.11: T15B-44, T15B-45) ----
+
+/** The story without its narration: no audio asset, no MP3 media. */
+async function withoutNarration(story: TestStory): Promise<TestStory> {
+  const pkg = {
+    ...story.pkg,
+    assets: story.pkg.assets.filter((asset) => asset.kind !== 'audio'),
+  } as StoryPackageV1
+  const bound = await withPackage(story, pkg)
+  return { ...bound, media: story.media.filter((m) => m.mime !== 'audio/mpeg') }
+}
+
+/** v2 of a fully bound story whose first narration has new bytes (a new MP3 path and its media). */
+async function newFirstNarration(story: TestStory): Promise<TestStory> {
+  const index = story.pkg.assets.findIndex((asset) => asset.kind === 'audio')
+  const asset = story.pkg.assets[index]!
+  const old = asset.variants[0]!
+  const bytes = mp3Bytes(`${story.storyId}:v2-narration`)
+  const sha256 = await sha256Hex(bytes)
+  const locale = asset.kind === 'audio' ? asset.locale : 'en'
+  const media: TestMedia = {
+    path: `media/${story.storyId}/${sha256}-${locale}.mp3`,
+    mime: 'audio/mpeg',
+    bytes,
+    sha256,
+  }
+  const pkg = {
+    ...story.pkg,
+    version: 2,
+    assets: story.pkg.assets.map((a, i) =>
+      i === index
+        ? { ...a, variants: [{ path: media.path, mime: media.mime, bytes: bytes.length }] }
+        : a,
+    ),
+  } as StoryPackageV1
+  const bound = await withPackage(story, pkg)
+  return { ...bound, media: [...story.media.filter((m) => m.path !== old.path), media] }
+}
+
+describe('publish: the Range check and the Instant Rollback flag (Step 15b)', () => {
+  it(
+    "T15B-44 the Range check in every publish kind: ids, --feature alone, rollback and the unchanged recovery run call range once after verify on the verified snapshot's first MP3; never after hook-failed, verify-timeout or a dry run; a failure is exit 4, no MP3 the skip line (A7, D15B-16, D15B-17, TP-1)",
+    TIMEOUT,
+    async () => {
+      const two = await storyOf()
+      const ids = await prepared([two])
+      const r1 = await publish(ids, [ID])
+      const mp3 = firstMp3Of([two])
+      const firstHead = planMediaHeads([{ pkg: two.pkg }], '')
+      expect(
+        firstHead.ok && firstHead.value.heads[0]?.mime === 'image/webp',
+        'precondition: a WebP head comes first in the package',
+      ).toBe(true)
+      expect
+        .soft(r1.rangeCalls, "(g1) publish two-paths: one target, two-paths' MP3 head, at index 2")
+        .toEqual([{ target: mp3, index: 2 }])
+      expectPublishSafe(ids, 2)
+
+      const twoB = await fullyBoundStory(two)
+      const riverB = await fullyBoundStory(await storyOf(RIVER))
+      const featured = await prepared([twoB, riverB], [twoB, riverB], [[ID, RIVER]])
+      const order = pointed(featured, 'production')!.snapshot.stories.map((e) => e.storyId)
+      const inOrder = order.map((id) => (id === ID ? twoB : riverB))
+      const r2 = await publish(featured, ['--feature', ID])
+      expect
+        .soft(
+          r2.rangeCalls.map((c) => c.target),
+          '(g2) --feature alone: the first MP3 head of N+1 in snapshot order',
+        )
+        .toEqual([firstMp3Of(inOrder)])
+      expectPublishSafe(featured, 3)
+
+      // g3: the history with v2's first narration new; --snapshot 3 reads v1's packages.
+      const v2 = await newFirstNarration(twoB)
+      const back = await prepared([twoB, riverB], [twoB, riverB], [[ID], [RIVER]])
+      await stageIn(back, [v2])
+      await approveIn(back, v2)
+      expect((await publish(back, [ID])).exit, 'precondition: v2 published').toBe(0)
+      expect(
+        firstMp3Of([v2]).path !== firstMp3Of([twoB]).path,
+        'precondition: the two first-MP3 paths differ',
+      ).toBe(true)
+      const rolled = await publish(back, ['--snapshot', '3'])
+      const three = snapshotAt(back, 3).stories.map((e) => (e.storyId === ID ? twoB : riverB))
+      expect
+        .soft(
+          rolled.rangeCalls.map((c) => c.target),
+          "(g3) --snapshot 3: v1's first MP3, not v2's",
+        )
+        .toEqual([firstMp3Of(three)])
+      expectPublishSafe(back, pointed(back, 'production')!.seq)
+
+      // g4: --snapshot <production seq> (unchanged): one call with production's first MP3.
+      const { stub: hist } = await history()
+      const productionSeq = pointed(hist, 'production')!.seq
+      const production = pointed(hist, 'production')!.snapshot.stories.map((e) =>
+        e.storyId === ID ? twoB : riverB,
+      )
+      const same = await publish(hist, ['--snapshot', String(productionSeq)])
+      expect
+        .soft(
+          same.rangeCalls.map((c) => c.target),
+          "(g4) --snapshot <production seq>: production's first MP3",
+        )
+        .toEqual([firstMp3Of(production)])
+      expectPublishSafe(hist, null)
+
+      // g5: hook failed, verify timeout, dry run.
+      const g5: Published[] = []
+      for (const options of [
+        { hook: 'failed' as const },
+        { verify: () => ({ kind: 'timeout' as const }) },
+      ]) {
+        const stub = await prepared([two])
+        g5.push(await publish(stub, [ID], options))
+        expectPublishSafe(stub, 2)
+      }
+      const dryStub = await prepared([two])
+      g5.push(await publish(dryStub, [ID, '--dry-run']))
+      expectPublishSafe(dryStub, null)
+      expect
+        .soft(
+          g5.map((r) => r.rangeCalls),
+          '(g5) hook failed, verify timeout, --dry-run: no range call',
+        )
+        .toEqual([[], [], []])
+
+      // g6: a Range failure; an MP3-less story.
+      const failing = await prepared([two])
+      const f = await publish(failing, [ID], {
+        range: () => ({ kind: 'failed', reason: 'status', status: 404 }),
+      })
+      expect
+        .soft(
+          [f.out.slice(-3), f.exit],
+          '(g6) a range failure: the failed line, the stop, RANGE_RECOVERY, exit 4',
+        )
+        .toEqual([
+          [
+            `publish: range check failed reason=status object=${sha12(mp3.sha256)}`,
+            'publish: stopped: range-check-failed',
+            RANGE_RECOVERY,
+          ],
+          4,
+        ])
+      expectPublishSafe(failing, 2)
+      const quiet = await withoutNarration(two)
+      const silent = await prepared([quiet])
+      const s = await publish(silent, [ID])
+      expect
+        .soft([s.out.at(-1), s.exit, s.rangeCalls], '(g6) an MP3-less story: the skip line, exit 0')
+        .toEqual(['publish: range check skipped: no MP3 in seq 2', 0, []])
+      expectPublishSafe(silent, 2)
+    },
+  )
+
+  it(
+    "T15B-45 the Instant Rollback flag at a verify timeout: below production's seq before the run, below the expected seq, or the hint; checks.rollbackFlag (A17, D15B-18, L19)",
+    TIMEOUT,
+    async () => {
+      const two = await storyOf()
+      const river = await storyOf(RIVER)
+      const timeoutAt = async (
+        lastSeq: number | null | undefined,
+        args: readonly string[] = [RIVER],
+      ) => {
+        const stub = await prepared([two, river], [two, river], [[ID]])
+        const r = await publish(stub, args, {
+          verify: () =>
+            lastSeq === undefined ? { kind: 'timeout' } : { kind: 'timeout', lastSeq },
+        })
+        expectPublishSafe(stub, args[0] === RIVER ? 3 : null)
+        return r
+      }
+      const flagOf = (r: Published) =>
+        (r.report?.checks as { rollbackFlag?: string } | undefined)?.rollbackFlag
+      const older =
+        "publish: live seq=1 is below seq=2, production's seq before this run: a Vercel Instant Rollback is the likely cause; Undo Rollback in Vercel, then re-run"
+      const g1 = await timeoutAt(1)
+      expect
+        .soft(
+          [g1.out.includes(older), g1.out.includes(VERIFY_TIMEOUT_HINT), flagOf(g1)],
+          '(g1) lastSeq 1: older than before, no hint',
+        )
+        .toEqual([true, false, 'older-than-before'])
+      const g2 = await timeoutAt(2)
+      expect
+        .soft([g2.out.at(-2), flagOf(g2)], '(g2) lastSeq 2: below the expected seq')
+        .toEqual([
+          'publish: live seq=2 is below seq=3: production serves an older deployment (a Vercel Instant Rollback stays in force until Undo Rollback; or a build failed or is still running)',
+          'older-live',
+        ])
+      for (const [label, lastSeq] of [
+        ['null', null],
+        ['3', 3],
+        ['omitted', undefined],
+      ] as const) {
+        const r = await timeoutAt(lastSeq)
+        expect
+          .soft([r.out.at(-2), flagOf(r)], `(g3) lastSeq ${label}: the hint`)
+          .toEqual([VERIFY_TIMEOUT_HINT, 'none'])
+      }
+      const g4 = await timeoutAt(1, ['--snapshot', '2'])
+      expect
+        .soft(
+          [
+            g4.out.at(-2)?.startsWith('publish: live seq=1 is below seq=2: production serves'),
+            flagOf(g4),
+          ],
+          '(g4) --snapshot <production seq>, lastSeq 1: older-live',
+        )
+        .toEqual([true, 'older-live'])
+      expect
+        .soft(g1.out.slice(-3), '(g5) the stop line, the flag line, then the recovery line')
+        .toEqual([
+          'publish: stopped: verify-timeout',
+          older,
+          'publish: recovery: publish --snapshot 3 redeploys production as it is',
+        ])
     },
   )
 })

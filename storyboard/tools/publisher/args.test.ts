@@ -8,6 +8,11 @@
 // D15-1, D15-7, D15-23, D15-28; test plan §14.2: T15A-1 to T15A-5 and T15A-68): approve and
 // publish, the new flags and their scope texts, the report-dir refusal order and the win32 segment
 // rule and fold. Nothing is written: every path below is a string only.
+//
+// Step 15b (P1-8d part b, design migration-input/p1-step15b-design.md §3.26, D15B-1, D15B-8,
+// D15B-19, D15B-26; test plan §14.2: T15B-1 and T15B-2, and the reviewed edits of §2.5 and 14.16):
+// `publish --unpublish <id> [--takedown]`, the `verify [--deep]` command, the ten-line usage and
+// the new message texts.
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -38,6 +43,8 @@ const PINNED_USAGE = [
   '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
   '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  verify [--deep] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -53,23 +60,28 @@ const FLAGS = [
   'feature',
   'snapshot',
   'package',
+  'unpublish',
+  'takedown',
+  'deep',
 ]
 /** Step 15a (TP-1): each flag outside its commands names the commands it is for. */
 const SCOPE_TEXTS: readonly string[] = [
   ...['packages', 'media', 'waivers'].map(
     (flag) => `usage: --${flag} is for validate and stage only`,
   ),
-  ...['dry-run', 'timeout-ms'].map(
-    (flag) => `usage: --${flag} is for stage, approve and publish only`,
-  ),
+  'usage: --dry-run is for stage, approve and publish only',
+  'usage: --timeout-ms is for stage, approve, publish and verify only',
   ...['answers-stdin', 'package'].map((flag) => `usage: --${flag} is for approve only`),
-  ...['feature', 'snapshot'].map((flag) => `usage: --${flag} is for publish only`),
+  ...['feature', 'snapshot', 'unpublish', 'takedown'].map(
+    (flag) => `usage: --${flag} is for publish only`,
+  ),
+  'usage: --deep is for verify only',
 ]
 /** Every usage message args.ts may give, typed here so a changed text turns T14-6 red. */
 const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: an argument is empty or holds a NUL character',
-  'usage: no command (validate, stage, approve, publish or help)',
-  'usage: unknown command (validate, stage, approve, publish or help)',
+  'usage: no command (validate, stage, approve, publish, verify or help)',
+  'usage: unknown command (validate, stage, approve, publish, verify or help)',
   'usage: help takes no arguments',
   'usage: a bare -- is not allowed',
   'usage: single-dash flags are not supported',
@@ -85,10 +97,14 @@ const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: --report-dir may not be a device or network path',
   'usage: approve takes exactly one story id',
   'usage: --package must be 12 to 64 lowercase hex characters',
-  'usage: publish needs story ids, --feature or --snapshot',
+  'usage: publish needs story ids, --feature, --snapshot or --unpublish',
   'usage: --snapshot cannot be combined with story ids',
   'usage: --snapshot must be a whole number from 1',
   'usage: --feature takes a story id or none',
+  'usage: --unpublish cannot be combined with story ids, --feature or --snapshot',
+  'usage: --unpublish takes a story id',
+  'usage: --takedown needs --unpublish <id>',
+  'usage: verify takes no story ids',
   'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
   'usage: --report-dir has a segment Windows cannot store as written',
   'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
@@ -413,7 +429,7 @@ const MSG = {
   oneId: 'usage: approve takes exactly one story id',
   packageRequired: 'usage: --package is required',
   packageForm: 'usage: --package must be 12 to 64 lowercase hex characters',
-  publishNeeds: 'usage: publish needs story ids, --feature or --snapshot',
+  publishNeeds: 'usage: publish needs story ids, --feature, --snapshot or --unpublish',
   snapshotWithIds: 'usage: --snapshot cannot be combined with story ids',
   snapshotForm: 'usage: --snapshot must be a whole number from 1',
   featureForm: 'usage: --feature takes a story id or none',
@@ -521,6 +537,8 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
       featureGiven: false,
       feature: null,
       snapshot: null,
+      unpublish: null,
+      takedown: false,
       dryRun: false,
       timeoutMs: 180000,
       reportDir: DEFAULT_REPORTS,
@@ -606,7 +624,7 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
     }
   })
 
-  it('T15A-3 flag scope: each flag outside its commands is usage naming its commands; --unpublish and --takedown are unknown flags (A1, CRIT-2)', () => {
+  it('T15A-3 flag scope: each flag outside its commands is usage naming its commands; --unpublished, --takedowns and --takedown2 are unknown flags (A1, CRIT-2)', () => {
     const approveBase = ['approve', 'a-b', '--package', P12]
     const inScope: [string, string[]][] = [
       ['validate', ['validate', '--all', ...IO, '--waivers', 'w', '--report-dir', 'r']],
@@ -639,7 +657,7 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
     g1.push([
       '--timeout-ms on validate',
       ['validate', 'a-b', ...IO, '--timeout-ms', '5'],
-      scopeText('timeout-ms', 'stage, approve and publish'),
+      scopeText('timeout-ms', 'stage, approve, publish and verify'),
     ])
     g1.push(['--all on stage', ['stage', 'a-b', ...IO, '--all'], MSG.allForValidate])
     g1.push(['--all on approve', [...approveBase, '--all'], MSG.allForValidate])
@@ -683,9 +701,9 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
       expect.soft(messageOf(parse(argv)), `(g2) near miss: ${id}`).toBe(text)
     }
     for (const argv of [
-      ['publish', 'a-b', '--unpublish'],
-      ['publish', 'a-b', '--takedown'],
-      ['publish', 'a-b', '--takedown=x'],
+      ['publish', 'a-b', '--unpublished'],
+      ['publish', 'a-b', '--takedowns'],
+      ['publish', 'a-b', '--takedown2'],
     ]) {
       expect
         .soft(messageOf(parse(argv)), `(g3) unknown flag: ${argv.join(' ')}`)
@@ -876,6 +894,218 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
         '(g4) platform linux accepts <root>/publıc',
       )
       .toBe(true)
+  })
+})
+
+// ---- Step 15b ----
+
+const MSG15B = {
+  needsValue: 'usage: --unpublish needs a value that is not empty and does not start with --',
+  unpublishForm: 'usage: --unpublish takes a story id',
+  unpublishTwice: 'usage: --unpublish is given more than once',
+  takedownValue: 'usage: --takedown takes no value',
+  takedownNeeds: 'usage: --takedown needs --unpublish <id>',
+  unpublishWith: 'usage: --unpublish cannot be combined with story ids, --feature or --snapshot',
+  publishNeeds: 'usage: publish needs story ids, --feature, --snapshot or --unpublish',
+  unpublishScope: 'usage: --unpublish is for publish only',
+  takedownScope: 'usage: --takedown is for publish only',
+  verifyIds: 'usage: verify takes no story ids',
+  dryRunScope: 'usage: --dry-run is for stage, approve and publish only',
+  deepValue: 'usage: --deep takes no value',
+  deepScope: 'usage: --deep is for verify only',
+  allScope: 'usage: --all is for validate only',
+  featureScope: 'usage: --feature is for publish only',
+  timeoutScope: 'usage: --timeout-ms is for stage, approve, publish and verify only',
+  unknownCommand: 'usage: unknown command (validate, stage, approve, publish, verify or help)',
+  noCommand: 'usage: no command (validate, stage, approve, publish, verify or help)',
+} as const
+
+describe('args: Step 15b unpublish, takedown and verify', () => {
+  it('T15B-1 publish --unpublish <id> [--takedown]: the value is a story id; exclusive with ids, --feature and --snapshot; --takedown needs it; each refusal gives its exact text (A1, D15B-1, D15B-8, D15B-26, L1)', () => {
+    const base = parse(['publish', '--unpublish', 'a-b'])
+    expect(base.ok, 'precondition: publish --unpublish a-b parses ok').toBe(true)
+    expect.soft(base, '(g1) accepted: publish --unpublish a-b, each field exact').toEqual({
+      ok: true,
+      command: 'publish',
+      ids: [],
+      unpublish: 'a-b',
+      takedown: false,
+      featureGiven: false,
+      feature: null,
+      snapshot: null,
+      dryRun: false,
+      timeoutMs: 180000,
+      reportDir: DEFAULT_REPORTS,
+      reportDirGiven: false,
+    })
+    const pick = (result: ParsedArgs) =>
+      result.ok && result.command === 'publish'
+        ? {
+            ids: result.ids,
+            unpublish: result.unpublish,
+            takedown: result.takedown,
+            dryRun: result.dryRun,
+            timeoutMs: result.timeoutMs,
+            reportDirGiven: result.reportDirGiven,
+          }
+        : messageOf(result)
+    const id64 = 'a'.repeat(64)
+    const plain = { ids: [], takedown: false, dryRun: false, timeoutMs: 180000 }
+    const accepted: [string, string[], unknown][] = [
+      [
+        '--unpublish=lion-and-hare',
+        ['publish', '--unpublish=lion-and-hare'],
+        { ...plain, unpublish: 'lion-and-hare', reportDirGiven: false },
+      ],
+      [
+        '--unpublish a-b --takedown --dry-run --timeout-ms 5000 --report-dir r',
+        [
+          'publish',
+          '--unpublish',
+          'a-b',
+          '--takedown',
+          '--dry-run',
+          '--timeout-ms',
+          '5000',
+          '--report-dir',
+          'r',
+        ],
+        {
+          ids: [],
+          unpublish: 'a-b',
+          takedown: true,
+          dryRun: true,
+          timeoutMs: 5000,
+          reportDirGiven: true,
+        },
+      ],
+      [
+        'a 64-character id',
+        ['publish', '--unpublish', id64],
+        { ...plain, unpublish: id64, reportDirGiven: false },
+      ],
+      [
+        'publish a-b',
+        ['publish', 'a-b'],
+        { ...plain, ids: ['a-b'], unpublish: null, reportDirGiven: false },
+      ],
+    ]
+    for (const [id, argv, want] of accepted) {
+      expect.soft(pick(parse(argv)), `(g1) accepted: ${id}`).toEqual(want)
+    }
+
+    const refused: [string, string[], string][] = [
+      ['--unpublish (no value)', ['publish', '--unpublish'], MSG15B.needsValue],
+      ['--unpublish=', ['publish', '--unpublish='], MSG15B.needsValue],
+      ['--unpublish --dry-run', ['publish', '--unpublish', '--dry-run'], MSG15B.needsValue],
+      ...['Lion', 'a--b', 'ab', 'a'.repeat(65), 'a/b', 'a-b\uD800'].map(
+        (value): [string, string[], string] => [
+          `--unpublish ${JSON.stringify(value)}`,
+          ['publish', '--unpublish', value],
+          MSG15B.unpublishForm,
+        ],
+      ),
+      [
+        'a second --unpublish',
+        ['publish', '--unpublish', 'a-b', '--unpublish', 'c-d'],
+        MSG15B.unpublishTwice,
+      ],
+      ['--takedown=x', ['publish', '--unpublish', 'a-b', '--takedown=x'], MSG15B.takedownValue],
+      ['publish --takedown', ['publish', '--takedown'], MSG15B.takedownNeeds],
+      [
+        'publish --takedown --dry-run',
+        ['publish', '--takedown', '--dry-run'],
+        MSG15B.takedownNeeds,
+      ],
+      ['publish a-b --takedown', ['publish', 'a-b', '--takedown'], MSG15B.takedownNeeds],
+      ['--unpublish a-b c-d', ['publish', '--unpublish', 'a-b', 'c-d'], MSG15B.unpublishWith],
+      [
+        '--unpublish a-b --feature none',
+        ['publish', '--unpublish', 'a-b', '--feature', 'none'],
+        MSG15B.unpublishWith,
+      ],
+      [
+        '--unpublish a-b --snapshot 3',
+        ['publish', '--unpublish', 'a-b', '--snapshot', '3'],
+        MSG15B.unpublishWith,
+      ],
+      ['publish', ['publish'], MSG15B.publishNeeds],
+    ]
+    for (const [id, argv, text] of refused) {
+      expect.soft(messageOf(parse(argv)), `(g2) refused with its text: ${id}`).toBe(text)
+    }
+
+    const scoped: [string, string[], string][] = [
+      [
+        '--unpublish on validate',
+        ['validate', 'a-b', ...IO, '--unpublish', 'a-b'],
+        MSG15B.unpublishScope,
+      ],
+      [
+        '--unpublish on stage',
+        ['stage', 'a-b', ...IO, '--unpublish', 'a-b'],
+        MSG15B.unpublishScope,
+      ],
+      [
+        '--unpublish on approve',
+        ['approve', 'a-b', '--package', P12, '--unpublish', 'a-b'],
+        MSG15B.unpublishScope,
+      ],
+      ['--takedown on verify', ['verify', '--takedown'], MSG15B.takedownScope],
+    ]
+    for (const [id, argv, text] of scoped) {
+      expect.soft(messageOf(parse(argv)), `(g3) scope: ${id}`).toBe(text)
+    }
+  })
+
+  it('T15B-2 verify [--deep] [--timeout-ms <n>] [--report-dir <dir>]: no ids, no --dry-run, --deep for verify only; the command list in the messages (A1, D15B-19, D15B-26, L1)', () => {
+    const plain = parse(['verify'])
+    expect(plain.ok, 'precondition: verify parses ok').toBe(true)
+    expect.soft(plain, '(g1) accepted: verify, each field exact').toEqual({
+      ok: true,
+      command: 'verify',
+      deep: false,
+      timeoutMs: 180000,
+      reportDir: DEFAULT_REPORTS,
+      reportDirGiven: false,
+    })
+    expect
+      .soft(
+        parse(['verify', '--deep', '--timeout-ms', '5000', '--report-dir', 'r']),
+        '(g1) accepted: verify --deep --timeout-ms 5000 --report-dir r',
+      )
+      .toEqual({
+        ok: true,
+        command: 'verify',
+        deep: true,
+        timeoutMs: 5000,
+        reportDir: resolve(CWD, 'r'),
+        reportDirGiven: true,
+      })
+
+    const refused: [string, string[], string][] = [
+      ['verify a-b', ['verify', 'a-b'], MSG15B.verifyIds],
+      ['verify --dry-run', ['verify', '--dry-run'], MSG15B.dryRunScope],
+      ['verify --deep=1', ['verify', '--deep=1'], MSG15B.deepValue],
+      ['publish a-b --deep', ['publish', 'a-b', '--deep'], MSG15B.deepScope],
+      ['verify --all', ['verify', '--all'], MSG15B.allScope],
+      ['verify --feature a-b', ['verify', '--feature', 'a-b'], MSG15B.featureScope],
+      [
+        'validate a-b --packages p --media m --timeout-ms 5',
+        ['validate', 'a-b', ...IO, '--timeout-ms', '5'],
+        MSG15B.timeoutScope,
+      ],
+    ]
+    for (const [id, argv, text] of refused) {
+      expect.soft(messageOf(parse(argv)), `(g2) refused with its text: ${id}`).toBe(text)
+    }
+
+    for (const name of ['Verify', 'verifY', 'verify2']) {
+      expect
+        .soft(messageOf(parse([name])), `(g3) unknown command: ${name}`)
+        .toBe(MSG15B.unknownCommand)
+    }
+    expect.soft(messageOf(parse([])), '(g3) no command').toBe(MSG15B.noCommand)
   })
 })
 

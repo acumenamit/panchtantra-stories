@@ -7,28 +7,42 @@
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MEDIA_ORIGIN } from '../../src/config/security-headers'
+import { CONTENT_PUBLIC_BASE, MEDIA_ORIGIN } from '../../src/config/security-headers'
+import { planMediaHeads } from '../../src/core/content/media'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { runCli, type CliDeps } from './cli'
+import { createContentDeleter, type ContentDeleterOptions } from './content-deleter'
 import { Secret, readDeployHookUrl, readSiteUrl } from './env'
 import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
 import {
   answersOf,
   approvalRecordOf,
   buildTestStories,
+  hashListOf,
   waiverBytesOf,
   waiverFileOf,
+  writeAudioTree,
   writeStageInputs,
   type StageInputDirs,
   type TestStory,
 } from './stage-testkit'
-import type { VerifyOptions, VerifyOutcome } from './verify'
+import { classOfPath } from './storage-layout'
+import type { LiveBuildDetail, VerifyOptions, VerifyOutcome } from './verify'
 import { createStorageClient, type StorageClientOptions } from './storage'
 import {
   expectNoUnexpected,
@@ -116,6 +130,8 @@ interface Harness {
   readonly err: string[]
   readonly calls: string[]
   readonly options: StorageClientOptions[]
+  /** Step 15b (TP-2): the public reads, never in `calls`. */
+  readonly publicCalls: string[]
 }
 
 /** runCli's deps (§14.8 setup); `stub` null means no client may be built. */
@@ -124,6 +140,7 @@ function harness(stub: StorageStub | null, over: Partial<CliDeps> = {}): Harness
   const err: string[] = []
   const calls: string[] = []
   const options: StorageClientOptions[] = []
+  const publicCalls: string[] = []
   let t = Date.parse(NOW)
   const deps: CliDeps = {
     env: { SUPABASE_URL: MEDIA_ORIGIN, SUPABASE_SECRET_KEY: FAKE_KEY },
@@ -161,9 +178,26 @@ function harness(stub: StorageStub | null, over: Partial<CliDeps> = {}): Harness
     stdinDeadline: unexpected(calls, 'stdinDeadline'),
     triggerHook: unexpected(calls, 'triggerHook'),
     verify: unexpected(calls, 'verify'),
+    // Step 15b (TP-2): the deleter factory throws unless a test passes its own; the Range check
+    // answers ok with D15B-16's middle range into publicCalls; the other public reads throw.
+    createDeleter: unexpected(calls, 'createDeleter'),
+    publicReads: {
+      checkRange: async (_base, target) => {
+        publicCalls.push(`range ${target.path}`)
+        const start = Math.floor(target.bytes / 2)
+        return {
+          kind: 'ok',
+          start,
+          end: Math.min(target.bytes - 1, start + 1023),
+          size: target.bytes,
+        }
+      },
+      readPublicObject: unexpected(publicCalls, 'readPublicObject'),
+      checkLanding: unexpected(publicCalls, 'checkLanding'),
+    },
     ...over,
   }
-  return { deps, out, err, calls, options }
+  return { deps, out, err, calls, options, publicCalls }
 }
 
 /** A dep that records its call, then throws: no test reaches it unless it passes its own. */
@@ -1046,6 +1080,7 @@ describe('runCli: approve and publish (Step 15a)', () => {
         [
           invalid.out.at(-1),
           incomplete.out.at(-1),
+          live.out.at(-2),
           lastLine(live.out),
           lastLine(failed.out),
           malformed.out.at(-1),
@@ -1055,6 +1090,7 @@ describe('runCli: approve and publish (Step 15a)', () => {
         'approve: stopped: answers-invalid',
         'approve: stopped: approval-review-incomplete',
         'publish: live seq=2',
+        rangeOkLine(2, story),
         'publish: recovery: publish --snapshot 2 redeploys production as it is',
         'publish: stopped: configuration',
       ])
@@ -1273,6 +1309,596 @@ describe('runCli: approve and publish (Step 15a)', () => {
       expect
         .soft(channelsOf(failed, 'publish').includes('S15ACANARY'), '(g2) no canary in any output')
         .toBe(false)
+    },
+  )
+})
+
+// ---- Step 15b: unpublish, takedown and verify through runCli (§14.13: T15B-50 to T15B-54) ----
+
+const TAKEDOWN_IN_ACTIONS =
+  'publish: --takedown runs on this PC only; GitHub Actions refuses it (spec §8)'
+const riverStones = async () => (await testStories()).find((s) => s.storyId === 'river-stones')!
+
+/** The first audio/mpeg head of a story's package, as a Range target. */
+function mp3TargetOf(story: TestStory) {
+  const plan = planMediaHeads([{ pkg: story.pkg }], '')
+  if (!plan.ok) throw new Error('test setup: media plan')
+  const head = plan.value.heads.find((h) => h.mime === 'audio/mpeg')!
+  const sha256 = String(classOfPath('content', head.path)?.fields.sha256)
+  return { path: head.path, bytes: head.bytes, sha256 }
+}
+/** The range line the TP-2 harness gives for a story's first MP3 (D15B-16's middle range). */
+function rangeOkLine(seq: number, story: TestStory): string {
+  const target = mp3TargetOf(story)
+  const start = Math.floor(target.bytes / 2)
+  const end = Math.min(target.bytes - 1, start + 1023)
+  return `publish: range check ok seq=${seq} bytes=${start}-${end}/${target.bytes} object=${target.sha256.slice(0, 12)}`
+}
+
+/**
+ * A stub (deletes on) with the three stories staged, two-paths and river-stones approved and both
+ * published through runCli (production seq 2); the audio tree and hash list under `root`.
+ */
+async function publishedStub(key = FAKE_KEY, env = publishEnv(key)): Promise<StorageStub> {
+  const list = await testStories()
+  const dirs = writeStageInputs(root, list)
+  const stub = await startStorageStub({ apikey: key, deletes: true })
+  stubs.push(stub)
+  for (const story of list) {
+    stub.put(
+      'masters',
+      `waivers/${story.storyId}/${story.waiverSha256}.json`,
+      story.waiverBytes,
+      'application/json',
+    )
+  }
+  const staged = await runCli(
+    ['stage', ...list.map((s) => s.storyId), ...dirFlags(dirs)],
+    harness(stub, { env }).deps,
+  )
+  if (staged !== 0) throw new Error(`test setup: stage exited ${staged}`)
+  for (const story of [await twoPaths(), await riverStones()]) {
+    const h = harness(stub, { env, ...stdinOf(JSON.stringify(answersOf(story))) })
+    const argv = approveArgv(story, ['--answers-stdin', '--report-dir', reportsDir()])
+    if ((await runCli(argv, h.deps)) !== 0) throw new Error('test setup: approve')
+  }
+  const p = harness(stub, { env, ...tailFakes().deps })
+  if ((await runCli(['publish', 'two-paths', 'river-stones'], p.deps)) !== 0) {
+    throw new Error('test setup: publish')
+  }
+  writeAudioTree(root, list)
+  writeFileSync(join(root, 'migration-input', 'audio', 'SHA256SUMS.txt'), hashListOf(list))
+  return stub
+}
+
+/** A verify outcome whose sample carries the build the production pointer names. */
+async function liveWithBuild(stub: StorageStub, seq: number): Promise<VerifyOutcome> {
+  const pointer = JSON.parse(
+    new TextDecoder().decode(stub.object('content', 'catalogue/production.json')!.bytes),
+  ) as { snapshotPath: string }
+  const bytes = stub.object('content', pointer.snapshotPath)!.bytes
+  const snapshot = JSON.parse(new TextDecoder().decode(bytes)) as {
+    featuredStoryId: string | null
+    stories: { storyId: string; version: number; packageSha256: string }[]
+  }
+  const build: LiveBuildDetail = {
+    snapshotSha256: await sha256Hex(new Uint8Array(bytes)),
+    featuredStoryId: snapshot.featuredStoryId,
+    stories: snapshot.stories.map((e) => ({
+      storyId: e.storyId,
+      version: e.version,
+      packageSha256: e.packageSha256,
+    })),
+    excluded: [],
+  }
+  const outcome = liveOutcome(seq)
+  if (outcome.kind !== 'live') throw new Error('test setup: live outcome')
+  return { ...outcome, sample: { ...outcome.sample, build } }
+}
+
+/** Public reads that answer ok and record each call. */
+function okPublicReads(calls: string[]): CliDeps['publicReads'] {
+  return {
+    checkRange: async (_base, target) => {
+      calls.push(`range ${target.path}`)
+      const start = Math.floor(target.bytes / 2)
+      return {
+        kind: 'ok',
+        start,
+        end: Math.min(target.bytes - 1, start + 1023),
+        size: target.bytes,
+      }
+    },
+    readPublicObject: async (_base, object) => {
+      calls.push(`object ${object.path}`)
+      return { kind: 'ok' }
+    },
+    checkLanding: async (_site, page) => {
+      calls.push(`landing ${page.storyId} ${page.locale}`)
+      return { kind: 'ok' }
+    },
+  }
+}
+
+/** stdout, stderr and both reports of `command` in the reports dir. */
+const channels15b = (h: Harness, command: 'publish' | 'verify') =>
+  [
+    ...h.out,
+    ...h.err,
+    readText(join(reportsDir(), `publisher-${command}.json`)),
+    readText(join(reportsDir(), `publisher-${command}.md`)),
+  ].join('\n')
+
+describe('runCli: unpublish, takedown and verify (Step 15b)', () => {
+  it(
+    'T15B-50 --takedown in Actions: takedown-here-only after the report-dir refusal and before the env file, the credentials or any client, dry run included; pc mode and a plain unpublish proceed (A8, L6, D15B-8)',
+    SLOW,
+    async () => {
+      for (const extra of [[], ['--dry-run']]) {
+        const h = harness(null, { ...ACTIONS, env: publishEnv() })
+        const exit = await runCli(
+          ['publish', '--unpublish', 'two-paths', '--takedown', ...extra],
+          h.deps,
+        )
+        expect
+          .soft(
+            [exit, h.out, h.err, h.calls],
+            `(g1) actions --takedown ${extra.join(' ')}: takedown-here-only`,
+          )
+          .toEqual([2, ['publish: stopped: takedown-here-only'], [TAKEDOWN_IN_ACTIONS], []])
+      }
+      const rd = harness(null, { ...ACTIONS, env: publishEnv() })
+      const exitRd = await runCli(
+        ['publish', '--unpublish', 'two-paths', '--takedown', '--report-dir', 'r'],
+        rd.deps,
+      )
+      expect
+        .soft(
+          [exitRd, rd.out, rd.err],
+          '(g2) actions --takedown --report-dir: the report-dir refusal only',
+        )
+        .toEqual([2, [], [REPORT_DIR_IN_ACTIONS]])
+      const plain = harness(await newStub([]), { ...ACTIONS, env: publishEnv() })
+      await runCli(['publish', '--unpublish', 'two-paths'], plain.deps)
+      expect
+        .soft(
+          [plain.calls.includes('factory'), plain.calls.includes('loadEnv')],
+          '(g3) actions with a plain --unpublish: the factory, no loadEnv',
+        )
+        .toEqual([true, false])
+      const stub = await publishedStub()
+      const pc = harness(stub, { env: publishEnv() })
+      const exitPc = await runCli(
+        ['publish', '--unpublish', 'two-paths', '--takedown', '--dry-run'],
+        pc.deps,
+      )
+      expect
+        .soft(
+          [
+            exitPc,
+            pc.calls.includes('loadEnv'),
+            pc.calls.includes('factory'),
+            pc.calls.includes('createDeleter'),
+          ],
+          '(g4) win32 pc --takedown --dry-run: loadEnv, the factory, no createDeleter, exit 0',
+        )
+        .toEqual([0, true, true, false])
+      const vercel = harness(null, { runContext: { VERCEL: '1' }, env: publishEnv() })
+      const exitV = await runCli(['publish', '--unpublish', 'two-paths', '--takedown'], vercel.deps)
+      expect
+        .soft([exitV, vercel.out], '(g5) VERCEL=1 with --takedown: run-context-refused')
+        .toEqual([2, ['publish: stopped: run-context-refused']])
+    },
+  )
+
+  it(
+    'T15B-51 createDeleter: no default; called once, lazily after verify, only in pc mode with --takedown, with the project origin, the Secret, the story id and the timeout (A14, D15B-14)',
+    SLOW,
+    async () => {
+      const stub = await publishedStub()
+      const log: string[] = []
+      const made: ContentDeleterOptions[] = []
+      const recording = (target: StorageStub): Partial<CliDeps> => ({
+        env: publishEnv(),
+        triggerHook: async () => {
+          log.push('hook')
+          return TRIGGERED
+        },
+        verify: async (o) => {
+          log.push('verify')
+          return liveOutcome(o.expectedSeq)
+        },
+        createDeleter: (opts) => {
+          log.push('createDeleter')
+          made.push(opts)
+          return createContentDeleter({
+            supabaseUrl: target.origin,
+            secretKey: opts.secretKey,
+            storyId: opts.storyId,
+            ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+          })
+        },
+      })
+      const h = harness(stub, recording(stub))
+      const exit = await runCli(
+        ['publish', '--unpublish', 'two-paths', '--takedown', '--timeout-ms', '5000'],
+        h.deps,
+      )
+      expect(exit, 'precondition: the takedown run exits 0').toBe(0)
+      expect
+        .soft(
+          [
+            log.filter((c) => c === 'createDeleter').length,
+            log.indexOf('createDeleter') > log.indexOf('verify'),
+            made.map((o) => [
+              o.supabaseUrl.origin,
+              o.secretKey instanceof Secret,
+              o.storyId,
+              o.timeoutMs,
+            ]),
+          ],
+          '(g1) one createDeleter, after verify, with the origin, the Secret, the id and the timeout',
+        )
+        .toEqual([1, true, [[MEDIA_ORIGIN, true, 'two-paths', 5000]]])
+      log.length = 0
+      const exits: number[] = []
+      for (const argv of [
+        ['publish', '--unpublish', 'two-paths'],
+        ['publish', '--unpublish', 'two-paths', '--takedown', '--dry-run'],
+      ]) {
+        const fresh = await publishedStub()
+        exits.push(await runCli(argv, harness(fresh, recording(fresh)).deps))
+      }
+      expect
+        .soft(
+          [exits, log.includes('createDeleter')],
+          '(g2) none without --takedown, none with --dry-run (both runs exit 0)',
+        )
+        .toEqual([[0, 0], false])
+      const bare = await publishedStub()
+      const before = bare.requests.length
+      const none = harness(bare, {
+        ...recording(bare),
+        createDeleter: undefined as unknown as CliDeps['createDeleter'],
+      })
+      const exitNone = await runCli(
+        ['publish', '--unpublish', 'two-paths', '--takedown'],
+        none.deps,
+      )
+      expect
+        .soft(
+          [
+            exitNone !== 0,
+            escapes,
+            bare.requests.slice(before).filter((r) => r.method === 'DELETE').length,
+          ],
+          '(g3) createDeleter undefined: a non-zero exit, 0 escapes, no DELETE',
+        )
+        .toEqual([true, 0, 0])
+    },
+  )
+
+  it(
+    "T15B-52 publish adapters: verify gets absentStoryIds for unpublish only and returns lastSeq on a timeout; range gets CONTENT_PUBLIC_BASE, the target and the run's sleep; publicReads has no default (A17, A20, D15B-18, D15B-21)",
+    SLOW,
+    async () => {
+      const stub = await publishedStub()
+      const fakes = tailFakes()
+      const h = harness(stub, { env: publishEnv(), ...fakes.deps })
+      expect(
+        await runCli(['publish', '--unpublish', 'two-paths'], h.deps),
+        'precondition: the unpublish',
+      ).toBe(0)
+      expect
+        .soft(fakes.verifies[0]?.absentStoryIds, '(g1) unpublish: verify gets absentStoryIds')
+        .toEqual(['two-paths'])
+      const timed = await publishedStub()
+      const slow = tailFakes(undefined, async (o) => ({
+        kind: 'timeout',
+        expectedSeq: o.expectedSeq,
+        samples: 6,
+        regressions: [],
+        lastSeq: 1,
+      }))
+      const t = harness(timed, { env: publishEnv(), ...slow.deps })
+      await runCli(['publish', '--unpublish', 'two-paths'], t.deps)
+      expect
+        .soft(
+          t.out.includes(
+            "publish: live seq=1 is below seq=2, production's seq before this run: a Vercel Instant Rollback is the likely cause; Undo Rollback in Vercel, then re-run",
+          ),
+          '(g2) a timeout with lastSeq 1 after production moved 2 → 3: the older-than-before line',
+        )
+        .toBe(true)
+      const { stub: one } = await approvedStub()
+      const seen: { base: string; path: string; sleep: unknown }[] = []
+      const r = harness(one, {
+        env: publishEnv(),
+        ...tailFakes().deps,
+        publicReads: {
+          checkRange: async (base, target, options) => {
+            seen.push({ base: base.href, path: target.path, sleep: options?.sleep })
+            return { kind: 'ok', start: 0, end: 0, size: target.bytes }
+          },
+          readPublicObject: unexpected([], 'readPublicObject'),
+          checkLanding: unexpected([], 'checkLanding'),
+        },
+      })
+      expect(await runCli(['publish', 'two-paths'], r.deps), 'precondition: the publish').toBe(0)
+      expect
+        .soft(
+          seen.map((s) => [
+            s.base === new URL(CONTENT_PUBLIC_BASE).href,
+            s.path,
+            s.sleep === r.deps.sleep,
+          ]),
+          "(g3) one checkRange: the public base, two-paths' MP3, the run's sleep",
+        )
+        .toEqual([[true, mp3TargetOf(await twoPaths()).path, true]])
+      const { stub: bareStub } = await approvedStub()
+      const bare = harness(bareStub, {
+        env: publishEnv(),
+        ...tailFakes().deps,
+        publicReads: undefined as unknown as CliDeps['publicReads'],
+      })
+      const exitBare = await runCli(['publish', 'two-paths'], bare.deps)
+      expect
+        .soft([exitBare !== 0, escapes], '(g4) publicReads undefined: a non-zero exit, 0 escapes')
+        .toEqual([true, 0])
+    },
+  )
+
+  it(
+    'T15B-53 the verify command through runCli: pc and actions modes, credentials and the site URL without the hook URL, ids refused, detail asked, the client used read-only (A18, D15B-19)',
+    SLOW,
+    async () => {
+      const stub = await publishedStub()
+      const env: Record<string, string> = { ...publishEnv() }
+      delete env.VERCEL_DEPLOY_HOOK_PRODUCTION
+      const verifies: VerifyOptions[] = []
+      const publicCalls: string[] = []
+      const verifyFake: Partial<CliDeps> = {
+        env,
+        verify: async (o) => {
+          verifies.push(o)
+          return liveWithBuild(stub, o.expectedSeq)
+        },
+        publicReads: okPublicReads(publicCalls),
+      }
+      const before = stub.requests.length
+      const h = harness(stub, verifyFake)
+      const exit = await runCli(['verify', '--report-dir', reportsDir()], h.deps)
+      expect
+        .soft(
+          [
+            h.calls,
+            verifies[0]?.detail,
+            verifies[0]?.siteUrl.href,
+            verifies[0]?.expectedSeq,
+            exit,
+            existsSync(join(reportsDir(), 'publisher-verify.json')),
+          ],
+          '(g1) pc: loadEnv, the factory, detail, the site URL, expected 2, exit 0, the report',
+        )
+        .toEqual([['loadEnv', 'factory'], true, `${SITE_URL}/`, 2, 0, true])
+      expect
+        .soft(
+          stub.requests
+            .slice(before)
+            .filter(
+              (r) =>
+                (r.method === 'POST' && r.pathname !== '/storage/v1/object/list/content') ||
+                r.method === 'DELETE',
+            ).length,
+          '(g5) no object POST and no DELETE',
+        )
+        .toBe(0)
+      rmSync(reportsDir(), { recursive: true, force: true })
+      const actions = harness(stub, { ...verifyFake, ...ACTIONS })
+      const exitA = await runCli(['verify'], actions.deps)
+      expect
+        .soft(
+          [
+            exitA,
+            actions.calls.includes('loadEnv'),
+            existsSync(join(defaultReportDir(), 'publisher-verify.json')),
+            existsSync(reportsDir()),
+          ],
+          '(g2) actions: no loadEnv, no report',
+        )
+        .toEqual([0, false, false, false])
+      const rdA = harness(null, { ...verifyFake, ...ACTIONS })
+      expect
+        .soft(
+          [await runCli(['verify', '--report-dir', 'x'], rdA.deps), rdA.err],
+          '(g2) actions --report-dir',
+        )
+        .toEqual([2, [REPORT_DIR_IN_ACTIONS]])
+      const noSite: Record<string, string> = { ...env }
+      delete noSite.NEXT_PUBLIC_SITE_URL
+      const site = readSiteUrl(noSite)
+      const unset = harness(null, { env: noSite })
+      const exitU = await runCli(['verify'], unset.deps)
+      expect
+        .soft(
+          [exitU, unset.out, unset.err, unset.calls.includes('factory')],
+          '(g3) the site URL unset: configuration, by name, no factory',
+        )
+        .toEqual([
+          2,
+          ['verify: stopped: configuration'],
+          [`verify: ${site.ok ? '' : site.reason}`],
+          false,
+        ])
+      const noKey = harness(null, {
+        env: { SUPABASE_URL: MEDIA_ORIGIN, NEXT_PUBLIC_SITE_URL: SITE_URL },
+      })
+      expect
+        .soft(
+          [await runCli(['verify'], noKey.deps), noKey.out],
+          '(g3) credentials missing: configuration',
+        )
+        .toEqual([2, ['verify: stopped: configuration']])
+      const other = harness(null, { env: { ...env, SUPABASE_URL: OTHER_PROJECT } })
+      expect
+        .soft(
+          [await runCli(['verify'], other.deps), other.out],
+          '(g3) another origin: project-mismatch',
+        )
+        .toEqual([2, ['verify: stopped: project-mismatch']])
+      const ids = harness(null, { env })
+      expect
+        .soft(
+          [await runCli(['verify', 'a-b'], ids.deps), ids.err],
+          '(g4) verify a-b: the usage text',
+        )
+        .toEqual([2, ['usage: verify takes no story ids']])
+      mkdirSync(join(root, 'public'), { recursive: true })
+      symlinkSync(join(root, 'public'), join(root, 'rd'), 'junction')
+      const quiet = stub.requests.length
+      verifies.length = 0
+      const junction = harness(stub, verifyFake)
+      const exitJ = await runCli(['verify', '--report-dir', join(root, 'rd', 'x')], junction.deps)
+      const written = (readdirSync(root, { recursive: true }) as string[]).filter((n) =>
+        n.endsWith('publisher-verify.json'),
+      )
+      expect
+        .soft(
+          [
+            exitJ,
+            junction.err.some((l) => l.includes('report-dir refused')),
+            stub.requests.length - quiet,
+            verifies.length,
+            written,
+          ],
+          '(g6) a junction to public/: exit 2, the refusal line, no request, no verify call, no report',
+        )
+        .toEqual([2, true, 0, 0, []])
+    },
+  )
+
+  it(
+    'T15B-54 privacy through runCli for unpublish, takedown and verify: the canary key and the hook URL reach the run and appear in no channel, on success and on each refusal (A28, L25, AUD-4)',
+    SLOW,
+    async () => {
+      const key = ['sb', 'secret', 'S15BCANARYkey0123456789'].join('_')
+      const hookText = [
+        'https://api.vercel.com/v1/integrations/deploy',
+        'S15BCANARYproject',
+        'S15BCANARYhook',
+      ].join('/')
+      const hookPath = '/v1/integrations/deploy/S15BCANARYproject/S15BCANARYhook'
+      const env: Record<string, string> = {
+        SUPABASE_URL: MEDIA_ORIGIN,
+        SUPABASE_SECRET_KEY: key,
+        VERCEL_DEPLOY_HOOK_PRODUCTION: hookText,
+        NEXT_PUBLIC_SITE_URL: 'https://s15b-site.example',
+      }
+      const leaks = (text: string) =>
+        ['S15BCANARY', hookText, hookPath, key].filter((value) => text.includes(value))
+      const texts: string[] = []
+      const stub = await publishedStub(key, env)
+      const fakes = tailFakes()
+      const secrets: string[] = []
+      const success = harness(stub, {
+        env,
+        ...fakes.deps,
+        createClient: (opts) => {
+          secrets.push(opts.secretKey.reveal())
+          return createStorageClient({ supabaseUrl: stub.origin, secretKey: opts.secretKey })
+        },
+      })
+      await runCli(
+        ['publish', '--unpublish', 'two-paths', '--report-dir', reportsDir()],
+        success.deps,
+      )
+      expect(
+        [fakes.hooks[0]?.hookUrl.reveal() === hookText, secrets[0] === key],
+        'precondition: the hook URL and the key reached the run',
+      ).toEqual([true, true])
+      texts.push(channels15b(success, 'publish'))
+      const run502 = harness(stub, {
+        env,
+        ...tailFakes().deps,
+        createDeleter: (opts) =>
+          createContentDeleter({
+            supabaseUrl: stub.origin,
+            secretKey: opts.secretKey,
+            storyId: opts.storyId,
+            fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+              if (init?.method === 'DELETE') {
+                return new Response(JSON.stringify({ error: key.slice('sb_secret_'.length) }), {
+                  status: 502,
+                  headers: { 'content-type': 'application/json' },
+                })
+              }
+              return globalThis.fetch(input, init)
+            }) as typeof fetch,
+          }),
+      })
+      await runCli(
+        ['publish', '--unpublish', 'two-paths', '--takedown', '--report-dir', reportsDir()],
+        run502.deps,
+      )
+      expect(
+        lastLine(run502.out),
+        'precondition: the takedown ended with its recovery line',
+      ).toMatch(/re-runs the remaining steps$/)
+      texts.push(channels15b(run502, 'publish'))
+      // river-stones' waiver: the only file the current snapshots still name after the unpublish.
+      const river = await riverStones()
+      stub.put(
+        'masters',
+        `waivers/river-stones/${river.waiverSha256}.json`,
+        waiverBytesOf({
+          ...waiverFileOf('river-stones'),
+          basis: 'S15BCANARYbasis',
+          notes: ['S15BCANARYnote'],
+          recordedBy: 'S15BCANARYby',
+        }),
+        'application/json',
+      )
+      const deep = harness(stub, {
+        env,
+        verify: async (o) => liveWithBuild(stub, o.expectedSeq),
+        publicReads: okPublicReads([]),
+      })
+      await runCli(['verify', '--deep', '--report-dir', reportsDir()], deep.deps)
+      expect(
+        deep.out.some((l) => l.startsWith('verify: deep mismatch waiver')),
+        'precondition: deep read the canary waiver',
+      ).toBe(true)
+      texts.push(channels15b(deep, 'verify'))
+      expect
+        .soft(leaks(texts.join('\n')), '(g1) no canary, hook URL, its path or key in any channel')
+        .toEqual([])
+
+      const refusals: string[] = []
+      const actions = harness(null, { ...ACTIONS, env })
+      await runCli(['publish', '--unpublish', 'two-paths', '--takedown'], actions.deps)
+      expect(
+        [
+          actions.deps.env.SUPABASE_SECRET_KEY === key,
+          actions.deps.env.VERCEL_DEPLOY_HOOK_PRODUCTION === hookText,
+          actions.out,
+        ],
+        'precondition: the actions refusal had both values in deps.env',
+      ).toEqual([true, true, ['publish: stopped: takedown-here-only']])
+      refusals.push(everything(actions))
+      const noSite: Record<string, string> = { ...env }
+      delete noSite.NEXT_PUBLIC_SITE_URL
+      const config = harness(null, { env: noSite })
+      await runCli(['verify'], config.deps)
+      refusals.push(everything(config))
+      const ids = harness(null, { env })
+      await runCli(['verify', 'a-b'], ids.deps)
+      refusals.push(everything(ids))
+      expect
+        .soft(
+          leaks(refusals.join('\n')),
+          '(g2) takedown-here-only, a verify configuration stop and verify a-b: no value',
+        )
+        .toEqual([])
     },
   )
 })

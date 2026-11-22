@@ -20,6 +20,13 @@
 //   credential value or any other header value (lead decision 10).
 // - It decides every answer from its own route model and imports only node: modules, so a change to
 //   the client's path fence cannot move the stub with it (FS4b).
+// - Step 15b (migration-input/p1-step15b-design.md §3.15, D15B-15): with the opt-in `deletes: true`
+//   it also models the content deleter's one request, DELETE /storage/v1/object/content with a strict
+//   JSON body of exactly `{prefixes}` (1-1,000 unique modelled names) and one content-type value
+//   application/json: exact names are removed in request order and the answer holds one row per
+//   removed name. masters, a path after the bucket, a query and any other body stay unexpected (500),
+//   as every DELETE does without the option; the apikey rule runs first, as for every request.
+//   Overrides gain DELETE and `keep` (the named paths survive, with no row).
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -34,6 +41,8 @@ export interface StubOptions {
   readonly conflict?: 'http400' | 'http409'
   /** The body of a missing object (HTTP 400): the measured not_found body (default) or NoSuchKey. */
   readonly missing?: 'not_found' | 'NoSuchKey'
+  /** Step 15b: model DELETE /storage/v1/object/content (off by default: every DELETE is unexpected). */
+  readonly deletes?: boolean
 }
 
 /** One request as the stub saw it, without any credential or other header value. */
@@ -78,6 +87,8 @@ export type StubBehaviour =
   | { readonly kind: 'gzip'; readonly chunked?: boolean }
   /** The normal answer after `ms` milliseconds. */
   | { readonly kind: 'delay'; readonly ms: number }
+  /** DELETE only: the handler runs but keeps these names (no row for them): a partial removal. */
+  | { readonly kind: 'keep'; readonly paths: readonly string[] }
 
 export interface StubObject {
   readonly bytes: Uint8Array
@@ -97,7 +108,7 @@ export interface StorageStub {
   /** A copy of the stored object, or undefined. */
   object(bucket: StubBucket, path: string): StubObject | undefined
   /** Queues a one-shot behaviour for the next request of a modelled route (method and pathname). */
-  override(method: 'GET' | 'POST', pathname: string, behaviour: StubBehaviour): void
+  override(method: 'GET' | 'POST' | 'DELETE', pathname: string, behaviour: StubBehaviour): void
   /** Ends every connection, then the server. Safe to call twice. */
   close(): Promise<void>
 }
@@ -105,6 +116,9 @@ export interface StorageStub {
 const CREATE_ROUTE = '/storage/v1/object/'
 const READ_ROUTE = '/storage/v1/object/authenticated/'
 const LIST_ROUTE = '/storage/v1/object/list/'
+/** The one DELETE the stub models, with `deletes: true` only (Step 15b). */
+const DELETE_ROUTE = '/storage/v1/object/content'
+const MAX_DELETE_NAMES = 1000
 const BUCKETS: ReadonlySet<string> = new Set(['content', 'masters'])
 const LOGGED_VALUES = ['content-type', 'cache-control', 'x-upsert', 'accept-encoding'] as const
 const SEGMENT = /^[A-Za-z0-9._-]+$/
@@ -131,6 +145,9 @@ interface Answer {
   readonly headers: Readonly<Record<string, string>>
   readonly body: Uint8Array
 }
+
+/** A modelled route's handler; only the DELETE handler reads `keep` (the keep override). */
+type Handler = (keep?: ReadonlySet<string>) => Answer | null
 
 const encode = (text: string) => new TextEncoder().encode(text)
 const jsonAnswer = (status: number, body: string): Answer => ({
@@ -208,7 +225,7 @@ function logEntryOf(
 function checkOptions(options: StubOptions): Required<StubOptions> {
   if (typeof options !== 'object' || options === null) throw new TypeError('storage stub: options')
   for (const key of Object.keys(options)) {
-    if (!['apikey', 'conflict', 'missing'].includes(key)) {
+    if (!['apikey', 'conflict', 'missing', 'deletes'].includes(key)) {
       throw new TypeError('storage stub: unknown option')
     }
   }
@@ -221,7 +238,31 @@ function checkOptions(options: StubOptions): Required<StubOptions> {
     throw new TypeError('storage stub: conflict')
   if (missing !== 'not_found' && missing !== 'NoSuchKey')
     throw new TypeError('storage stub: missing')
-  return { apikey: options.apikey, conflict, missing }
+  const deletes = options.deletes ?? false
+  if (typeof deletes !== 'boolean') throw new TypeError('storage stub: deletes')
+  return { apikey: options.apikey, conflict, missing, deletes }
+}
+
+/**
+ * The names of a DELETE body the stub models, or null: strict UTF-8 JSON, an object with exactly
+ * the key `prefixes`, an array of 1 to 1,000 unique strings, each a modelled path.
+ */
+function deleteNames(body: Uint8Array): readonly string[] | null {
+  let request: unknown
+  try {
+    request = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+  } catch {
+    return null
+  }
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return null
+  const keys = Object.keys(request)
+  if (keys.length !== 1 || keys[0] !== 'prefixes') return null
+  const names: unknown = (request as Record<string, unknown>).prefixes
+  if (!Array.isArray(names) || names.length < 1 || names.length > MAX_DELETE_NAMES) return null
+  if (!names.every((name): name is string => typeof name === 'string' && isModelledPath(name))) {
+    return null
+  }
+  return new Set(names).size === names.length ? names : null
 }
 
 const BEHAVIOURS: ReadonlySet<string> = new Set([
@@ -231,10 +272,11 @@ const BEHAVIOURS: ReadonlySet<string> = new Set([
   'truncate',
   'gzip',
   'delay',
+  'keep',
 ])
 
 export async function startStorageStub(options: StubOptions): Promise<StorageStub> {
-  const { apikey, conflict, missing } = checkOptions(options)
+  const { apikey, conflict, missing, deletes } = checkOptions(options)
   const stores = new Map<StubBucket, Map<string, StubObject>>([
     ['content', new Map()],
     ['masters', new Map()],
@@ -279,6 +321,47 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
     return { status: 200, headers, body: new Uint8Array(found.bytes) }
   }
 
+  /** A stored object's metadata row: the list's file row, and the DELETE row without bucket_id. */
+  function rowOf(bucket: string, path: string, name: string, object: StubObject) {
+    return {
+      name,
+      id: createHash('sha256').update(`${bucket}/${path}`).digest('hex').slice(0, 32),
+      updated_at: UPDATED_AT,
+      created_at: UPDATED_AT,
+      last_accessed_at: UPDATED_AT,
+      metadata: {
+        size: object.bytes.byteLength,
+        mimetype: object.contentType,
+        cacheControl: object.cacheControl,
+      },
+    }
+  }
+
+  /**
+   * The modelled DELETE (Step 15b): each stored name removed in request order, except a kept one;
+   * one row per removed name, an absent name gives none.
+   */
+  function remove(names: readonly string[], keep: ReadonlySet<string>): Answer {
+    const store = storeOf('content')
+    const rows: unknown[] = []
+    for (const name of names) {
+      const object = store.get(name)
+      if (object === undefined || keep.has(name)) continue
+      store.delete(name)
+      const row = rowOf('content', name, name, object)
+      rows.push({
+        name,
+        bucket_id: 'content',
+        id: row.id,
+        updated_at: row.updated_at,
+        created_at: row.created_at,
+        last_accessed_at: row.last_accessed_at,
+        metadata: row.metadata,
+      })
+    }
+    return jsonAnswer(200, JSON.stringify(rows))
+  }
+
   /** One list page, or null when the request body is not one the client sends. */
   function list(bucket: string, body: Uint8Array): Answer | null {
     let request: unknown
@@ -321,18 +404,7 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
           metadata: null,
         })
       } else {
-        entries.set(rest, {
-          name: rest,
-          id: createHash('sha256').update(`${bucket}/${path}`).digest('hex').slice(0, 32),
-          updated_at: UPDATED_AT,
-          created_at: UPDATED_AT,
-          last_accessed_at: UPDATED_AT,
-          metadata: {
-            size: object.bytes.byteLength,
-            mimetype: object.contentType,
-            cacheControl: object.cacheControl,
-          },
-        })
+        entries.set(rest, rowOf(bucket, path, rest, object))
       }
     }
     const page = [...entries.keys()]
@@ -349,8 +421,15 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
     search: string,
     req: IncomingMessage,
     body: Uint8Array,
-  ): (() => Answer | null) | null {
+  ): Handler | null {
     if (search !== '' && !isPointerNonceRead(method, pathname, search)) return null
+    if (method === 'DELETE') {
+      if (!deletes || pathname !== DELETE_ROUTE) return null
+      const types = rawHeaderValues(req).get('content-type') ?? []
+      if (types.length !== 1 || types[0] !== 'application/json') return null
+      const names = deleteNames(body)
+      return names === null ? null : (keep) => remove(names, keep ?? new Set())
+    }
     if (method === 'POST' && pathname.startsWith(LIST_ROUTE)) {
       const bucket = pathname.slice(LIST_ROUTE.length)
       return BUCKETS.has(bucket) ? () => list(bucket, body) : null
@@ -384,7 +463,7 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
 
   function deliver(
     res: ServerResponse,
-    handler: () => Answer | null,
+    handler: Handler,
     behaviour: StubBehaviour | undefined,
     refuse: () => void,
   ): void {
@@ -422,6 +501,12 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
           deliver(res, handler, undefined, refuse)
         }, behaviour.ms)
         timers.add(timer)
+        return
+      }
+      case 'keep': {
+        const answer = handler(new Set(behaviour.paths))
+        if (answer === null) refuse()
+        else send(res, answer)
         return
       }
       default:
@@ -540,14 +625,24 @@ export async function startStorageStub(options: StubOptions): Promise<StorageStu
           }
     },
     override(method, pathname, behaviour) {
-      if (method !== 'GET' && method !== 'POST')
+      if (method !== 'GET' && method !== 'POST' && method !== 'DELETE') {
         throw new TypeError('storage stub: override method')
+      }
       if (typeof pathname !== 'string' || !pathname.startsWith('/')) {
         throw new TypeError('storage stub: override pathname')
       }
       if (!BEHAVIOURS.has(behaviour.kind)) throw new TypeError('storage stub: override kind')
+      let queued = behaviour
+      if (behaviour.kind === 'keep') {
+        if (method !== 'DELETE') throw new TypeError('storage stub: keep is for DELETE only')
+        const paths: unknown = behaviour.paths
+        if (!Array.isArray(paths) || !paths.every((path) => typeof path === 'string')) {
+          throw new TypeError('storage stub: keep paths')
+        }
+        queued = { kind: 'keep', paths: [...(paths as string[])] }
+      }
       const key = `${method} ${pathname}`
-      overrides.set(key, [...(overrides.get(key) ?? []), behaviour])
+      overrides.set(key, [...(overrides.get(key) ?? []), queued])
     },
     close() {
       closing ??= new Promise<void>((resolve) => {

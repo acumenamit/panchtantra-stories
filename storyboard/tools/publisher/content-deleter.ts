@@ -1,53 +1,70 @@
-// Content-only deleter (P1-8b, owner item 1 option 1; design p1-step13-design.md §3.2, row A31).
-// The remove() that the publisher's Storage client held until Step 13, moved here unchanged with
-// its guards and its tests, so the client itself has no delete route. It is reached by no entry
-// (storage-fence.test.ts fence F4) until Step 15b reviews its first caller, limits it to the
-// content package and media classes on this PC only and applies the client's construction rules
-// (§1.3).
-// - The secret key goes on the `apikey` header only. `bearerFallback` (off by default) also sends
-//   `Authorization: Bearer <key>`; it is used only with the owner's OK.
-// - Guards, set by the caller, are checked before any request: an allowed bucket list, write
-//   prefixes and safe paths. The protected bucket is never deleted from, whatever the caller
-//   allows. A refusal throws StorageRefusedError and sends nothing.
-// - Results are typed. Errors and results never contain the key or any header.
+// Content-only deleter (P1-8b, owner item 1 option 1; design p1-step13-design.md §3.2, row A31),
+// hardened for its first caller at Step 15b (design p1-step15b-design.md §3.13, D15B-13; row A13).
+// The remove() that the publisher's Storage client held until Step 13 lives here, so the client
+// itself has no delete route. Only the publisher CLI reaches this module (storage-fence.test.ts
+// fence F4), and only for a takedown on this PC.
+// - Construction applies the Storage client's rules in the client's order (storage.ts): the options
+//   are read once from own data properties (option-keys, option-accessor); the URL is re-parsed from
+//   its own internal state before any check, and every check and the request origin read only the
+//   re-parsed URL (url-origin); a fetchImpl only on loopback (fetch-impl); a Secret of at least 8
+//   characters, secret-shaped on https (key-short, key-shape); then the one story id this deleter
+//   serves (story-id) and the timeout (timeout). A refusal is a TypeError with the fixed text
+//   `refused: deleter option <rule>`. The two bounds are private copies of the client's (T15B-9 pins
+//   them equal by parity).
+// - remove() deletes only from the content bucket (masters refused first), 1 to 100 unique paths
+//   copied at entry, each a package or media object of the bound story; the route is built only
+//   after the bucket check and re-checked. A refusal throws StorageRefusedError with the fixed text
+//   `refused: delete <stage> <rule>` (isStorageRefusal accepts it) and sends nothing. Pointers,
+//   snapshots, masters and other stories are unreachable by construction.
+// - The secret key goes on the `apikey` header only. Results are typed; errors and results never
+//   carry the key, a header, a path or server message text (a failure code repeating any run of the
+//   key becomes "unknown").
 import { z } from 'zod'
 import { isSafeStoragePath } from '../../src/core/content/gates'
-import type { Secret } from './env'
-import { checkServiceUrl, describeNetworkError, parseJsonBytes, readCapped } from './http'
+import { StoryId } from '../../src/core/package/v1'
+import { isSecretKeyShape, Secret } from './env'
+import { describeNetworkError, parseJsonBytes, readCapped } from './http'
 import {
   classifyFailure,
   DEFAULT_TIMEOUT_MS,
-  isFolderPrefix,
   repeatsSecretRun,
   StorageRefusedError,
   type StorageFailure,
 } from './storage'
+import { classOfPath, recheckUrl } from './storage-layout'
 
-/** Buckets this client never writes to or deletes from. */
+/** Buckets this deleter never deletes from. */
 export const PROTECTED_BUCKETS: readonly string[] = ['masters']
 
 /** Our own bound per remove call, so one mistaken call cannot delete a large set; callers chunk. */
 export const MAX_REMOVE_PATHS = 100
 const MAX_RESPONSE_BYTES = 1024 * 1024
+/** Private copies of storage.ts's two bounds (not exported there); T15B-9 pins them equal. */
+const MIN_KEY_LENGTH = 8
+const MAX_TIMEOUT_MS = 600_000
+/** The one bucket remove() serves. */
+const CONTENT_BUCKET = 'content'
 
-export interface StorageGuards {
-  /** Buckets any call may name. PROTECTED_BUCKETS stay read-only even when listed here. */
-  readonly allowedBuckets: readonly string[]
-  /** Uploads and removes must sit under one of these folders, each ending with '/'. */
-  readonly writePrefixes: readonly string[]
-  /** The only paths an upload may overwrite (upsert). Exact paths; no patterns. */
-  readonly overwritablePaths: readonly string[]
-}
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+const SUPABASE_HOST = /^[a-z0-9]{20}\.supabase\.co$/
+const OPTION_KEYS: ReadonlySet<string> = new Set([
+  'supabaseUrl',
+  'secretKey',
+  'storyId',
+  'fetchImpl',
+  'timeoutMs',
+])
 
 export interface ContentDeleterOptions {
-  /** https://<ref>.supabase.co (http is accepted only on a loopback host, for tests). */
+  /** https://<20 lowercase alnum>.supabase.co, or http on a loopback host with a port (tests). */
   readonly supabaseUrl: URL
   readonly secretKey: Secret
-  readonly guards: StorageGuards
+  /** The one story whose package and media objects this deleter may remove. */
+  readonly storyId: string
+  /** Accepted only with a loopback origin. */
   readonly fetchImpl?: typeof fetch
+  /** 1 to 600,000 ms; covers headers and body. */
   readonly timeoutMs?: number
-  /** Off by default; see the file header. */
-  readonly bearerFallback?: boolean
 }
 
 export type RemoveResult =
@@ -66,8 +83,6 @@ export interface ContentDeleter {
 }
 
 // ---- pure helpers ----
-
-const BUCKET_NAME = /^[a-z0-9][a-z0-9_-]{0,62}$/
 
 export function isUnderPrefix(path: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => path.startsWith(prefix) && path.length > prefix.length)
@@ -94,133 +109,148 @@ export function checkRemoved(
   return { kind: 'count-mismatch', removed, notRemoved, unexpected }
 }
 
-function describePath(path: string): string {
-  return JSON.stringify(path.length > 120 ? `${path.slice(0, 120)}...` : path)
+// ---- construction (the client's rules, storage.ts) ----
+
+function optionRefused(rule: string): never {
+  throw new TypeError(`refused: deleter option ${rule}`)
 }
 
-function checkGuards(guards: StorageGuards): StorageGuards {
-  if (guards.allowedBuckets.length === 0) throw new TypeError('allowedBuckets must not be empty')
-  for (const bucket of guards.allowedBuckets) {
-    if (!BUCKET_NAME.test(bucket))
-      throw new TypeError(`invalid bucket name ${describePath(bucket)}`)
+/** The options read once from own data descriptors: exact known keys, no accessors. */
+function readOptions(options: unknown): ReadonlyMap<string, unknown> {
+  if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+    optionRefused('option-keys')
   }
-  if (guards.writePrefixes.length === 0) throw new TypeError('writePrefixes must not be empty')
-  for (const prefix of guards.writePrefixes) {
-    if (prefix === '' || !isFolderPrefix(prefix)) {
-      throw new TypeError(
-        `write prefix ${describePath(prefix)} must be a safe folder ending in '/'`,
-      )
-    }
+  const proto: unknown = Object.getPrototypeOf(options)
+  if (proto !== Object.prototype && proto !== null) optionRefused('option-keys')
+  const values = new Map<string, unknown>()
+  for (const key of Reflect.ownKeys(options)) {
+    if (typeof key !== 'string' || !OPTION_KEYS.has(key)) optionRefused('option-keys')
+    const descriptor = Reflect.getOwnPropertyDescriptor(options, key)
+    if (descriptor === undefined || !descriptor.enumerable) optionRefused('option-keys')
+    if (!('value' in descriptor)) optionRefused('option-accessor')
+    values.set(key, descriptor.value)
   }
-  for (const path of guards.overwritablePaths) {
-    if (!isSafeStoragePath(path) || !isUnderPrefix(path, guards.writePrefixes)) {
-      throw new TypeError(`overwritable path ${describePath(path)} must be safe and under a prefix`)
-    }
-  }
-  return {
-    allowedBuckets: [...guards.allowedBuckets],
-    writePrefixes: [...guards.writePrefixes],
-    overwritablePaths: [...guards.overwritablePaths],
+  return values
+}
+
+/**
+ * The URL the options name, re-parsed from its own href. `URL.prototype.toString` reads the URL's
+ * internal state and throws on an object that only has URL.prototype, so a subclass or a forgery
+ * whose getters show an allowed host cannot steer the checks and the request apart. null when the
+ * value is not a real URL.
+ */
+function realUrl(value: unknown): URL | null {
+  if (!(value instanceof URL)) return null
+  try {
+    return new URL(URL.prototype.toString.call(value))
+  } catch {
+    return null
   }
 }
 
-// ---- client ----
+function isAllowedOrigin(url: URL): boolean {
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false
+  if (url.protocol === 'https:') return SUPABASE_HOST.test(url.hostname) && url.port === ''
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) && url.port !== ''
+}
 
-type Exchange =
-  | { readonly kind: 'response'; readonly status: number; readonly body: unknown }
-  | { readonly kind: 'network'; readonly code: string }
+/** A remove() refusal: the fixed text `refused: delete <stage> <rule>`, never a value. */
+function refuse(stage: 'field' | 'class-pattern' | 'url', rule: string): never {
+  throw new StorageRefusedError(`refused: delete ${stage} ${rule}`)
+}
+
+// ---- the deleter ----
 
 export function createContentDeleter(options: ContentDeleterOptions): ContentDeleter {
-  checkServiceUrl(options.supabaseUrl, 'supabaseUrl')
-  const origin = options.supabaseUrl.origin
-  const guards = checkGuards(options.guards)
-  const { secretKey } = options
-  if (secretKey.reveal().length < 8) throw new TypeError('secretKey is too short')
-  const fetchImpl = options.fetchImpl ?? fetch
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-
-  /** Belt and braces: no text leaves this client with the key in it. */
-  const scrub = (text: string) => text.split(secretKey.reveal()).join('[redacted]')
-  const refuse = (message: string): never => {
-    throw new StorageRefusedError(scrub(`refused: ${message}`))
+  const values = readOptions(options)
+  const supabaseUrl = realUrl(values.get('supabaseUrl'))
+  if (supabaseUrl === null || !isAllowedOrigin(supabaseUrl)) optionRefused('url-origin')
+  const loopback = supabaseUrl.protocol === 'http:'
+  const fetchOption = values.get('fetchImpl')
+  if (fetchOption !== undefined && (!loopback || typeof fetchOption !== 'function')) {
+    optionRefused('fetch-impl')
   }
+  const secretKey = values.get('secretKey')
+  if (!(secretKey instanceof Secret) || secretKey.reveal().length < MIN_KEY_LENGTH) {
+    optionRefused('key-short')
+  }
+  if (!loopback && !isSecretKeyShape(secretKey.reveal())) optionRefused('key-shape')
+  const storyOption = values.get('storyId')
+  if (typeof storyOption !== 'string' || !StoryId.safeParse(storyOption).success) {
+    optionRefused('story-id')
+  }
+  const rawTimeout = values.get('timeoutMs')
+  const timeoutOption = rawTimeout === undefined ? DEFAULT_TIMEOUT_MS : rawTimeout
+  if (
+    typeof timeoutOption !== 'number' ||
+    !Number.isSafeInteger(timeoutOption) ||
+    timeoutOption < 1 ||
+    timeoutOption > MAX_TIMEOUT_MS
+  ) {
+    optionRefused('timeout')
+  }
+  const timeoutMs: number = timeoutOption
+  const storyId: string = storyOption
+  const fetchImpl = (fetchOption as typeof fetch | undefined) ?? fetch
+  const origin = supabaseUrl.origin
+  const key: Secret = secretKey
+  /** The story's two folders, each ending in '/' (the second story check). */
+  const storyFolders: readonly string[] = [`packages/${storyId}/`, `media/${storyId}/`]
+
   /** A failure code that repeats any run of the key, whole or partial, becomes "unknown". */
-  const safeCode = (code: string) => (repeatsSecretRun(code, secretKey.reveal()) ? 'unknown' : code)
-
-  const authHeaders = (): Record<string, string> => {
-    const key = secretKey.reveal()
-    return options.bearerFallback
-      ? { apikey: key, authorization: `Bearer ${key}` }
-      : { apikey: key }
-  }
-
-  function checkBucket(bucket: string, access: 'read' | 'write'): void {
-    if (access === 'write' && PROTECTED_BUCKETS.includes(bucket)) {
-      refuse(`bucket ${describePath(bucket)} is never written to or deleted from`)
-    }
-    if (!guards.allowedBuckets.includes(bucket)) {
-      refuse(`bucket ${describePath(bucket)} is not in the allowed bucket list`)
-    }
-  }
-
-  function checkWritablePath(path: string): void {
-    if (!isSafeStoragePath(path)) refuse(`unsafe path ${describePath(path)}`)
-    if (!isUnderPrefix(path, guards.writePrefixes)) {
-      refuse(`path ${describePath(path)} is outside the write prefixes`)
-    }
-  }
-
-  /** The one transport: a DELETE of one route (the client's own transport has no DELETE). */
-  async function send(
-    path: string,
-    headers: Record<string, string>,
-    body: Uint8Array<ArrayBuffer> | string,
-  ): Promise<Exchange> {
-    try {
-      const response = await fetchImpl(new URL(path, origin), {
-        method: 'DELETE',
-        headers: { ...authHeaders(), ...headers },
-        body,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
-      })
-      const bytes = await readCapped(response, MAX_RESPONSE_BYTES)
-      const parsed = bytes ? parseJsonBytes(bytes) : { ok: false as const }
-      return {
-        kind: 'response',
-        status: response.status,
-        body: parsed.ok ? parsed.value : undefined,
-      }
-    } catch (error) {
-      return { kind: 'network', code: safeCode(describeNetworkError(error)) }
-    }
-  }
-
-  const networkFailure = (exchange: { code: string }): StorageFailure => ({
-    kind: 'failed',
-    status: null,
-    code: exchange.code,
-  })
+  const safeCode = (code: string) => (repeatsSecretRun(code, key.reveal()) ? 'unknown' : code)
 
   const scrubFailure = (failure: StorageFailure): StorageFailure =>
     failure.kind === 'failed' ? { ...failure, code: safeCode(failure.code) } : failure
 
   async function remove(bucket: string, paths: readonly string[]): Promise<RemoveResult> {
-    checkBucket(bucket, 'write')
-    if (paths.length === 0) refuse('remove needs at least one path')
-    if (paths.length > MAX_REMOVE_PATHS) refuse(`remove takes at most ${MAX_REMOVE_PATHS} paths`)
-    if (new Set(paths).size !== paths.length) refuse('remove paths must be unique')
-    for (const path of paths) checkWritablePath(path)
-    const exchange = await send(
-      `/storage/v1/object/${bucket}`,
-      { 'content-type': 'application/json' },
-      JSON.stringify({ prefixes: paths }),
-    )
-    if (exchange.kind === 'network') return networkFailure(exchange)
-    if (exchange.status < 200 || exchange.status >= 300) {
-      return scrubFailure(classifyFailure(exchange.status, exchange.body))
+    if (PROTECTED_BUCKETS.includes(bucket)) refuse('field', 'bucket')
+    if (bucket !== CONTENT_BUCKET) refuse('field', 'bucket')
+    if (!Array.isArray(paths)) refuse('field', 'paths')
+    // The copy every later check, the body and the result use; taken before any await.
+    const copy: unknown[] = [...(paths as readonly unknown[])]
+    if (copy.length === 0 || copy.length > MAX_REMOVE_PATHS) refuse('field', 'path-count')
+    if (!copy.every((path): path is string => typeof path === 'string')) refuse('field', 'paths')
+    const wanted = copy as string[]
+    if (new Set(wanted).size !== wanted.length) refuse('field', 'path-repeated')
+    for (const path of wanted) {
+      if (!isSafeStoragePath(path)) refuse('class-pattern', 'unsafe-path')
+      const found = classOfPath(CONTENT_BUCKET, path)
+      if (found === null || (found.kind !== 'package' && found.kind !== 'media')) {
+        refuse('class-pattern', 'class-pattern')
+      }
+      if (found.fields.storyId !== storyId) refuse('class-pattern', 'story-id')
+      if (!isUnderPrefix(path, storyFolders)) refuse('class-pattern', 'story-id')
     }
-    return checkRemoved(paths, exchange.status, exchange.body)
+    // Built only after the bucket check, so the bucket here is exactly content.
+    const route = `/storage/v1/object/${bucket}`
+    const url = new URL(route, origin)
+    if (!recheckUrl(url, origin, route).ok || url.href !== origin + route) {
+      refuse('url', 'url-mismatch')
+    }
+    let status: number
+    let body: unknown
+    try {
+      const response = await fetchImpl(url, {
+        method: 'DELETE',
+        headers: {
+          apikey: key.reveal(),
+          'content-type': 'application/json',
+          'accept-encoding': 'identity',
+        },
+        body: JSON.stringify({ prefixes: wanted }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      const bytes = await readCapped(response, MAX_RESPONSE_BYTES)
+      const parsed = bytes ? parseJsonBytes(bytes) : { ok: false as const }
+      status = response.status
+      body = parsed.ok ? parsed.value : undefined
+    } catch (error) {
+      return { kind: 'failed', status: null, code: safeCode(describeNetworkError(error)) }
+    }
+    if (status < 200 || status >= 300) return scrubFailure(classifyFailure(status, body))
+    return checkRemoved(wanted, status, body)
   }
 
   return { remove }

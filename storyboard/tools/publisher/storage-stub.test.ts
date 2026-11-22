@@ -3,6 +3,7 @@
 // on the client. Every test starts its own stub; tests that make unexpected requests on purpose use
 // a second, local stub, so the shared afterEach can require the shared stub's `unexpected` to be
 // empty (fail closed). A loopback fetch guard refuses any other host (13.1 D, G5).
+// Step 15b (design p1-step15b-design.md §14.7) adds T15B-13 to T15B-15: the opt-in DELETE model.
 import { createHash } from 'node:crypto'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { connect } from 'node:net'
@@ -989,4 +990,399 @@ describe('the Storage stub nonce form (Step 14)', () => {
       await local.close()
     }
   })
+})
+
+// ---- Step 15b (P1-8d part b): the opt-in DELETE model (design p1-step15b-design.md §3.15,
+// D15B-15, L16; §14.7) ----
+
+const DELETE_ROUTE = '/storage/v1/object/content'
+const JSON_TYPE = { 'content-type': 'application/json' }
+
+/** Request headers as sent: an array value sends that header once per element. */
+type RawHeaders = Readonly<Record<string, string | readonly string[]>>
+
+/** One DELETE over node:http with any header form (an array value sends the header twice). */
+function deleteRequest(
+  target: StorageStub,
+  pathname: string,
+  body: Uint8Array,
+  headers: RawHeaders,
+): Promise<RawAnswer> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port: Number(target.origin.port),
+        method: 'DELETE',
+        path: pathname,
+        // A raw header list carries no default Host, which an HTTP/1.1 server requires.
+        headers: [
+          'host',
+          `127.0.0.1:${target.origin.port}`,
+          ...Object.entries(headers).flatMap(([name, value]) =>
+            (typeof value === 'string' ? [value] : value).flatMap((one) => [name, one]),
+          ),
+          'content-length',
+          String(body.byteLength),
+        ],
+        agent: false,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('error', () => {})
+        res.on('close', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+            complete: res.complete,
+          }),
+        )
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
+}
+
+const prefixesBody = (names: readonly string[]) => text(JSON.stringify({ prefixes: names }))
+const rowsOf = (answer: RawAnswer): unknown => JSON.parse(answer.body.toString('utf8'))
+
+describe('the Storage stub DELETE model (Step 15b)', () => {
+  it('T15B-13 deletes: true models DELETE /storage/v1/object/content: exact names removed, rows for removed names only, the body logged; the option is boolean and opt-in (A15, D15B-15, L16)', async () => {
+    const local = await startStorageStub({ apikey: FAKE_KEY, deletes: true })
+    try {
+      local.put('content', 'a/one.json', text('one'), 'application/json')
+      local.put('content', 'a/one.json.bak', text('bak'), 'application/json')
+      local.put('content', 'b/two.webp', text('two'), 'image/webp')
+      local.put('masters', APPROVAL_PATH, text('{"m":1}'), 'application/json')
+      expect(
+        [
+          local.object('content', 'a/one.json'),
+          local.object('content', 'a/one.json.bak'),
+          local.object('content', 'b/two.webp'),
+          local.object('masters', APPROVAL_PATH),
+        ].every((object) => object !== undefined),
+        'precondition: the four objects are stored',
+      ).toBe(true)
+      const body = text('{"prefixes":["a/one.json","b/two.webp","absent.json"]}')
+      const answer = await deleteRequest(local, DELETE_ROUTE, body, {
+        apikey: FAKE_KEY,
+        ...JSON_TYPE,
+      })
+      // (g1) 200, an explicit length, exactly two rows in request order
+      expect.soft(answer.status, '(g1) 200').toBe(200)
+      expect
+        .soft(answer.headers['content-length'], '(g1) an explicit content-length')
+        .toBe(String(answer.body.length))
+      const rows = rowsOf(answer) as Record<string, unknown>[]
+      expect
+        .soft(
+          Array.isArray(rows) ? rows.map((row) => row.name) : rows,
+          '(g1) exactly two rows, removed names only, in request order',
+        )
+        .toEqual(['a/one.json', 'b/two.webp'])
+      for (const row of Array.isArray(rows) ? rows : []) {
+        expect
+          .soft(Object.keys(row), `(g1) the row keys ${String(row.name)}`)
+          .toEqual([
+            'name',
+            'bucket_id',
+            'id',
+            'updated_at',
+            'created_at',
+            'last_accessed_at',
+            'metadata',
+          ])
+        expect.soft(row.bucket_id, `(g1) bucket_id ${String(row.name)}`).toBe('content')
+      }
+      // (g2) the store after
+      expect
+        .soft(
+          [local.object('content', 'a/one.json'), local.object('content', 'b/two.webp')],
+          '(g2) both names gone',
+        )
+        .toEqual([undefined, undefined])
+      for (const path of ['a/one.json', 'b/two.webp']) {
+        const read = await raw(local, 'GET', `${AUTHENTICATED}content/${path}`, {
+          apikey: FAKE_KEY,
+        })
+        expect
+          .soft([read.status, read.body.toString('utf8')], `(g2) a GET of ${path} is not_found`)
+          .toEqual([400, MISSING_OBJECT_BODY])
+      }
+      expect
+        .soft(local.object('content', 'a/one.json.bak')?.bytes, '(g2) a/one.json.bak intact')
+        .toEqual(text('bak'))
+      expect
+        .soft(local.object('masters', APPROVAL_PATH)?.bytes, '(g2) masters intact')
+        .toEqual(text('{"m":1}'))
+      const listed: string[] = []
+      for (const prefix of ['a', 'b']) {
+        const page = await raw(
+          local,
+          'POST',
+          LIST_CONTENT,
+          { apikey: FAKE_KEY, ...JSON_TYPE },
+          text(JSON.stringify({ prefix, limit: 100, offset: 0 })),
+        )
+        for (const row of rowsOf(page) as { name: string }[]) listed.push(`${prefix}/${row.name}`)
+      }
+      expect.soft(listed, '(g2) a list no longer shows them').toEqual(['a/one.json.bak'])
+      // (g3) the log
+      const logged = local.requests.find((entry) => entry.method === 'DELETE')
+      expect.soft(logged?.body, "(g3) the log entry's body equals the request bytes").toEqual(body)
+      expect.soft(local.unexpected, '(g3) unexpected is empty').toEqual([])
+    } finally {
+      await local.close()
+    }
+    // (g4) the option: boolean only, and opt-in
+    await expect
+      .soft(
+        startStorageStub({ apikey: FAKE_KEY, deletes: 'yes' as unknown as boolean }),
+        "(g4) deletes: 'yes' is a TypeError",
+      )
+      .rejects.toThrow(TypeError)
+    for (const [label, options] of [
+      ['deletes: false', { apikey: FAKE_KEY, deletes: false }],
+      ['the key absent', { apikey: FAKE_KEY }],
+    ] as const) {
+      const off = await startStorageStub(options)
+      try {
+        off.put('content', 'a/one.json', text('one'), 'application/json')
+        const answer = await deleteRequest(off, DELETE_ROUTE, prefixesBody(['a/one.json']), {
+          apikey: FAKE_KEY,
+          ...JSON_TYPE,
+        })
+        expect.soft(answer.status, `(g4) ${label}: the DELETE answers 500`).toBe(500)
+        expect
+          .soft(
+            off.unexpected.map((entry) => `${entry.method} ${entry.pathname}`),
+            `(g4) ${label}: recorded in unexpected`,
+          )
+          .toEqual([`DELETE ${DELETE_ROUTE}`])
+        expect
+          .soft(off.object('content', 'a/one.json')?.bytes, `(g4) ${label}: the store unchanged`)
+          .toEqual(text('one'))
+      } finally {
+        await off.close()
+      }
+    }
+  })
+
+  it('T15B-14 with deletes: true every other DELETE stays unexpected (500, recorded, store unchanged), and a wrong or missing apikey is 401 (A15, L16, CRIT-17c, TP-15)', async () => {
+    const local = await startStorageStub({ apikey: FAKE_KEY, deletes: true })
+    try {
+      local.put('content', 'p/pre.json', text('pre'), 'application/json')
+      const valid = await deleteRequest(local, DELETE_ROUTE, prefixesBody(['p/pre.json']), {
+        apikey: FAKE_KEY,
+        ...JSON_TYPE,
+      })
+      expect(valid.status, 'precondition: the valid body answers 200').toBe(200)
+      expect(local.unexpected.length, 'precondition: nothing unexpected yet').toBe(0)
+      local.put('content', 'a', text('a'), 'application/octet-stream')
+      local.put('content', 'a/one.json', text('one'), 'application/json')
+      local.put('masters', 'a/one.json', text('master'), 'application/json')
+      const storeOf = () => [
+        local.object('content', 'a'),
+        local.object('content', 'a/one.json'),
+        local.object('masters', 'a/one.json'),
+      ]
+      const stored = storeOf()
+      const names1001 = Array.from({ length: 1001 }, (_v, i) => `n${i}`)
+      const ok = { apikey: FAKE_KEY, ...JSON_TYPE }
+      // (g1) every other DELETE: 500, recorded, the store byte-identical
+      const samples: readonly (readonly [string, string, Uint8Array, RawHeaders])[] = [
+        ['masters', '/storage/v1/object/masters', prefixesBody(['a/one.json']), ok],
+        ['a path after the bucket', `${DELETE_ROUTE}/a/one.json`, prefixesBody(['a/one.json']), ok],
+        ['a query', `${DELETE_ROUTE}?x=1`, prefixesBody(['a/one.json']), ok],
+        ['prefixes a string', DELETE_ROUTE, text('{"prefixes":"a"}'), ok],
+        ['prefixes empty', DELETE_ROUTE, text('{"prefixes":[]}'), ok],
+        ['an extra key', DELETE_ROUTE, text('{"prefixes":["a"],"x":1}'), ok],
+        ['an array body', DELETE_ROUTE, text('[]'), ok],
+        ['not json', DELETE_ROUTE, text('not json'), ok],
+        ['the byte FF', DELETE_ROUTE, Uint8Array.of(0xff), ok],
+        ['a repeated name', DELETE_ROUTE, text('{"prefixes":["a","a"]}'), ok],
+        ['a number', DELETE_ROUTE, text('{"prefixes":[1]}'), ok],
+        ['a lone surrogate', DELETE_ROUTE, text('{"prefixes":["\\ud800"]}'), ok],
+        ['a dot segment', DELETE_ROUTE, text('{"prefixes":["../x"]}'), ok],
+        ['1,001 names', DELETE_ROUTE, prefixesBody(names1001), ok],
+        [
+          'content-type text/plain',
+          DELETE_ROUTE,
+          prefixesBody(['a']),
+          { apikey: FAKE_KEY, 'content-type': 'text/plain' },
+        ],
+        [
+          'two content-type headers',
+          DELETE_ROUTE,
+          prefixesBody(['a']),
+          { apikey: FAKE_KEY, 'content-type': ['application/json', 'application/json'] },
+        ],
+        ['no content-type', DELETE_ROUTE, prefixesBody(['a']), { apikey: FAKE_KEY }],
+      ]
+      const sent: string[] = []
+      for (const [label, pathname, body, headers] of samples) {
+        const answer = await deleteRequest(local, pathname, body, headers)
+        expect.soft(answer.status, `(g1) ${label} answers 500`).toBe(500)
+        sent.push(`DELETE ${pathname}`)
+      }
+      expect
+        .soft(
+          local.unexpected.map((entry) => `${entry.method} ${entry.pathname}${entry.search}`),
+          '(g1) each is recorded in unexpected, in order',
+        )
+        .toEqual(sent)
+      expect.soft(storeOf(), '(g1) the store is byte-identical').toEqual(stored)
+      // The log keeps every request: the valid one first, then the samples in order.
+      const doubled = samples.findIndex(([label]) => label === 'two content-type headers')
+      expect(
+        local.requests.filter((entry) => entry.method === 'DELETE')[1 + doubled]?.values[
+          'content-type'
+        ],
+        'precondition: the two content-type headers reached the stub as two values',
+      ).toBe('application/json, application/json')
+      // (g2) a wrong or missing apikey: 401, recorded, nothing removed
+      const before = local.unexpected.length
+      for (const [label, headers] of [
+        ['a wrong apikey', { apikey: WRONG_KEY, ...JSON_TYPE }],
+        ['no apikey', { ...JSON_TYPE }],
+      ] as const) {
+        const answer = await deleteRequest(
+          local,
+          DELETE_ROUTE,
+          prefixesBody(['a/one.json']),
+          headers,
+        )
+        expect.soft(answer.status, `(g2) ${label} answers 401`).toBe(401)
+      }
+      expect.soft(local.unexpected.length - before, '(g2) both recorded in unexpected').toBe(2)
+      expect.soft(storeOf(), '(g2) nothing removed').toEqual(stored)
+    } finally {
+      await local.close()
+    }
+  })
+
+  it(
+    "T15B-15 override('DELETE', …): answer replaces the handler, stall/truncate/delay run it, keep removes all but the kept names; keep on another method is a TypeError (A15, D15B-15)",
+    { timeout: 10_000 },
+    async () => {
+      const seeded = async () => {
+        const local = await startStorageStub({ apikey: FAKE_KEY, deletes: true })
+        local.put('content', 'a/one.json', text('one'), 'application/json')
+        local.put('content', 'b/two.webp', text('two'), 'image/webp')
+        return local
+      }
+      const both = prefixesBody(['a/one.json', 'b/two.webp'])
+      const ok = { apikey: FAKE_KEY, ...JSON_TYPE }
+      const gone = (local: StorageStub) => [
+        local.object('content', 'a/one.json') === undefined,
+        local.object('content', 'b/two.webp') === undefined,
+      ]
+      const control = await seeded()
+      try {
+        const plain = await deleteRequest(control, DELETE_ROUTE, both, ok)
+        expect(
+          [plain.status, gone(control)],
+          'precondition: without an override both names are removed',
+        ).toEqual([200, [true, true]])
+      } finally {
+        await control.close()
+      }
+      // (g1) answer replaces the handler
+      const answered = await seeded()
+      try {
+        answered.override('DELETE', DELETE_ROUTE, { kind: 'answer', status: 200, body: '[]' })
+        const answer = await deleteRequest(answered, DELETE_ROUTE, both, ok)
+        expect.soft([answer.status, rowsOf(answer)], '(g1) answer: 200 []').toEqual([200, []])
+        expect.soft(gone(answered), '(g1) answer: nothing removed').toEqual([false, false])
+        expectNoUnexpected(answered)
+      } finally {
+        await answered.close()
+      }
+      // (g2) stall, truncate and delay run the handler
+      const stalled = await seeded()
+      try {
+        stalled.override('DELETE', DELETE_ROUTE, { kind: 'stall' })
+        let head = false
+        const pending = deleteRequest(stalled, DELETE_ROUTE, both, ok)
+        void pending.then(() => (head = true))
+        for (let waited = 0; stalled.requests.length === 0 && waited < 2000; waited += 10) {
+          await pause(10)
+        }
+        await pause(50)
+        expect
+          .soft(gone(stalled), '(g2) stall: removed though no answer arrives')
+          .toEqual([true, true])
+        expect.soft(head, '(g2) stall: the answer has not ended before close').toBe(false)
+        await stalled.close()
+        const ended = await pending
+        expect.soft(ended.complete, '(g2) stall: the answer never completed').toBe(false)
+      } finally {
+        await stalled.close()
+      }
+      const truncated = await seeded()
+      try {
+        truncated.override('DELETE', DELETE_ROUTE, { kind: 'truncate', declared: 500, sent: 5 })
+        const cut = await deleteRequest(truncated, DELETE_ROUTE, both, ok)
+        expect.soft(cut.complete, '(g2) truncate: the answer is cut').toBe(false)
+        expect.soft(gone(truncated), '(g2) truncate: removed').toEqual([true, true])
+        expectNoUnexpected(truncated)
+      } finally {
+        await truncated.close()
+      }
+      const delayed = await seeded()
+      try {
+        delayed.override('DELETE', DELETE_ROUTE, { kind: 'delay', ms: 10 })
+        const late = await deleteRequest(delayed, DELETE_ROUTE, both, ok)
+        expect.soft(late.status, '(g2) delay: then the normal answer').toBe(200)
+        expect.soft(gone(delayed), '(g2) delay: removed').toEqual([true, true])
+        expectNoUnexpected(delayed)
+      } finally {
+        await delayed.close()
+      }
+      // (g3) keep
+      const kept = await seeded()
+      try {
+        kept.override('DELETE', DELETE_ROUTE, { kind: 'keep', paths: ['a/one.json'] })
+        const answer = await deleteRequest(kept, DELETE_ROUTE, both, ok)
+        expect
+          .soft(
+            [answer.status, (rowsOf(answer) as { name: string }[]).map((row) => row.name)],
+            '(g3) keep: one row, for b/two.webp',
+          )
+          .toEqual([200, ['b/two.webp']])
+        expect.soft(gone(kept), '(g3) keep: b removed, a/one.json stored').toEqual([false, true])
+        expectNoUnexpected(kept)
+      } finally {
+        await kept.close()
+      }
+      // (g4) keep on another method, a keep without an array, PUT
+      expect
+        .soft(
+          () =>
+            stub.override('POST', `${OBJECT}content/a.json`, { kind: 'keep', paths: ['a.json'] }),
+          "(g4) override('POST', …, keep) is a TypeError",
+        )
+        .toThrow(TypeError)
+      expect
+        .soft(
+          () =>
+            stub.override('DELETE', DELETE_ROUTE, {
+              kind: 'keep',
+              paths: 'a/one.json' as unknown as string[],
+            }),
+          '(g4) a keep with a non-array is a TypeError',
+        )
+        .toThrow(TypeError)
+      expect
+        .soft(
+          () =>
+            stub.override('PUT' as 'GET', DELETE_ROUTE, { kind: 'answer', status: 200, body: '' }),
+          "(g4) override('PUT', …) is a TypeError",
+        )
+        .toThrow(TypeError)
+    },
+  )
 })

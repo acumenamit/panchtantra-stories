@@ -48,7 +48,10 @@ export const WAIVER_READ_CODE: Readonly<Record<string, string>> = {
   failed: 'storage-failed',
 }
 
-/** The codes a command may stop with before any runner starts (cli.ts may not import report.ts). */
+/**
+ * The codes a command may stop with before any runner starts (cli.ts may not import report.ts);
+ * Step 15b adds takedown-here-only, the actions-mode `--takedown` refusal (D15B-8).
+ */
 export type ConfigurationCode =
   | 'usage'
   | 'configuration'
@@ -56,6 +59,7 @@ export type ConfigurationCode =
   | 'project-mismatch'
   | 'run-context-refused'
   | 'answers-missing'
+  | 'takedown-here-only'
 
 /** A stop line for the CLI's configuration checks. */
 export function stopLine(command: Command, code: ConfigurationCode): string {

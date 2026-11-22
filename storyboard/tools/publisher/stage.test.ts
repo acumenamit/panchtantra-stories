@@ -211,7 +211,14 @@ const NOT_FOR_STAGE = (name: string) => (): never => {
 }
 const NO_APPROVE_OR_PUBLISH: Pick<
   CliDeps,
-  'openStdin' | 'stdinIsTTY' | 'promptWrite' | 'stdinDeadline' | 'triggerHook' | 'verify'
+  | 'openStdin'
+  | 'stdinIsTTY'
+  | 'promptWrite'
+  | 'stdinDeadline'
+  | 'triggerHook'
+  | 'verify'
+  | 'createDeleter'
+  | 'publicReads'
 > = {
   openStdin: NOT_FOR_STAGE('openStdin'),
   stdinIsTTY: NOT_FOR_STAGE('stdinIsTTY'),
@@ -219,6 +226,13 @@ const NO_APPROVE_OR_PUBLISH: Pick<
   stdinDeadline: NOT_FOR_STAGE('stdinDeadline'),
   triggerHook: NOT_FOR_STAGE('triggerHook'),
   verify: NOT_FOR_STAGE('verify'),
+  // Step 15b (§2.5): the deleter factory and the public reads; stage never calls them.
+  createDeleter: NOT_FOR_STAGE('createDeleter'),
+  publicReads: {
+    readPublicObject: NOT_FOR_STAGE('readPublicObject'),
+    checkRange: NOT_FOR_STAGE('checkRange'),
+    checkLanding: NOT_FOR_STAGE('checkLanding'),
+  },
 }
 
 type Before = (url: URL, init: RequestInit) => Promise<Response | void> | Response | void

@@ -19,7 +19,7 @@ import type { StoryPackageV1 } from '../../src/core/package/v1'
 import { parseArgs } from './args'
 import { runApprove } from './approve'
 import { Secret } from './env'
-import type { PublishPort } from './port'
+import type { PublishPort, RangeTarget, UnpublishPort } from './port'
 import { runPublish } from './publish'
 import { runStage } from './stage'
 import {
@@ -183,6 +183,13 @@ async function approve(client: StorageClient, story: TestStory): Promise<number>
   })
 }
 
+/** Step 15b (§2.5, TP-1): the Range fake's calls, never in another log. */
+const rangeCalls: RangeTarget[] = []
+/** Step 15b (§2.5): a dep publish must never call; it throws when called. */
+const notForPublish = (name: string) => (): never => {
+  throw new Error(`test: ${name} is not for publish or rollback`)
+}
+
 async function publish(stub: StorageStub, client: StorageClient, args: readonly string[]) {
   marks.set(stub, stub.requests.length)
   const parsed = parseArgs(['publish', ...args, '--report-dir', join(root, 'reports')], context())
@@ -196,9 +203,16 @@ async function publish(stub: StorageStub, client: StorageClient, args: readonly 
       const port: PublishPort = client
       return port
     },
+    makeUnpublishPort: notForPublish('makeUnpublishPort'),
+    makeRemover: notForPublish('makeRemover'),
+    realPath: notForPublish('realPath'),
     tail: {
       hook: async () => 'triggered',
       verify: async (seq) => ({ kind: 'live', seq }),
+      range: async (target) => {
+        rangeCalls.push(target)
+        return { kind: 'ok', start: 0, end: 0, size: 1 }
+      },
     },
   })
 }
@@ -327,6 +341,130 @@ describe('loader acceptance in production mode', () => {
         )
         .toEqual([two.packageSha256])
       expectPublishSafe(stub, productionEntries(stub).seq)
+    },
+  )
+})
+
+// ---- Step 15b: the loader accepts N+1 after an unpublish (§14.14: T15B-55) ----
+
+/** `publish --unpublish <id>` through the client held as the unpublish port (no takedown). */
+async function unpublish(stub: StorageStub, client: StorageClient, id: string) {
+  marks.set(stub, stub.requests.length)
+  const parsed = parseArgs(
+    ['publish', '--unpublish', id, '--report-dir', join(root, 'reports')],
+    context(),
+  )
+  if (!parsed.ok || parsed.command !== 'publish') throw new Error('test setup: unpublish args')
+  return runPublish(parsed, {
+    storyboardRoot: root,
+    platform: process.platform,
+    ...quiet,
+    runMode: 'pc',
+    makePort: notForPublish('makePort'),
+    makeUnpublishPort: () => {
+      const port: UnpublishPort = client
+      return port
+    },
+    makeRemover: notForPublish('makeRemover'),
+    realPath: notForPublish('realPath'),
+    tail: {
+      hook: async () => 'triggered',
+      verify: async (seq) => ({ kind: 'live', seq }),
+      range: async (target) => {
+        rangeCalls.push(target)
+        return { kind: 'ok', start: 0, end: 0, size: 1 }
+      },
+    },
+  })
+}
+
+/**
+ * TP-14 for an unpublish that moves both pointers, without --takedown: after the mark, object POSTs
+ * only to catalogue/snapshots/<seq>.json and the two pointers (each at most once), none under
+ * masters, no DELETE; then expectNoUnexpected. Throws naming the method and pathname.
+ */
+function expectUnpublishSafe(stub: StorageStub, seq: number): void {
+  const log = stub.requests.slice(marks.get(stub) ?? 0)
+  const allowed = [
+    `${CREATE}content/catalogue/snapshots/${seq}.json`,
+    `${CREATE}content/catalogue/production.json`,
+    `${CREATE}content/catalogue/staging.json`,
+  ]
+  for (const r of log) {
+    const bad = r.method === 'DELETE' || (isObjectPost(r) && !allowed.includes(r.pathname))
+    if (bad) throw new Error(`unpublish-safe: ${r.method} ${r.pathname}`)
+  }
+  for (const path of allowed) {
+    if (log.filter((r) => isObjectPost(r) && r.pathname === path).length > 1) {
+      throw new Error(`unpublish-safe: POST ${path} twice`)
+    }
+  }
+  expectNoUnexpected(stub)
+}
+
+/** The real loader on `pointer` (production or staging mode by the pointer's name). */
+async function loadAt(loader: StubStorage, pointer: string) {
+  const lines: string[] = []
+  const exit = await loadContent({
+    env: {
+      CONTENT_SOURCE: 'storage',
+      CONTENT_BASE_URL: loader.baseUrl,
+      CONTENT_POINTER: pointer,
+      GITHUB_ACTIONS: 'true',
+    },
+    root,
+    platform: 'linux',
+    now: () => new Date(NOW),
+    log: (line) => void lines.push(line),
+    logError: (line) => void lines.push(line),
+  })
+  return { exit, lines }
+}
+
+describe('loader acceptance after an unpublish (Step 15b)', () => {
+  it(
+    'T15B-55 the real loader accepts N+1 after an unpublish, in production and in staging mode: the story absent from build-info, the rest kept (A27)',
+    TIMEOUT,
+    async () => {
+      const [, river, two] = await testStories()
+      const stories = [river!, two!]
+      const { stub, client } = await publisherStub(stories)
+      const steps = [
+        await stage(client, stories),
+        await approve(client, two!),
+        await approve(client, river!),
+        await publish(stub, client, [two!.storyId, river!.storyId]),
+        await unpublish(stub, client, two!.storyId),
+      ]
+      expect(
+        steps,
+        'precondition: stage, approve both, publish both, then unpublish two-paths exited 0',
+      ).toEqual([0, 0, 0, 0, 0])
+      // MT15B-1 (test-side plant): pass river-stones' MP3 path as `drop` here.
+      const { loader, copied, listed } = await copyToLoader(stub, client)
+      expect(copied, 'precondition: every listed object copied with its stored type').toBe(listed)
+      const production = await loadAt(loader, 'catalogue/production.json')
+      const info = production.exit === 0 ? buildInfo() : { stories: [], excluded: [] }
+      const excludedIds = (info.excluded ?? []).map((e) => (e as { storyId?: string }).storyId)
+      expect
+        .soft(
+          [
+            production.exit,
+            info.stories.map((s) => s.storyId),
+            info.stories.some((s) => s.storyId === two!.storyId) ||
+              excludedIds.includes(two!.storyId),
+          ],
+          '(g1) production mode: exit 0, build-info stories [river], two-paths in neither list',
+        )
+        .toEqual([0, [river!.storyId], false])
+      const staging = await loadAt(loader, 'catalogue/staging.json')
+      expect
+        .soft(
+          [staging.exit, staging.exit === 0 ? buildInfo().stories.map((s) => s.storyId) : []],
+          '(g2) staging mode: exit 0, stories [river]',
+        )
+        .toEqual([0, [river!.storyId]])
+      expectUnpublishSafe(stub, productionEntries(stub).seq)
     },
   )
 })

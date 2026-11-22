@@ -8,6 +8,7 @@
 // approval record (TP-9) stored in the stub.
 // Titles start with their id; one expect.soft per claim, messages "(gN) <claim> <sample>";
 // preconditions are hard expects starting "precondition:".
+// Step 15b (P1-8d part b, design p1-step15b-design.md §14.5) adds T15B-7: readCheckedPackage.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { expectedPackagePath } from '../../src/core/content/gates'
 import { checkPackage, type SnapshotEntry } from '../../src/core/content/packages'
@@ -21,6 +22,7 @@ import {
   REMOTE_CHECK_STEPS,
   checkStoryRemote,
   featureCheck,
+  readCheckedPackage,
   type RemoteCheckOptions,
 } from './remote-checks'
 import {
@@ -677,6 +679,99 @@ describe('the remote story check (§4.4)', () => {
       expect
         .soft(featureCheck('lantern-walk', [entry], bound.pkg), '(g3) an id outside the stories')
         .toEqual({ ok: false, code: 'feature-not-in-production' })
+    },
+  )
+})
+
+// ---- Step 15b (P1-8d part b): the shared package read ----
+// (design migration-input/p1-step15b-design.md §3.27, D15B-27; §14.5)
+
+describe('readCheckedPackage (Step 15b)', () => {
+  it(
+    'T15B-7 readCheckedPackage: one content-addressed read with the carried codes; no listing, no masters read (A25, D15B-27)',
+    TIMEOUT,
+    async () => {
+      const story = await storyOf()
+      const read = async (stub: StorageStub, entry: SnapshotEntry) => {
+        const from = stub.requests.length
+        const result = await readCheckedPackage(clientOf(stub), entry)
+        return { result, sent: stub.requests.slice(from) }
+      }
+      const stub = await newStub()
+      const { entry } = await seed(stub, story)
+      const ok = await read(stub, entry)
+      expect(ok.result.ok, 'precondition: the seeded package reads ok').toBe(true)
+
+      // (g1) ok: {ok: true, pkg, bytes}; one GET of the package path, no listing, no masters read
+      expect
+        .soft(
+          ok.result.ok ? Object.keys(ok.result).sort() : codeOf(ok.result),
+          '(g1) ok carries exactly ok, pkg and bytes',
+        )
+        .toEqual(['bytes', 'ok', 'pkg'])
+      expect.soft(ok.result.ok ? ok.result.pkg.storyId : null, '(g1) the checked package').toBe(ID)
+      expect
+        .soft(ok.result.ok ? ok.result.bytes : null, '(g1) the bytes read')
+        .toEqual(story.packageBytes)
+      expect
+        .soft(
+          ok.sent.map((r) => [r.method, r.pathname, r.search]),
+          '(g1) exactly one request: a GET of the package path with no search',
+        )
+        .toEqual([['GET', `${READ}content/${entry.packagePath}`, '']])
+      expect
+        .soft(stepsOf(ok.sent), '(g1) no list request and no masters request')
+        .toEqual(['package'])
+
+      // (g2) the carried codes
+      const absent = await newStub()
+      await seed(absent, story, { packageBytes: null })
+      expect
+        .soft(codeOf((await read(absent, entry)).result), '(g2) not found')
+        .toBe('carried-package-missing')
+
+      const swapped = await newStub()
+      await seed(swapped, story, { packageBytes: (await storyOf('river-stones')).packageBytes })
+      expect
+        .soft(codeOf((await read(swapped, entry)).result), '(g2) other bytes under the name')
+        .toBe('carried-package-gate')
+
+      const loose = pretty(story.packageBytes)
+      const looseSha = await sha256Hex(loose)
+      const looseStub = await newStub()
+      const looseEntry: SnapshotEntry = {
+        ...entry,
+        packageSha256: looseSha,
+        packagePath: expectedPackagePath({ storyId: ID, packageSha256: looseSha }, 'staging', ''),
+      }
+      looseStub.put('content', looseEntry.packagePath, loose, 'application/json')
+      expect
+        .soft(
+          codeOf((await read(looseStub, looseEntry)).result),
+          '(g2) a pretty-printed package under its own sha256 (requireJcs)',
+        )
+        .toBe('carried-package-gate')
+
+      const phase1 = await withPackage(story, {
+        ...story.pkg,
+        nodes: story.pkg.nodes.map((node) => ({ ...node, image: null })),
+        assets: [],
+      } as StoryPackageV1)
+      const p1Stub = await newStub()
+      const p1 = await seed(p1Stub, phase1)
+      expect
+        .soft(codeOf((await read(p1Stub, p1.entry)).result), '(g2) a phase-1 package')
+        .toBe('phase-1-package')
+
+      const packageRead = `${READ}content/${entry.packagePath}`
+      const refused = await newStub()
+      await seed(refused, story)
+      refused.override('GET', packageRead, { kind: 'answer', status: 401, body: '{}' })
+      expect
+        .soft(codeOf((await read(refused, entry)).result), '(g2) 401')
+        .toBe('storage-unauthorized')
+      refused.override('GET', packageRead, { kind: 'answer', status: 500, body: '{}' })
+      expect.soft(codeOf((await read(refused, entry)).result), '(g2) 500').toBe('storage-failed')
     },
   )
 })

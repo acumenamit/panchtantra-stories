@@ -4,7 +4,8 @@
 // - export lists (FX): a new export of a fenced module fails until it is reviewed;
 // - the reach walk (FW): fences F1-F6 over the import graph from every non-test script, with every
 //   import form of catalogue class 12, failing closed on what it cannot follow; a fenced module named
-//   by its repository path in a script literal or runnable text is a finding too (FW7);
+//   by its repository path in a script literal or runnable text is a finding too (FW7); F4 has its
+//   reviewed row since Step 15b (the content deleter and its first caller, cli.ts);
 // - one file walker (FS0) with one exclusion list, the same on this PC and CI. It never reads a
 //   `.env*` name, classifies every extension and fails closed on unreadable files, syntax errors,
 //   `.env`-named entries .gitignore does not keep out and an empty walk; it skips only the test files
@@ -994,9 +995,11 @@ const REACH_FENCES: readonly ReachFence[] = [
     allowed: (entry) => entry === 'tools/publisher/storage-stub.ts',
   },
   {
+    // F4's reviewed row (Step 15b, p1-step15b-design.md D15B-14): the deleter and its first caller.
     name: 'F4 content deleter',
     file: 'tools/publisher/content-deleter.ts',
-    allowed: (entry) => entry === 'tools/publisher/content-deleter.ts',
+    allowed: (entry) =>
+      entry === 'tools/publisher/content-deleter.ts' || entry === 'tools/publisher/cli.ts',
   },
   {
     name: 'F5 deploy hook',
@@ -1152,7 +1155,8 @@ function unquoted(text: string, ext: string): string {
  * Form fw-path (review fix SEC2-4): a fenced module named by its repository path, in a script literal
  * or a line of runnable text, by a file its fence (F1-F6) does not allow. The loads the reach walk
  * cannot follow take such a path: spawn and execFile arguments, `node -e` and eval code, a Worker with
- * `eval: true`, a workflow `run:` line, a package.json script.
+ * `eval: true`, a workflow `run:` line, a package.json script. F4's reviewed row (Step 15b) allows
+ * content-deleter.ts and cli.ts, as in the reach walk.
  */
 const FENCED_PATH =
   /tools[\\/]+publisher[\\/]+(storage-stub|storage|content-deleter|env)(?![\w-])/gi
@@ -2361,6 +2365,7 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
       './report',
       './run-kit',
       './storage-layout',
+      './takedown',
     ]),
   ],
   [
@@ -2368,12 +2373,39 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
     importRow(['./port', './run-kit', './story-checks', './storage-layout']),
   ],
   ['tools/publisher/run-kit.ts', importRow(['./report'], false)],
+  // Step 15b's modules (p1-step15b-design.md D15B-25; takedown.ts holds no node:fs, D15B-36).
+  [
+    'tools/publisher/takedown.ts',
+    importRow([
+      './args',
+      './catalogue-state',
+      './local-files',
+      './port',
+      './remote-checks',
+      './report',
+      './run-kit',
+      './storage-layout',
+      'node:path',
+    ]),
+  ],
+  [
+    'tools/publisher/verify-command.ts',
+    importRow([
+      './catalogue-state',
+      './port',
+      './remote-checks',
+      './report',
+      './run-kit',
+      './storage-layout',
+    ]),
+  ],
   [
     PUBLISHER_CLI,
     importRow(
       [
         './approve',
         './args',
+        './content-deleter',
         './env',
         './hook',
         './port',
@@ -2382,8 +2414,10 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
         './stage',
         './storage',
         './verify',
+        './verify-command',
         '../../scripts/load-content',
         '../../src/config/security-headers',
+        'node:fs',
         'node:path',
         'node:url',
       ],
@@ -2414,15 +2448,13 @@ const NETWORK_NAMES: ReadonlySet<string> = new Set([
   'Request',
 ])
 /** g3: the targets no new module imports, and those only the CLI imports. */
-const NEVER_IMPORTED: readonly string[] = [
-  'tools/publisher/content-deleter',
-  'tools/publisher/storage-stub',
-]
+const NEVER_IMPORTED: readonly string[] = ['tools/publisher/storage-stub']
 const CLI_ONLY_IMPORTS: readonly string[] = [
   'tools/publisher/storage',
   'tools/publisher/env',
   'tools/publisher/hook',
   'tools/publisher/verify',
+  'tools/publisher/content-deleter',
 ]
 /** g3: the env.ts exports the CLI names, and no other (S14-AUD-13). */
 const CLI_ENV_NAMES: readonly string[] = [
@@ -3096,7 +3128,7 @@ describe('the reach walk (FW)', () => {
       .toBe(Object.keys(files).length)
   })
 
-  it('T13-FW6 F4: content-deleter.ts is reached by no entry but itself', () => {
+  it('T13-FW6 F4: content-deleter.ts is reached by no entry but itself and cli.ts', () => {
     const findings = reachOfFiles({
       ...STORAGE_FILES,
       'tools/publisher/content-deleter.ts': "import { x } from './storage'",
@@ -3122,6 +3154,84 @@ describe('the reach walk (FW)', () => {
         '(g2) the deleter as its own entry, reaching storage.ts, is not (F1 allow-list)',
       )
       .toBe(false)
+    // Step 15b (p1-step15b-design.md D15B-14, D15B-25): F4's reviewed row. cli.ts is the deleter's
+    // first and only caller; every other entry reaching it, by any number of hops, is a finding.
+    const deleterFiles = {
+      ...STORAGE_FILES,
+      'tools/publisher/content-deleter.ts': "import { x } from './storage'\nexport const d = x",
+    } as const
+    const callsDeleter = "import { d } from './content-deleter'\nexport const c = d"
+    expect
+      .soft(
+        reachOfFiles({ ...deleterFiles, [PUBLISHER_CLI]: callsDeleter }),
+        '(g4) cli.ts reaching the deleter is no finding',
+      )
+      .toEqual([])
+    const samples: readonly (readonly [string, Record<string, string>, string])[] = [
+      [
+        'publish.ts importing the deleter',
+        { 'tools/publisher/publish.ts': callsDeleter },
+        'tools/publisher/publish.ts',
+      ],
+      [
+        'takedown.ts importing the deleter',
+        { 'tools/publisher/takedown.ts': callsDeleter },
+        'tools/publisher/takedown.ts',
+      ],
+      [
+        'verify-command.ts importing the deleter',
+        { 'tools/publisher/verify-command.ts': callsDeleter },
+        'tools/publisher/verify-command.ts',
+      ],
+      [
+        'a src/core wrapper of the deleter imported by publish.ts',
+        {
+          'src/core/net3.ts': "export * from '../../tools/publisher/content-deleter'",
+          'tools/publisher/publish.ts':
+            "import * as n from '../../src/core/net3'\nexport const y = n",
+        },
+        'tools/publisher/publish.ts',
+      ],
+      [
+        "export * from './content-deleter' in port.ts",
+        { 'tools/publisher/port.ts': "export * from './content-deleter'" },
+        'tools/publisher/port.ts',
+      ],
+      [
+        'two hops, report.ts > helper.ts > content-deleter.ts',
+        {
+          'tools/publisher/report.ts': "import { h } from './helper'\nexport const r = h",
+          'tools/publisher/helper.ts': "import * as m from './content-deleter'\nexport const h = m",
+        },
+        'tools/publisher/report.ts',
+      ],
+      [
+        'a type-only import of the deleter in stage.ts',
+        {
+          'tools/publisher/stage.ts':
+            "import type { ContentDeleter } from './content-deleter'\nexport type D = ContentDeleter",
+        },
+        'tools/publisher/stage.ts',
+      ],
+      [
+        'tools/publisher/Cli.ts importing the deleter',
+        { 'tools/publisher/Cli.ts': callsDeleter },
+        'tools/publisher/Cli.ts',
+      ],
+      [
+        'tools/publisher/cli.mts importing the deleter',
+        { 'tools/publisher/cli.mts': callsDeleter },
+        'tools/publisher/cli.mts',
+      ],
+    ]
+    for (const [id, files, entry] of samples) {
+      expect
+        .soft(
+          loads(reachOfFiles({ ...deleterFiles, ...files }), entry, 'F4 content deleter'),
+          `(g5) ${id} is a finding`,
+        )
+        .toBe(true)
+    }
   })
 
   it('T13-FW7 a fenced module named by its repository path in a script literal or runnable text is a finding outside its fence', () => {
@@ -4723,7 +4833,7 @@ describe('literal and import pins (FS4)', () => {
       expect
         .soft(
           found.g3,
-          '(g3) no ./content-deleter or ./storage-stub; ./storage, ./env, ./hook and ./verify from cli.ts only; cli.ts names only loadEnvFile, readDeployHookUrl, readSiteUrl and readStorageCredentials of env.ts',
+          '(g3) no ./storage-stub; ./content-deleter, ./storage, ./env, ./hook and ./verify from cli.ts only; cli.ts names only loadEnvFile, readDeployHookUrl, readSiteUrl and readStorageCredentials of env.ts',
         )
         .toEqual([])
       expect
@@ -5209,6 +5319,148 @@ describe('literal and import pins (FS4)', () => {
             answers,
             "import { createInterface } from 'node:readline'\nexport const c = createInterface",
           ),
+        ],
+      ]
+      for (const [id, files] of notFlagged) {
+        const scan = scanFiles(files)
+        expect.soft(flat(fs4dFindings(scan, envExports)), `(g2) ${id} is not flagged`).toEqual([])
+        expect.soft(scan.walk.findings, `(g2) ${id} walks cleanly`).toEqual([])
+      }
+    },
+  )
+
+  it(
+    'T15B-56 FS4d negative samples for takedown.ts and verify-command.ts through the same predicates (D15B-25, CRIT-12, L26)',
+    { timeout: WALK_TIMEOUT },
+    async () => {
+      const envExports = await exportNames('env.ts')
+      const flat = (found: Fs4dFindings) => FS4D_GROUPS.flatMap((group) => found[group])
+      expect(
+        flat(fs4dFindings(real.scan, envExports)),
+        'precondition: the real tree passes FS4d (T14-83)',
+      ).toEqual([])
+      const takedown = 'tools/publisher/takedown.ts'
+      const verifyCommand = 'tools/publisher/verify-command.ts'
+      const publish = 'tools/publisher/publish.ts'
+      const one = (path: string, text: string): Readonly<Record<string, string>> => ({
+        [path]: text,
+      })
+      // A clean cli.ts: the pinned run-context lines, exactly the four env.ts names it may, and the
+      // three specifiers Step 15b adds (D15B-14, D15B-19, D15B-36).
+      const cliSample =
+        "import { RUN_CONTEXT_NAMES, captureRunContext, parseArgs } from './args'\nimport { loadEnvFile, readStorageCredentials } from './env'\nimport { readDeployHookUrl, readSiteUrl } from './env'\nimport { createContentDeleter } from './content-deleter'\nimport { runVerify } from './verify-command'\nimport { realpathSync } from 'node:fs'\nexport const named = [RUN_CONTEXT_NAMES, parseArgs, loadEnvFile, readStorageCredentials, readDeployHookUrl, readSiteUrl, createContentDeleter, runVerify, realpathSync]\nconst runContext = captureRunContext(process.env, process.platform)\nexport { runContext }\n"
+      const clean: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+        [
+          'takedown.ts holding exactly its row and a src/core import',
+          one(
+            takedown,
+            "import { hasUnstorableSegment } from './args'\nimport { readCatalogueState } from './catalogue-state'\nimport { readLocalFile } from './local-files'\nimport type { StorageReader } from './port'\nimport { readCheckedPackage } from './remote-checks'\nimport { isLocalRealPath } from './report'\nimport { failureCode } from './run-kit'\nimport { classOfPath } from './storage-layout'\nimport { join } from 'node:path'\nimport { sha256Hex } from '../../src/core/hashing'\nexport type R = StorageReader\nexport const t = [hasUnstorableSegment, readCatalogueState, readLocalFile, readCheckedPackage, isLocalRealPath, failureCode, classOfPath, join, sha256Hex]",
+          ),
+        ],
+        [
+          'verify-command.ts holding exactly its row',
+          one(
+            verifyCommand,
+            "import { readCatalogueState } from './catalogue-state'\nimport type { VerifySite } from './port'\nimport { readCheckedPackage } from './remote-checks'\nimport { formatVerifyExpected } from './report'\nimport { failureCode } from './run-kit'\nimport { classOfPath } from './storage-layout'\nexport type S = VerifySite\nexport const v = [readCatalogueState, readCheckedPackage, formatVerifyExpected, failureCode, classOfPath]",
+          ),
+        ],
+        ['the cli.ts sample', one(PUBLISHER_CLI, cliSample)],
+      ]
+      for (const [id, files] of clean) {
+        expect(
+          flat(fs4dFindings(scanFiles(files), envExports)),
+          `precondition: ${id} in memory gives no finding`,
+        ).toEqual([])
+      }
+      const flagged: readonly (readonly [
+        string,
+        Readonly<Record<string, string>>,
+        readonly Fs4dGroup[],
+      ])[] = [
+        [
+          'takedown.ts importing rmSync from node:fs',
+          one(takedown, "import { rmSync } from 'node:fs'\nexport const r = rmSync"),
+          ['g1'],
+        ],
+        [
+          'takedown.ts importing ./content-deleter',
+          one(
+            takedown,
+            "import { createContentDeleter } from './content-deleter'\nexport const c = createContentDeleter",
+          ),
+          ['g3', 'g1'],
+        ],
+        [
+          'takedown.ts importing ./storage',
+          one(
+            takedown,
+            "import { createStorageClient } from './storage'\nexport const c = createStorageClient",
+          ),
+          ['g3', 'g1'],
+        ],
+        [
+          'takedown.ts naming fetch',
+          one(takedown, 'export const f = (u: string) => fetch(u)'),
+          ['g5'],
+        ],
+        [
+          'takedown.ts naming process',
+          one(takedown, 'export const a = () => process.argv'),
+          ['g6'],
+        ],
+        [
+          'verify-command.ts importing ./verify',
+          one(verifyCommand, "import { checkRange } from './verify'\nexport const c = checkRange"),
+          ['g3', 'g1'],
+        ],
+        [
+          'verify-command.ts requiring node:https',
+          one(verifyCommand, "export const h: unknown = require('node:https')"),
+          ['g4', 'g1'],
+        ],
+        [
+          'verify-command.ts naming Request',
+          one(verifyCommand, 'export const r = (u: string) => new Request(u)'),
+          ['g5'],
+        ],
+        [
+          'verify-command.ts naming console',
+          one(verifyCommand, 'export const e = (x: string) => console.error(x)'),
+          ['g6'],
+        ],
+        [
+          'verify-command.ts holding the literal panchatantra@1',
+          one(verifyCommand, "export const ref = 'panchatantra@1'"),
+          ['g7'],
+        ],
+        [
+          'publish.ts importing ./content-deleter',
+          one(
+            publish,
+            "import { createContentDeleter } from './content-deleter'\nexport const c = createContentDeleter",
+          ),
+          ['g3', 'g1'],
+        ],
+        [
+          'publish.ts importing ./verify-command',
+          one(publish, "import { runVerify } from './verify-command'\nexport const v = runVerify"),
+          ['g1'],
+        ],
+      ]
+      for (const [id, files, groups] of flagged) {
+        const scan = scanFiles(files)
+        const found = fs4dFindings(scan, envExports)
+        for (const group of groups) {
+          expect.soft(found[group].length, `(g1) ${id} is flagged by ${group}`).toBeGreaterThan(0)
+        }
+        expect.soft(scan.walk.findings, `(g1) ${id} walks cleanly`).toEqual([])
+      }
+      const cliSamplePath = PUBLISHER_CLI
+      const notFlagged: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+        ['the cli.ts sample', one(cliSamplePath, cliSample)],
+        [
+          'takedown.ts importing node:path',
+          one(takedown, "import { join } from 'node:path'\nexport const j = join"),
         ],
       ]
       for (const [id, files] of notFlagged) {

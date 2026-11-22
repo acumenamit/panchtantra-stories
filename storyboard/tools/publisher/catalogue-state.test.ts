@@ -8,6 +8,7 @@
 // preconditions are hard expects starting "precondition:".
 // Step 15a (P1-8d part a, design p1-step15a-design.md §14.8) adds T15A-25 to T15A-29: production
 // composition, rollback composition and the production documents.
+// Step 15b (P1-8d part b, design p1-step15b-design.md §14.4) adds T15B-6: the unpublish composition.
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,6 +32,7 @@ import {
   composeProduction,
   composeRollback,
   composeStaging,
+  composeUnpublish,
   createSnapshot,
   movePointer,
   readCatalogueState,
@@ -1586,5 +1588,115 @@ describe('movePointer', () => {
       ok: true,
     })
     expect.soft(await stored(stub, 'staging'), '(g2) staging holds ours').toBe(built.sha256)
+  })
+})
+
+// ---- Step 15b (P1-8d part b): the unpublish composition ----
+// (design migration-input/p1-step15b-design.md §3.2, D15B-2, D15B-31, CRIT-8; §14.4)
+
+/** The value frozen at every depth (a frozen input is accepted, T15B-6 g5). */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+describe('composeUnpublish (Step 15b)', () => {
+  it("T15B-6 composeUnpublish: production's entries without the story in their order, the featured id cleared only when it names the story, the note, unchanged when the story is absent; never throws, never mutates (A2, D15B-2, CRIT-8)", async () => {
+    const c = approved('c-tale', 1, hex('1'))
+    const a = approved('a-tale', 1, hex('2'))
+    const b = approved('b-tale', 1, hex('3'), hex('f'))
+    const built = await buildProductionDocuments(
+      { featuredStoryId: 'b-tale', stories: [c, a, b], note: 'publisher publish: a-tale b-tale' },
+      3,
+      new Date(NOW),
+    )
+    expect(built.ok, 'precondition: buildProductionDocuments builds the production snapshot').toBe(
+      true,
+    )
+    const production = built.ok ? built.documents.snapshot.value : snapshotValue(3)
+    expect(
+      [production.stories.map((s) => s.storyId), production.featuredStoryId],
+      'precondition: three approved entries c-tale, a-tale, b-tale, featured b-tale',
+    ).toEqual([['c-tale', 'a-tale', 'b-tale'], 'b-tale'])
+    const before = structuredClone(production)
+
+    // (g1) removing b-tale
+    const removed = composeUnpublish({ production, storyId: 'b-tale' })
+    expect
+      .soft(
+        removed.stories.map((s) => s.storyId),
+        '(g1) stories c-tale, a-tale in production order',
+      )
+      .toEqual(['c-tale', 'a-tale'])
+    expect
+      .soft(
+        removed.stories.map((s) => jcs(s)),
+        "(g1) each entry's JCS bytes equal production's",
+      )
+      .toEqual([jcs(production.stories[0]), jcs(production.stories[1])])
+    expect.soft(removed.featuredStoryId, '(g1) featured cleared (it named b-tale)').toBeNull()
+    expect.soft(removed.note, '(g1) note').toBe('publisher unpublish: b-tale')
+    expect.soft(removed.unchanged, '(g1) not unchanged (b-tale was in production)').toBe(false)
+    expect.soft(removed.named, '(g1) named is empty').toEqual([])
+    expect.soft(removed.sources, "(g1) sources: each kept entry from 'production'").toEqual([
+      {
+        storyId: 'c-tale',
+        packageSha256: hex('1'),
+        approvalSha256: hex('e'),
+        source: 'production',
+      },
+      {
+        storyId: 'a-tale',
+        packageSha256: hex('2'),
+        approvalSha256: hex('e'),
+        source: 'production',
+      },
+    ])
+    const rebuilt = await buildProductionDocuments(removed, 4, new Date(LATER))
+    expect.soft(codeOf(rebuilt), '(g1) buildProductionDocuments on the result is ok').toBe('ok')
+
+    // (g2) removing a-tale keeps featured b-tale
+    const keeps = composeUnpublish({ production, storyId: 'a-tale' })
+    expect.soft(keeps.featuredStoryId, '(g2) featured b-tale kept').toBe('b-tale')
+    expect
+      .soft(
+        keeps.stories.map((s) => s.storyId),
+        '(g2) c-tale, b-tale',
+      )
+      .toEqual(['c-tale', 'b-tale'])
+
+    // (g3) a story absent from production
+    const absent = composeUnpublish({ production, storyId: 'river-stones' })
+    expect
+      .soft(jcs(absent.stories), "(g3) absent: stories equal production's")
+      .toBe(jcs(production.stories))
+    expect.soft(absent.featuredStoryId, '(g3) absent: featured kept').toBe('b-tale')
+    expect.soft(absent.unchanged, '(g3) absent: unchanged').toBe(true)
+
+    // (g4) a one-story production
+    const solo = snapshotValue(2, [approved('solo-tale', 1, hex('4'))], 'solo-tale')
+    let empty: ReturnType<typeof composeUnpublish> | null = null
+    expect
+      .soft(
+        () => (empty = composeUnpublish({ production: solo, storyId: 'solo-tale' })),
+        '(g4) a one-story production does not throw',
+      )
+      .not.toThrow()
+    expect
+      .soft((empty as ReturnType<typeof composeUnpublish> | null)?.stories, '(g4) stories []')
+      .toEqual([])
+
+    // (g5) a frozen input is accepted; production is unchanged by every call
+    const frozen = deepFreeze(structuredClone(production))
+    expect
+      .soft(
+        () => composeUnpublish({ production: frozen, storyId: 'b-tale' }),
+        '(g5) a deep-frozen production is accepted',
+      )
+      .not.toThrow()
+    expect.soft(production, '(g5) production deep-equal before and after').toEqual(before)
   })
 })
