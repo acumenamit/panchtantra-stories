@@ -14,10 +14,19 @@
 // writer takes only the checked real dir (a CheckedReportDir, which checkedReportDir alone makes),
 // creates it, re-checks its real path, then per file removes a stale temp entry, creates the temp
 // exclusively, re-checks and renames; a failed write is a result, never a throw.
+// Step 17 (migration-input/p1-step17-design.md §3.7, §3.20, §5, D17-7, D17-20; P1-9a): the command
+// masters (MODES masters and dry-run, the report publisher-masters), the masters codes and
+// plan-changed in EXIT_BY_CODE, formatPlanDigest and the masters lines (classes, object, plan,
+// done), each validating every field, and the masters report section {plan, set, objects} with
+// masters storage paths only. report.ts may not import ./storage-layout (FS4d), so a masters object
+// path is checked here against the two class shapes (image master, media-log file) with a calendar
+// date; storage-layout's class patterns stay the authority. foldFor is exported, body unchanged
+// (D15-28), for masters.ts and bind-output.ts.
 import { mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { isSafeStoragePath } from '../../src/core/content/gates'
 import { ENABLED_LOCALE_CODES, LOCALE_CODES } from '../../src/core/locales'
+import { isCalendarDate } from '../../src/core/package/approval'
 import { NodeId, StoryId } from '../../src/core/package/v1'
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4
@@ -29,7 +38,7 @@ export type ExitCode = 0 | 1 | 2 | 3 | 4
 export type Phase =
   'end' | 'local' | 'plan' | 'configuration' | 'commit' | 'pointer' | 'tail' | 'takedown'
 /** The publisher's commands that print lines and write reports (help prints the usage only). */
-export type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
+export type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify' | 'masters'
 
 const PHASE_EXIT: ReadonlyMap<string, ExitCode> = new Map<string, ExitCode>([
   ['end', 0],
@@ -207,12 +216,32 @@ export const EXIT_BY_CODE: ReadonlyMap<string, readonly ExitCode[]> = new Map([
       'takedown-mp3-kept',
     ],
   ),
+  // Step 17 §5: the masters codes (masters-here-only at 2) and plan-changed (stage and masters).
+  ...group([0], ['masters-unchanged', 'masters-written']),
+  ...group(
+    [1],
+    [
+      'masters-root',
+      'masters-empty',
+      'masters-unknown-file',
+      'media-log-folder-invalid',
+      'masters-local-invalid',
+      'plan-changed',
+    ],
+  ),
+  ...group([1, 3], ['master-exists-differs', 'master-unverifiable']),
+  ...group([2], ['masters-here-only']),
+  ...group([3], ['master-readback-differs']),
 ])
 
 export const REVIEW_LINE = 'review: corepack pnpm preview:staging'
 
-/** The fixed text of a client refusal (storage.ts; port.ts isStorageRefusal uses the same rule). */
-const REFUSAL = /^refused: [a-z]+ (field|body-gate|class-pattern|url) [a-z0-9-]+$/
+/**
+ * The fixed text of a client refusal (storage.ts; port.ts isStorageRefusal uses the same rule): the
+ * class is one lower-case word or one of the two masters classes, named exactly (S17-R1-FID-3).
+ */
+const REFUSAL =
+  /^refused: (?:[a-z]+|image-master|media-log) (field|body-gate|class-pattern|url) [a-z0-9-]+$/
 const ERROR_NAME = /^[A-Z][A-Za-z]{0,39}Error$/
 const SHA = /^[0-9a-f]{64}$/
 const CHECK_ID = /^[A-Z][0-9]{3}$/
@@ -239,7 +268,8 @@ const isCommand = (value: unknown): value is Command =>
   value === 'stage' ||
   value === 'approve' ||
   value === 'publish' ||
-  value === 'verify'
+  value === 'verify' ||
+  value === 'masters'
 const oneOf = (value: unknown, words: readonly string[]): value is string =>
   typeof value === 'string' && words.includes(value)
 const isErrorName = (value: unknown): value is string =>
@@ -389,6 +419,85 @@ export function formatSnapshot(line: {
 export function formatPointerMoved(seq: number): string {
   field(isSeq(seq), 'seq')
   return `stage: staging pointer seq=${seq} moved (read back, post-check clean)`
+}
+
+// ---- Step 17: the plan digests and the masters lines (§3.7, §3.20) ----
+
+/**
+ * A masters object path: `images/<storyId>/<64 hex>.<png|jpg>` or
+ * `media-log/<calendar date>-<12 hex>/<media-log.json|media-log.history.jsonl|image-log.json>`.
+ */
+const MASTERS_PATH =
+  /^(?:images\/(?=[a-z0-9-]{3,64}\/)[a-z0-9]+(?:-[a-z0-9]+)*\/[a-f0-9]{64}\.(?:png|jpg)|media-log\/([0-9]{4}-[0-9]{2}-[0-9]{2})-[a-f0-9]{12}\/(?:media-log\.json|media-log\.history\.jsonl|image-log\.json))$/
+const isMastersPath = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !isSafeStoragePath(value)) return false
+  const match = MASTERS_PATH.exec(value)
+  return match !== null && (match[1] === undefined || isCalendarDate(match[1]))
+}
+const MASTERS_PLAN_STATES = ['new', 'existing'] as const
+const MASTERS_REPORT_STATES = ['new', 'existing', 'created'] as const
+
+/** `<command>: plan plan=<64> set=<64>` (D17-20): stage prints it after formatPlan's line. */
+export function formatPlanDigest(
+  command: 'stage' | 'masters',
+  digests: { readonly plan: string; readonly set: string },
+): string {
+  field(command === 'stage' || command === 'masters', 'command')
+  field(isSha(digests.plan), 'plan')
+  field(isSha(digests.set), 'set')
+  return `${command}: plan plan=${digests.plan} set=${digests.set}`
+}
+
+/** `masters: classes image-master=<n> media-log=<n>`, before the plan line (CRIT-12). */
+export function formatMastersClasses(line: {
+  readonly imageMaster: number
+  readonly mediaLog: number
+}): string {
+  field(isCount(line.imageMaster), 'imageMaster')
+  field(isCount(line.mediaLog), 'mediaLog')
+  return `masters: classes image-master=${line.imageMaster} media-log=${line.mediaLog}`
+}
+
+/** `masters: object <path> bytes=<n> sha256=<12> state=<new|existing>`: a masters path only. */
+export function formatMastersObject(line: {
+  readonly path: string
+  readonly bytes: number
+  readonly sha256: string
+  readonly state: (typeof MASTERS_PLAN_STATES)[number]
+}): string {
+  field(isMastersPath(line.path), 'path')
+  field(isCount(line.bytes), 'bytes')
+  field(isSha(line.sha256), 'sha256')
+  field(oneOf(line.state, MASTERS_PLAN_STATES), 'state')
+  return `masters: object ${line.path} bytes=${line.bytes} sha256=${sha12(line.sha256)} state=${line.state}`
+}
+
+/** `masters: plan objects=<n> new=<n> existing=<n> bytes=<new bytes> plan=<64> set=<64>`. */
+export function formatMastersPlan(line: {
+  readonly objects: number
+  readonly new: number
+  readonly existing: number
+  readonly bytes: number
+  readonly plan: string
+  readonly set: string
+}): string {
+  for (const key of ['objects', 'new', 'existing', 'bytes'] as const) {
+    field(isCount(line[key]), key)
+  }
+  field(line.new + line.existing === line.objects, 'counts')
+  field(isSha(line.plan), 'plan')
+  field(isSha(line.set), 'set')
+  return `masters: plan objects=${line.objects} new=${line.new} existing=${line.existing} bytes=${line.bytes} plan=${line.plan} set=${line.set}`
+}
+
+/** `masters: done created=<n> existing=<n>`. */
+export function formatMastersDone(line: {
+  readonly created: number
+  readonly existing: number
+}): string {
+  field(isCount(line.created), 'created')
+  field(isCount(line.existing), 'existing')
+  return `masters: done created=${line.created} existing=${line.existing}`
 }
 
 // ---- approve and publish lines (Step 15a §4.7) ----
@@ -1069,6 +1178,20 @@ export interface ReportInput {
   readonly checks?: ReportChecks
   /** Verify only, required (null when the run stopped before its first step); never set for others. */
   readonly verify?: ReportVerify | null
+  /** Masters only, required (null when the run stopped before its plan); never set for others. */
+  readonly masters?: ReportMasters | null
+}
+
+/** The masters report's section (Step 17 §3.7 step 6): the digests and masters storage paths only. */
+export interface ReportMasters {
+  readonly plan: string
+  readonly set: string
+  readonly objects: readonly {
+    readonly path: string
+    readonly bytes: number
+    readonly sha256: string
+    readonly state: (typeof MASTERS_REPORT_STATES)[number]
+  }[]
 }
 
 const MOVE_WORDS = ['moved', 'not-needed', 'failed', 'not-run'] as const
@@ -1215,6 +1338,7 @@ const INPUT_KEYS: readonly string[] = [
   'takedown',
   'checks',
   'verify',
+  'masters',
 ]
 const MODES: Readonly<Record<Command, readonly string[]>> = {
   validate: ['validate'],
@@ -1222,6 +1346,7 @@ const MODES: Readonly<Record<Command, readonly string[]>> = {
   approve: ['approve', 'dry-run'],
   publish: ['publish', 'dry-run'],
   verify: ['verify'],
+  masters: ['masters', 'dry-run'],
 }
 
 /** A plain object whose own keys are exactly `keys` (a TypeError naming `name` otherwise). */
@@ -1525,6 +1650,26 @@ function reportVerify(verify: ReportVerify): Record<string, unknown> {
   }
 }
 
+const MASTERS_KEYS = ['plan', 'set', 'objects']
+const MASTERS_OBJECT_KEYS = ['path', 'bytes', 'sha256', 'state']
+
+function reportMasters(masters: ReportMasters): Record<string, unknown> {
+  exactKeys(masters, MASTERS_KEYS, 'masters')
+  field(isSha(masters.plan) && isSha(masters.set), 'masters digests')
+  field(Array.isArray(masters.objects), 'masters objects')
+  return {
+    plan: masters.plan,
+    set: masters.set,
+    objects: masters.objects.map((object) => {
+      exactKeys(object, MASTERS_OBJECT_KEYS, 'masters object')
+      field(isMastersPath(object.path), 'masters object path')
+      field(isCount(object.bytes) && isSha(object.sha256), 'masters object bytes and sha256')
+      field(oneOf(object.state, MASTERS_REPORT_STATES), 'masters object state')
+      return { path: object.path, bytes: object.bytes, sha256: object.sha256, state: object.state }
+    }),
+  }
+}
+
 /** The report's JSON text and its Markdown rendering; a TypeError on any field outside the rules. */
 export function buildReport(input: ReportInput): { readonly json: string; readonly md: string } {
   field(isCommand(input.command), 'command')
@@ -1571,9 +1716,18 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
     input.command === 'verify' ? input.verify !== undefined : input.verify === undefined,
     'verify',
   )
-  if (input.command === 'approve' || input.command === 'publish' || input.command === 'verify') {
+  field(
+    input.command === 'masters' ? input.masters !== undefined : input.masters === undefined,
+    'masters',
+  )
+  if (
+    input.command === 'approve' ||
+    input.command === 'publish' ||
+    input.command === 'verify' ||
+    input.command === 'masters'
+  ) {
     // §D15-19: approve and publish carry no stories, objects or private word lists; nor does
-    // verify (Step 15b §3.23).
+    // verify (Step 15b §3.23) or masters (Step 17: its objects are in its own section).
     field(
       input.stories.length === 0 &&
         input.uploaded.length === 0 &&
@@ -1624,6 +1778,9 @@ export function buildReport(input: ReportInput): { readonly json: string; readon
   }
   if (input.command === 'verify') {
     report.verify = input.verify == null ? null : reportVerify(input.verify)
+  }
+  if (input.command === 'masters') {
+    report.masters = input.masters == null ? null : reportMasters(input.masters)
   }
   return { json: `${JSON.stringify(report, null, 2)}\n`, md: renderMarkdown(report) }
 }
@@ -1874,6 +2031,30 @@ function renderMarkdown(report: Record<string, unknown>): string {
       )
     }
   }
+  const masters = report.masters as (Record<string, unknown> & { objects: Rows }) | null | undefined
+  if (masters !== undefined) {
+    lines.push('', '## Masters', '')
+    if (masters === null) {
+      lines.push('No masters plan: the run stopped before it.')
+    } else {
+      lines.push(
+        ...table(
+          ['field', 'value'],
+          [
+            ['plan', masters.plan],
+            ['set', masters.set],
+          ],
+        ),
+        '',
+        '### Objects',
+        '',
+        ...table(
+          ['path', 'bytes', 'sha256', 'state'],
+          masters.objects.map((o) => [o.path, o.bytes, o.sha256, o.state]),
+        ),
+      )
+    }
+  }
   return `${lines.join('\n')}\n`
 }
 
@@ -1917,8 +2098,11 @@ export type CheckedReportDir = string & { readonly __brand: 'CheckedReportDir' }
 export type ReportDirRefusal = 'in-site' | 'not-local' | 'site-not-local'
 
 const SITE_FOLDERS = ['public', 'app'] as const
-/** win32 folds as NTFS's upcase table does for U+0131 and U+017F (D15-28); posix keeps case. */
-const foldFor = (platform: string) => (path: string) =>
+/**
+ * win32 folds as NTFS's upcase table does for U+0131 and U+017F (D15-28); posix keeps case.
+ * Exported unchanged for Step 17 (masters.ts's root check, bind-output.ts's real-path checks).
+ */
+export const foldFor = (platform: string) => (path: string) =>
   platform === 'win32' ? path.toUpperCase().toLowerCase() : path
 const inSiteOf = (real: string, bases: readonly string[], platform: string): boolean => {
   const fold = foldFor(platform)
@@ -1989,6 +2173,7 @@ const REPORT_NAMES: ReadonlyMap<string, string> = new Map([
   ['approve', 'publisher-approve'],
   ['publish', 'publisher-publish'],
   ['verify', 'publisher-verify'],
+  ['masters', 'publisher-masters'],
 ])
 
 /** Removes a temp file of ours, best effort (a failure leaves it; the run reports unwritten). */

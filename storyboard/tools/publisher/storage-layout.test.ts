@@ -20,12 +20,16 @@ import {
   type MediaPackage,
 } from '../../src/core/content/media'
 import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import { DATE, isCalendarDate } from '../../src/core/package/approval'
 import { Sha256, StoryId } from '../../src/core/package/v1'
 import {
   classOfPath,
   contentReadTarget,
+  MASTER_IMAGE_MAX_BYTES,
   MASTERS_CACHE_SECONDS,
   MAX_JSON_BYTES,
+  MEDIA_LOG_MAX_BYTES,
+  masterBodyRule,
   pointerTarget,
   recheckTarget,
   recheckUrl,
@@ -57,6 +61,21 @@ const MEDIA_REF = (mime: string = 'image/webp') => ({
 const SNAPSHOT_REF = () => ({ kind: 'snapshot', seq: 7 })
 const APPROVAL_REF = () => ({ kind: 'approval', storyId: 'two-paths', packageSha256: SHA_A })
 const WAIVER_REF = () => ({ kind: 'waiver', storyId: 'lion-and-hare', waiverSha256: WAIVER_SHA })
+/** Step 17 (D17-6, D17-7, D17-14): the two masters classes. The NI-3 folder's sha12 (REQ:455). */
+const NI3_SHA12 = '13b92037a763'
+const IMAGE_MASTER_REF = (ext: string = 'png') => ({
+  kind: 'image-master',
+  storyId: 'lion-and-hare',
+  sha256: SHA_A,
+  ext,
+})
+const MEDIA_LOG_REF = (file: string = 'media-log.json') => ({
+  kind: 'media-log',
+  date: '2026-11-13',
+  sha12: NI3_SHA12,
+  file,
+})
+const LOG_FILES = ['media-log.json', 'media-log.history.jsonl', 'image-log.json'] as const
 
 type Ref = Record<string, unknown>
 type Layout = { ok: true; value: Target } | { ok: false; refusal: Refusal }
@@ -188,22 +207,33 @@ const KIND_FORMS: readonly Form[] = [
   ['K9', 'valueOf'],
   ['K10', 'listing'],
   ['K11', 'canary'],
-  ['K12', 'media-log'],
+  // Step 17 (B17-implC-3): media-log and image-master are kinds now; their near misses stay unknown.
+  ['K12', 'media_log'],
   ['K13', 'image'],
   ['K14', 'report'],
   ['K15', 'masters'],
   ['K16', ''],
   ['K17', ['approval']],
+  ['K18', 'image-masters'],
+  ['K19', 'Media-log'],
+  ['K20', 'imagemaster'],
 ]
 
-type FieldRule = 'story-id' | 'sha256' | 'variant' | 'mime' | 'seq'
+type FieldRule =
+  'story-id' | 'sha256' | 'variant' | 'mime' | 'seq' | 'master-ext' | 'date' | 'sha12' | 'log-file'
 
-/** The real rule each field must pass (v1.ts:10-18, media.ts:12-21, catalogue.ts:60). */
+/** The real rule each field must pass (v1.ts:10-18, media.ts:12-21, catalogue.ts:60; Step 17 §3.7). */
 function realRuleAccepts(rule: FieldRule, value: unknown): boolean {
   if (rule === 'story-id') return typeof value === 'string' && StoryId.safeParse(value).success
   if (rule === 'sha256') return typeof value === 'string' && Sha256.safeParse(value).success
   if (rule === 'variant') return typeof value === 'string' && VARIANT_RULE.test(value)
   if (rule === 'mime') return typeof value === 'string' && Object.hasOwn(MEDIA_EXTENSIONS, value)
+  if (rule === 'master-ext') return value === 'png' || value === 'jpg'
+  if (rule === 'date') {
+    return typeof value === 'string' && DATE.test(value) && isCalendarDate(value)
+  }
+  if (rule === 'sha12') return typeof value === 'string' && /^[a-f0-9]{12}$/.test(value)
+  if (rule === 'log-file') return (LOG_FILES as readonly unknown[]).includes(value)
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
 }
 
@@ -213,6 +243,50 @@ const VALID_OF: Record<FieldRule, string> = {
   variant: 'w640',
   mime: 'image/webp',
   seq: '7',
+  'master-ext': 'png',
+  date: '2026-11-13',
+  sha12: NI3_SHA12,
+  'log-file': 'media-log.json',
+}
+
+/** Step 17 (14.12): each new rule's own forms, beside the shared string forms. */
+const NEW_RULE_FORMS: Partial<Record<FieldRule, readonly Form[]>> = {
+  'master-ext': [
+    ['X-E1', 'PNG'],
+    ['X-E2', 'jpeg'],
+    ['X-E3', 'webp'],
+    ['X-E4', ''],
+    ['X-E5', 'Jpg'],
+    ['X-E6', '.png'],
+  ],
+  date: [
+    ['X-D1', '2026-11-15-'],
+    ['X-D2', ' 2026-11-15'],
+    ['X-D3', '2026-02-30'],
+    ['X-D4', '2026-11-15T00:00'],
+    ['X-D5', '2026-1-15'],
+    ['X-D6', '+2026-11-15'],
+    ['X-D7', '२०२६-११-१५'],
+    ['X-D8', '2026-11-15 '],
+    ['X-D9', '2026-13-01'],
+  ],
+  sha12: [
+    ['X-H1', NI3_SHA12.toUpperCase()],
+    ['X-H2', NI3_SHA12.slice(0, 11)],
+    ['X-H3', `${NI3_SHA12}a`],
+    ['X-H4', 'g'.repeat(12)],
+    ['X-H5', SHA_A],
+  ],
+  'log-file': [
+    ['X-F1', 'media-log.txt'],
+    ['X-F2', 'Media-log.json'],
+    ['X-F3', 'MEDIA-LOG.JSON'],
+    ['X-F4', 'media-log.json '],
+    ['X-F5', 'media-log.json.'],
+    ['X-F6', 'image-log.jsonl'],
+    ['X-F7', 'media-log.history.json'],
+    ['X-F8', 'media-log.json.bak'],
+  ],
 }
 
 /** The string forms of one field, without types; each fails the field's real rule. */
@@ -225,7 +299,11 @@ function stringFormsFor(rule: FieldRule): readonly Form[] {
       : rule === 'variant'
         ? [['F-L6', 'v'.repeat(17)]]
         : []
-  return [...STRING_FORMS.filter(([id]) => !(rule === 'variant' && id === 'F-L1')), ...extra]
+  return [
+    ...STRING_FORMS.filter(([id]) => !(rule === 'variant' && id === 'F-L1')),
+    ...extra,
+    ...(NEW_RULE_FORMS[rule] ?? []),
+  ]
 }
 
 /** Every form of one field, types included. */
@@ -253,6 +331,16 @@ const CLASS_FIELDS: Record<string, readonly (readonly [string, FieldRule])[]> = 
     ['storyId', 'story-id'],
     ['waiverSha256', 'sha256'],
   ],
+  'image-master': [
+    ['storyId', 'story-id'],
+    ['sha256', 'sha256'],
+    ['ext', 'master-ext'],
+  ],
+  'media-log': [
+    ['date', 'date'],
+    ['sha12', 'sha12'],
+    ['file', 'log-file'],
+  ],
 }
 
 const VALID_REF: Record<string, () => Ref> = {
@@ -261,6 +349,8 @@ const VALID_REF: Record<string, () => Ref> = {
   snapshot: SNAPSHOT_REF,
   approval: APPROVAL_REF,
   waiver: WAIVER_REF,
+  'image-master': () => IMAGE_MASTER_REF(),
+  'media-log': () => MEDIA_LOG_REF(),
 }
 
 function expectFieldForms(
@@ -466,9 +556,36 @@ describe('storage-layout: targetOf and pointerTarget', () => {
           fields: { storyId: 'lion-and-hare', waiverSha256: WAIVER_SHA },
         },
       ],
+      // Step 17 (14.12): both masters classes, every extension and log file.
+      ...(['png', 'jpg'] as const).map((ext): [string, Ref, Target] => [
+        `image-master ${ext}`,
+        IMAGE_MASTER_REF(ext),
+        {
+          kind: 'image-master',
+          bucket: 'masters',
+          path: `images/lion-and-hare/${SHA_A}.${ext}`,
+          contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+          cacheSeconds: 0,
+          maxBytes: 20_971_520,
+          fields: { storyId: 'lion-and-hare', sha256: SHA_A, ext },
+        },
+      ]),
+      ...LOG_FILES.map((file): [string, Ref, Target] => [
+        `media-log ${file}`,
+        MEDIA_LOG_REF(file),
+        {
+          kind: 'media-log',
+          bucket: 'masters',
+          path: `media-log/2026-11-13-${NI3_SHA12}/${file}`,
+          contentType: file.endsWith('.jsonl') ? 'application/x-ndjson' : 'application/json',
+          cacheSeconds: 0,
+          maxBytes: 8_388_608,
+          fields: { date: '2026-11-13', sha12: NI3_SHA12, file },
+        },
+      ]),
     ]
-    expect(new Set(cases.map(([, ref]) => JSON.stringify(ref))).size, 'precondition: 7 refs').toBe(
-      7,
+    expect(new Set(cases.map(([, ref]) => JSON.stringify(ref))).size, 'precondition: 12 refs').toBe(
+      12,
     )
     for (const [name, ref, want] of cases) {
       const got = valueOf(targetOf(ref))
@@ -538,6 +655,10 @@ describe('storage-layout: targetOf and pointerTarget', () => {
     ['T13-L4c', 'media', 'variant', 'variant'],
     ['T13-L4d', 'media', 'mime', 'mime'],
     ['T13-L4e', 'snapshot', 'seq', 'seq'],
+    ['T13-L4f', 'image-master', 'ext', 'master-ext'],
+    ['T13-L4g', 'media-log', 'date', 'date'],
+    ['T13-L4h', 'media-log', 'sha12', 'sha12'],
+    ['T13-L4i', 'media-log', 'file', 'log-file'],
   ]
   for (const [id, cls, field, rule] of FIELD_FAMILIES) {
     it(`${id} every ${field} form is refused at stage field with rule ${rule}`, () => {
@@ -678,6 +799,8 @@ describe('storage-layout: targetOf and pointerTarget', () => {
     ['T13-L8c', 'snapshot'],
     ['T13-L8d', 'approval'],
     ['T13-L8e', 'waiver'],
+    ['T13-L8f', 'image-master'],
+    ['T13-L8g', 'media-log'],
   ]
   for (const [id, cls] of CLASS_IDS) {
     it(`${id} every form in every ${cls} field is refused at stage field with the field rule`, () => {
@@ -833,7 +956,7 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
     }
   })
 
-  it('T13-L11 storage-layout.ts holds six anchored class-pattern literals and builds no RegExp', () => {
+  it('T13-L11 storage-layout.ts holds eight anchored class-pattern literals and builds no RegExp', () => {
     const text = readFileSync(new URL('./storage-layout.ts', import.meta.url), 'utf8')
     const source = ts.createSourceFile('storage-layout.ts', text, ts.ScriptTarget.Latest, true)
     const literals: string[] = []
@@ -850,7 +973,7 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
       ts.forEachChild(node, visit)
     }
     visit(source)
-    expect(literals.length, 'precondition: at least 6 regex literals').toBeGreaterThanOrEqual(6)
+    expect(literals.length, 'precondition: at least 8 regex literals').toBeGreaterThanOrEqual(8)
     expect.soft(constructed, '(g1) no RegExp construction').toBe(0)
     const bodyOf = (literal: string) => literal.slice(1, literal.lastIndexOf('/'))
     const anchored = literals.map(bodyOf).filter((b) => b.startsWith('^') && b.endsWith('$'))
@@ -861,6 +984,8 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
       '^catalogue\\/(',
       '^approvals\\/',
       '^waivers\\/',
+      '^images\\/',
+      '^media-log\\/',
     ]
     for (const head of heads) {
       expect
@@ -895,7 +1020,7 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
       ts.forEachChild(node, collect)
     }
     collect(source)
-    expect(tablePatterns.size, 'precondition: six pattern entries in PATTERNS').toBe(6)
+    expect(tablePatterns.size, 'precondition: eight pattern entries in PATTERNS').toBe(8)
     const fieldBodies = [
       ...literals.map(bodyOf).filter((b) => !heads.some((h) => b.startsWith(h))),
       '^[a-z0-9]+(-[a-z0-9]+)*$',
@@ -922,6 +1047,12 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
       ['waiver', valueOf(targetOf(WAIVER_REF()))],
       ['production', valueOf(pointerTarget('production'))],
       ['staging', valueOf(pointerTarget('staging'))],
+      ['image-master png', valueOf(targetOf(IMAGE_MASTER_REF('png')))],
+      ['image-master jpg', valueOf(targetOf(IMAGE_MASTER_REF('jpg')))],
+      ...LOG_FILES.map((file): [string, Target] => [
+        `media-log ${file}`,
+        valueOf(targetOf(MEDIA_LOG_REF(file))),
+      ]),
     ]
     for (const [name, target] of built) {
       expect
@@ -1099,7 +1230,7 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
     },
   )
 
-  it('T13-L17 the longest built paths are typed from the real bounds: media 157 and 156, approval 144, package 143, snapshot 41', () => {
+  it('T13-L17 the longest built paths are typed from the real bounds: media 157 and 156, approval 144, package 143, image master 140, media log 57, snapshot 41', () => {
     const id = 'a'.repeat(64)
     const v = 'v'.repeat(16)
     const media = (mime: string) =>
@@ -1113,7 +1244,14 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
     expect.soft(approval.length, '(g1) approval').toBe(144)
     expect.soft(pkg.length, '(g1) package').toBe(143)
     expect.soft(snap.length, '(g1) snapshot').toBe(41)
-    for (const p of [approval, pkg, snap])
+    // Step 17: `images/` 7 + 64 + 1 + 64 + `.png` 4; `media-log/` 10 + 23 + 1 + 23.
+    const master = valueOf(
+      targetOf({ kind: 'image-master', storyId: id, sha256: SHA_A, ext: 'png' }),
+    ).path
+    const log = valueOf(targetOf(MEDIA_LOG_REF('media-log.history.jsonl'))).path
+    expect.soft(master.length, '(g1) image master').toBe(140)
+    expect.soft(log.length, '(g1) media log').toBe(57)
+    for (const p of [approval, pkg, snap, master, log])
       expect.soft(p.length <= 512, `(g1) ${p.length} <= 512`).toBe(true)
   })
 
@@ -1127,6 +1265,19 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
     expect
       .soft(media, '(g2) media cap = content file_size_limit')
       .toBe(tomlSize(tomlKey(content, 'file_size_limit')))
+    // Step 17 (14.12): both masters caps at most the masters file_size_limit (config.toml:139).
+    const masters = tomlSize(
+      tomlKey(tomlSection(CONFIG_TOML, 'storage.buckets.masters'), 'file_size_limit'),
+    )
+    expect(masters, 'precondition: the masters limit is 50 MiB').toBe(52_428_800)
+    for (const [name, cap] of [
+      ['MASTER_IMAGE_MAX_BYTES', MASTER_IMAGE_MAX_BYTES],
+      ['MEDIA_LOG_MAX_BYTES', MEDIA_LOG_MAX_BYTES],
+      ['image-master target', valueOf(targetOf(IMAGE_MASTER_REF())).maxBytes],
+      ['media-log target', valueOf(targetOf(MEDIA_LOG_REF())).maxBytes],
+    ] as const) {
+      expect.soft(cap <= masters, `(g3) ${name} ${cap} <= the masters limit`).toBe(true)
+    }
   })
 
   it('T13-L19a every class content type is in its bucket allowed list', () => {
@@ -1151,6 +1302,16 @@ describe('storage-layout: re-check 1, re-check 2 and classOfPath', () => {
     }
     const approval = valueOf(targetOf(APPROVAL_REF()))
     expect.soft(masters.includes(approval.contentType ?? ''), '(g1) approval').toBe(true)
+    // Step 17 (14.12): both masters classes' types are in the masters list.
+    const mastersTargets = [
+      ...(['png', 'jpg'] as const).map((ext) => valueOf(targetOf(IMAGE_MASTER_REF(ext)))),
+      ...LOG_FILES.map((file) => valueOf(targetOf(MEDIA_LOG_REF(file)))),
+    ]
+    for (const t of mastersTargets) {
+      expect
+        .soft(masters.includes(t.contentType ?? ''), `(g1) ${t.kind} ${t.path} ${t.contentType}`)
+        .toBe(true)
+    }
   })
 
   it('T13-L19b the toml reader skips comments, reads the named section only and knows MiB and KiB', () => {
@@ -1496,5 +1657,260 @@ describe('storage-layout: contentReadTarget (Step 14)', () => {
       .toBe(want.path)
     expect.soft(counts.ownKeys, '(g3) ownKeys called once').toBe(1)
     expect.soft(counts.get, '(g3) get trap never called').toBe(0)
+  })
+})
+
+// ---- Step 17 (P1-9a): the masters classes (design p1-step17-design.md §3.6, §3.7, §3.14, D17-6,
+// D17-7, D17-14, D17-25; test plan 14.12: T17-36, T17-37) ----
+
+const enc = (text: string) => new TextEncoder().encode(text)
+const bytesOf = (...parts: (string | readonly number[])[]): Uint8Array<ArrayBuffer> => {
+  const chunks = parts.map((part) => (typeof part === 'string' ? enc(part) : Uint8Array.from(part)))
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0))
+  let at = 0
+  for (const chunk of chunks) {
+    out.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return out
+}
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+/** A PNG head masterBodyRule reads: the signature, IHDR's length and type, 13 data bytes, a CRC. */
+const PNG_HEAD = bytesOf(PNG_SIGNATURE, [0, 0, 0, 13], 'IHDR', new Array<number>(17).fill(1))
+const JPEG_HEAD = bytesOf([0xff, 0xd8, 0xff, 0xe0, 0, 16], 'JFIF')
+const S12_DATE = '2026-11-13'
+
+async function imageMasterTarget(
+  bytes: Uint8Array<ArrayBuffer>,
+  ext: 'png' | 'jpg',
+  sha?: string,
+): Promise<Target> {
+  return valueOf(targetOf({ ...IMAGE_MASTER_REF(ext), sha256: sha ?? (await sha256Hex(bytes)) }))
+}
+async function mediaLogTarget(
+  bytes: Uint8Array<ArrayBuffer>,
+  file: string,
+  sha12?: string,
+): Promise<Target> {
+  return valueOf(
+    targetOf({
+      kind: 'media-log',
+      date: S12_DATE,
+      sha12: sha12 ?? (await sha256Hex(bytes)).slice(0, 12),
+      file,
+    }),
+  )
+}
+const nested = (depth: number, inner: string) => '['.repeat(depth) + inner + ']'.repeat(depth)
+type Shape = Omit<Target, 'kind' | 'fields'>
+
+describe('storage-layout: the masters classes (Step 17)', () => {
+  it('T17-36 image-master and media-log: targets, caps, types, patterns, the classOfPath round trip and near misses; the NI-3 folder decodes (A22, CRIT-6, CRIT-9)', () => {
+    expect(targetOf(IMAGE_MASTER_REF()).ok, 'precondition: an image-master ref passes').toBe(true)
+    expect(targetOf(MEDIA_LOG_REF()).ok, 'precondition: a media-log ref passes').toBe(true)
+    // (g1) targets, caps and types; create and read
+    expect.soft(MASTER_IMAGE_MAX_BYTES, '(g1) MASTER_IMAGE_MAX_BYTES').toBe(20_971_520)
+    expect.soft(MEDIA_LOG_MAX_BYTES, '(g1) MEDIA_LOG_MAX_BYTES').toBe(8_388_608)
+    const refs: [string, Ref, Shape][] = [
+      ...(['png', 'jpg'] as const).map((ext): [string, Ref, Shape] => [
+        `image-master ${ext}`,
+        IMAGE_MASTER_REF(ext),
+        {
+          bucket: 'masters',
+          path: `images/lion-and-hare/${SHA_A}.${ext}`,
+          contentType: ext === 'png' ? 'image/png' : 'image/jpeg',
+          cacheSeconds: 0,
+          maxBytes: MASTER_IMAGE_MAX_BYTES,
+        },
+      ]),
+      ...LOG_FILES.map((file): [string, Ref, Shape] => [
+        `media-log ${file}`,
+        MEDIA_LOG_REF(file),
+        {
+          bucket: 'masters',
+          path: `media-log/${S12_DATE}-${NI3_SHA12}/${file}`,
+          contentType:
+            file === 'media-log.history.jsonl' ? 'application/x-ndjson' : 'application/json',
+          cacheSeconds: 0,
+          maxBytes: MEDIA_LOG_MAX_BYTES,
+        },
+      ]),
+    ]
+    for (const [name, ref, want] of refs) {
+      const got = valueOf(targetOf(ref))
+      expect
+        .soft(
+          {
+            bucket: got.bucket,
+            path: got.path,
+            contentType: got.contentType,
+            cacheSeconds: got.cacheSeconds,
+            maxBytes: got.maxBytes,
+          },
+          `(g1) ${name}`,
+        )
+        .toEqual(want)
+      expect.soft(targetOf(ref, 'create').ok, `(g1) ${name} creatable`).toBe(true)
+      expect.soft(targetOf(ref, 'read').ok, `(g1) ${name} readable`).toBe(true)
+    }
+    // (g2) the round trip, the NI-3 folder and a storyId named media-log
+    for (const [name, ref] of refs) {
+      const target = valueOf(targetOf(ref))
+      expect
+        .soft(classOfPath('masters', target.path), `(g2) round trip ${name}`)
+        .toEqual({ kind: target.kind, fields: { ...target.fields } })
+      expect.soft(recheckTarget(target).ok, `(g2) re-check 1 ${name}`).toBe(true)
+    }
+    for (const file of ['media-log.json', 'media-log.history.jsonl']) {
+      expect
+        .soft(
+          classOfPath('masters', `media-log/2026-11-13-${NI3_SHA12}/${file}`),
+          `(g2) the NI-3 folder: ${file}`,
+        )
+        .toEqual({ kind: 'media-log', fields: { date: '2026-11-13', sha12: NI3_SHA12, file } })
+    }
+    expect
+      .soft(classOfPath('masters', `images/media-log/${SHA_A}.png`), '(g2) storyId media-log')
+      .toEqual({
+        kind: 'image-master',
+        fields: { storyId: 'media-log', sha256: SHA_A, ext: 'png' },
+      })
+    // (g3) near misses
+    const s12 = NI3_SHA12
+    const misses = [
+      `images/lion-and-hare/${SHA_A}.PNG`,
+      `images/lion-and-hare/${SHA_A}.jpeg`,
+      `images/lion-and-hare/${SHA_A}.webp`,
+      `images/lion-and-hare/${'a'.repeat(63)}.png`,
+      `images/lion-and-hare/${'a'.repeat(65)}.png`,
+      `images/lion-and-hare/${SHA_A}.png/x`,
+      `images/lion-and-hare/${SHA_A}.png.bak`,
+      `images/ab/${SHA_A}.png`,
+      `images/${'a'.repeat(65)}/${SHA_A}.png`,
+      `Images/lion-and-hare/${SHA_A}.png`,
+      `images/lion-and-hare/x/${SHA_A}.png`,
+      `media/lion-and-hare/${SHA_A}.png`,
+      `media-log/2026-02-30-${s12}/media-log.json`,
+      `media-log/2026-11-15-${s12}-/media-log.json`,
+      `media-log/ 2026-11-15-${s12}/media-log.json`,
+      `media-log/2026-11-15-${s12.slice(0, 11)}/media-log.json`,
+      `media-log/2026-11-15-${s12}a/media-log.json`,
+      `media-log/2026-11-15-${s12}/Media-log.json`,
+      `media-log/2026-11-15-${s12}/media-log.json.bak`,
+      `media-log/2026-11-15-${s12}/x/media-log.json`,
+      `media-log/2026-11-15-${s12}/image-log.jsonl`,
+      `media-log/2026-11-15/media-log.json`,
+      'media-log/x.ndjson',
+    ]
+    for (const path of misses) {
+      expect.soft(classOfPath('masters', path), `(g3) masters ${path}`).toBeNull()
+    }
+    for (const [name, ref] of refs) {
+      expect
+        .soft(classOfPath('content', valueOf(targetOf(ref)).path), `(g3) content bucket ${name}`)
+        .toBeNull()
+    }
+  })
+
+  it('T17-37 masterBodyRule: image masters by name hash and magic; media-log.json an array, image-log.json a JCS image-log@1 object, the history NDJSON; no BOM, strict UTF-8, no __proto__ at any depth, well-formed keys and values (A23, TP17-6)', async () => {
+    const png = await imageMasterTarget(PNG_HEAD, 'png')
+    expect(await masterBodyRule(png, PNG_HEAD), 'precondition: a PNG head passes').toBeNull()
+    const rule = async (target: Promise<Target>, bytes: Uint8Array<ArrayBuffer>) =>
+      masterBodyRule(await target, bytes)
+
+    // (g1) image masters
+    const noIhdr = bytesOf(PNG_SIGNATURE, [0, 0, 0, 13], 'IDAT', new Array<number>(17).fill(1))
+    const fe = bytesOf([0xff, 0xd8, 0xfe, 0xe0])
+    const g1: [string, Promise<string | null>, string | null][] = [
+      ['a valid jpg', rule(imageMasterTarget(JPEG_HEAD, 'jpg'), JPEG_HEAD), null],
+      [
+        'sha256 not the name',
+        rule(imageMasterTarget(PNG_HEAD, 'png', SHA_A), PNG_HEAD),
+        'sha256-mismatch',
+      ],
+      ['png ext with JPEG bytes', rule(imageMasterTarget(JPEG_HEAD, 'png'), JPEG_HEAD), 'not-png'],
+      ['a signature with no IHDR at 12', rule(imageMasterTarget(noIhdr, 'png'), noIhdr), 'not-png'],
+      ['jpg ext with FF D8 FE', rule(imageMasterTarget(fe, 'jpg'), fe), 'not-jpeg'],
+      ['jpg ext with PNG bytes', rule(imageMasterTarget(PNG_HEAD, 'jpg'), PNG_HEAD), 'not-jpeg'],
+    ]
+    for (const [label, got, want] of g1) {
+      expect.soft(await got, `(g1) ${label}`).toBe(want)
+    }
+
+    // (g2) media-log.json
+    const log = async (text: string | Uint8Array<ArrayBuffer>, sha12?: string) => {
+      const bytes = typeof text === 'string' ? enc(text) : text
+      return masterBodyRule(await mediaLogTarget(bytes, 'media-log.json', sha12), bytes)
+    }
+    expect(await log('[{"a":1}]'), 'precondition: an array of objects passes').toBeNull()
+    const g2: [string, () => Promise<string | null>, string | null][] = [
+      ['a BOM', () => log(bytesOf([0xef, 0xbb, 0xbf], '[]')), 'not-utf8'],
+      ['C3 28', () => log(bytesOf('["', [0xc3, 0x28], '"]')), 'not-utf8'],
+      ['a sha12 not the bytes', () => log('[]', NI3_SHA12), 'sha12-mismatch'],
+      ['an object', () => log('{}'), 'record-json'],
+      ['not JSON', () => log('[1,'), 'record-json'],
+      ['[] (form only)', () => log('[]'), null],
+      ['__proto__ at depth 1', () => log('[{"__proto__":1}]'), 'proto-key'],
+      ['__proto__ at depth 2', () => log('[{"a":{"__proto__":{}}}]'), 'proto-key'],
+      ['nesting below 64 levels', () => log(nested(70, '1')), 'proto-key'],
+      ['"\\ud800" as a value', () => log('[{"a":"\\ud800"}]'), 'ill-formed-text'],
+      ['"\\ud800" as a key', () => log('[{"\\ud800":1}]'), 'ill-formed-text'],
+      ['"\\udc00" in a nested array', () => log('[{"a":["x","\\udc00"]}]'), 'ill-formed-text'],
+    ]
+    for (const [label, run, want] of g2) {
+      expect.soft(await run(), `(g2) media-log.json ${label}`).toBe(want)
+    }
+
+    // (g3) image-log.json
+    const imageLog = async (text: string) => {
+      const bytes = enc(text)
+      return masterBodyRule(await mediaLogTarget(bytes, 'image-log.json'), bytes)
+    }
+    const valid = new TextDecoder().decode(jcsBytes({ schema: 'image-log@1', images: [{ a: 1 }] }))
+    expect(
+      new TextDecoder().decode(jcsBytes(JSON.parse(valid))),
+      'precondition: the valid image log is its own JCS form',
+    ).toBe(valid)
+    const g3: [string, string, string | null][] = [
+      ['a valid JCS image-log@1 object', valid, null],
+      ['an array', '[]', 'record-json'],
+      ['not JCS', '{"schema": "image-log@1", "images": []}', 'not-jcs'],
+      ['schema image-log@2', '{"images":[],"schema":"image-log@2"}', 'record-json'],
+      ['images not an array', '{"images":{},"schema":"image-log@1"}', 'record-json'],
+      ['no schema', '{"images":[]}', 'record-json'],
+      ['__proto__ at depth 0', '{"__proto__":1,"images":[],"schema":"image-log@1"}', 'proto-key'],
+      [
+        '"\\ud800" in an image',
+        '{"images":[{"a":"\\ud800"}],"schema":"image-log@1"}',
+        'ill-formed-text',
+      ],
+      ['empty images', '{"images":[],"schema":"image-log@1"}', null],
+    ]
+    for (const [label, text, want] of g3) {
+      expect.soft(await imageLog(text), `(g3) image-log.json ${label}`).toBe(want)
+    }
+
+    // (g4) the history: NDJSON, bound by its folder (no name hash, L7-2)
+    const history = async (bytes: Uint8Array<ArrayBuffer>) =>
+      masterBodyRule(await mediaLogTarget(bytes, 'media-log.history.jsonl', NI3_SHA12), bytes)
+    expect(
+      await history(enc('{"a":1}\n{"b":[2]}\n')),
+      'precondition: two object lines pass whatever the folder sha12',
+    ).toBeNull()
+    const g4: [string, Uint8Array<ArrayBuffer>, string][] = [
+      ['no final LF', enc('{"a":1}\n{"b":2}'), 'ndjson'],
+      ['an empty line', enc('{"a":1}\n\n{"b":2}\n'), 'ndjson'],
+      ['a CR', enc('{"a":1}\r\n'), 'ndjson'],
+      ['a CR inside a line', enc('{"a":"x\ry"}\n'), 'ndjson'],
+      ['a line [1]', enc('{"a":1}\n[1]\n'), 'ndjson'],
+      ['a line null', enc('null\n'), 'ndjson'],
+      ['a __proto__ key', enc('{"a":{"__proto__":1}}\n'), 'ndjson'],
+      ['a \\ud800 string', enc('{"a":"\\ud800"}\n'), 'ndjson'],
+      ['0 bytes', new Uint8Array(0), 'ndjson'],
+      ['a BOM', bytesOf([0xef, 0xbb, 0xbf], '{"a":1}\n'), 'not-utf8'],
+    ]
+    for (const [label, bytes, want] of g4) {
+      expect.soft(await history(bytes), `(g4) history ${label}`).toBe(want)
+    }
   })
 })

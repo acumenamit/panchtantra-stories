@@ -21,12 +21,17 @@
 // - Step 16 (p1-step16-design.md §3.14.3, D16-14, D16-32) adds the FixtureSet type only: the
 //   `--fixtures` world (an in-memory store whose writes throw, verify's live answer and the public
 //   reads), so cli.ts names the world's type from here and holds no static import of fixture-store.ts.
+// - Step 17 (p1-step17-design.md §3.7, D17-7) adds MastersPort: readMaster and create of the two
+//   masters classes only (image-master, media-log). The CLI holds `const port: MastersPort =
+//   client`; StorageReader, StageWriter and every other port keep their kinds, so a masters object
+//   in stage code, or an approval in masters code, is a compile error.
 // Types come from ./storage-layout only; this module never imports the client, not even as types.
 import type {
   ApprovalRef,
   ContentReadRef,
   CreateRef,
   MasterReadRef,
+  MastersObjectRef,
   MediaRef,
   PackageRef,
   PointerMode,
@@ -121,6 +126,12 @@ export interface PublishWriter {
 
 /** What publish's commit phase holds (rollback included). */
 export type PublishPort = StorageReader & PublishWriter
+
+/** Step 17 (D17-7): what the masters command holds: reads and create-only writes of its two classes. */
+export interface MastersPort {
+  readonly readMaster: (ref: MastersObjectRef) => Promise<ReadResult>
+  readonly create: (ref: MastersObjectRef, body: Uint8Array) => Promise<CreateResult>
+}
 
 // ---- Step 15b (p1-step15b-design.md §2.3, D15B-6, D15B-14, D15B-21): types only ----
 
@@ -253,8 +264,12 @@ export function readOnlyPort(port: StorageReader): StorageReader {
   }
 }
 
-/** The client's refusal text: `refused: <class> <stage> <rule>`, which carries no value. */
-const REFUSAL_TEXT = /^refused: [a-z]+ (field|body-gate|class-pattern|url) [a-z0-9-]+$/
+/**
+ * The client's refusal text: `refused: <class> <stage> <rule>`, which carries no value. The class is
+ * one lower-case word or one of the two hyphenated masters classes, named exactly (S17-R1-FID-3).
+ */
+const REFUSAL_TEXT =
+  /^refused: (?:[a-z]+|image-master|media-log) (field|body-gate|class-pattern|url) [a-z0-9-]+$/
 
 /** An own data property's value, or undefined; a getter is never run. */
 function ownValue(value: object, key: string): unknown {

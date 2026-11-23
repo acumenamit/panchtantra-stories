@@ -42,13 +42,14 @@ const messageOf = (result: ParsedArgs): string => (result.ok ? '' : result.messa
 const PINNED_USAGE = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
-  '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--expect-plan <64 hex>] [--timeout-ms <n>]',
   '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  verify [--deep] [--fixtures] [--report-dir <dir>] [--timeout-ms <n>]',
+  '  masters --masters <dir> [--dry-run] [--expect-plan <64 hex>] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -68,26 +69,30 @@ const FLAGS = [
   'takedown',
   'deep',
   'fixtures',
+  'masters',
+  'expect-plan',
 ]
 /** Step 15a (TP-1): each flag outside its commands names the commands it is for. */
 const SCOPE_TEXTS: readonly string[] = [
   ...['packages', 'media', 'waivers'].map(
     (flag) => `usage: --${flag} is for validate and stage only`,
   ),
-  'usage: --dry-run is for stage, approve and publish only',
-  'usage: --timeout-ms is for stage, approve, publish and verify only',
+  'usage: --dry-run is for stage, approve, publish and masters only',
+  'usage: --timeout-ms is for stage, approve, publish, verify and masters only',
   ...['answers-stdin', 'package'].map((flag) => `usage: --${flag} is for approve only`),
   ...['feature', 'snapshot', 'unpublish', 'takedown'].map(
     (flag) => `usage: --${flag} is for publish only`,
   ),
   'usage: --deep is for verify only',
   'usage: --fixtures is for approve, publish and verify only',
+  'usage: --masters is for masters only',
+  'usage: --expect-plan is for stage and masters only',
 ]
 /** Every usage message args.ts may give, typed here so a changed text turns T14-6 red. */
 const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: an argument is empty or holds a NUL character',
-  'usage: no command (validate, stage, approve, publish, verify or help)',
-  'usage: unknown command (validate, stage, approve, publish, verify or help)',
+  'usage: no command (validate, stage, approve, publish, verify, masters or help)',
+  'usage: unknown command (validate, stage, approve, publish, verify, masters or help)',
   'usage: help takes no arguments',
   'usage: a bare -- is not allowed',
   'usage: single-dash flags are not supported',
@@ -115,22 +120,28 @@ const PINNED_MESSAGES: ReadonlySet<string> = new Set([
   'usage: the default report dir is on a device or network path; run from a local checkout or pass a local --report-dir',
   'usage: --report-dir has a segment Windows cannot store as written',
   'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
+  'usage: --masters may not be a device or network path',
+  'usage: --masters has a segment Windows cannot store as written',
+  'usage: --expect-plan must be 64 lowercase hex characters',
+  'usage: masters needs --expect-plan unless --dry-run',
+  'usage: masters takes no story ids',
   ...FLAGS.map((flag) => `usage: --${flag} is given more than once`),
   ...FLAGS.map((flag) => `usage: --${flag} takes no value`),
   ...FLAGS.map(
     (flag) => `usage: --${flag} needs a value that is not empty and does not start with --`,
   ),
   ...SCOPE_TEXTS,
-  ...['packages', 'media', 'package'].map((flag) => `usage: --${flag} is required`),
+  ...['packages', 'media', 'package', 'masters'].map((flag) => `usage: --${flag} is required`),
 ])
 
 describe('args: commands and flags', () => {
   it('T14-1 commands: help, validate, stage, approve and publish; anything else is usage', () => {
     const help = parse(['help'])
-    expect(
-      typeof help === 'object' && help !== null && USAGE_TEXT === PINNED_USAGE,
-      'precondition: help returns a result and the usage text is the pinned one',
-    ).toBe(true)
+    // B17-mut-2: the pinned usage is g1's claim, not a precondition, so a USAGE_TEXT mutant reaches g1.
+    expect(typeof help === 'object' && help !== null, 'precondition: help returns a result').toBe(
+      true,
+    )
+    expect.soft(USAGE_TEXT, '(g1) the usage text is the pinned one').toBe(PINNED_USAGE)
     expect(parse(['validate', 'a-b', ...IO]).ok, 'precondition: positive control validate').toBe(
       true,
     )
@@ -662,12 +673,12 @@ describe('args: Step 15a approve, publish and the report-dir forms', () => {
     g1.push([
       '--dry-run on validate',
       ['validate', 'a-b', ...IO, '--dry-run'],
-      scopeText('dry-run', 'stage, approve and publish'),
+      scopeText('dry-run', 'stage, approve, publish and masters'),
     ])
     g1.push([
       '--timeout-ms on validate',
       ['validate', 'a-b', ...IO, '--timeout-ms', '5'],
-      scopeText('timeout-ms', 'stage, approve, publish and verify'),
+      scopeText('timeout-ms', 'stage, approve, publish, verify and masters'),
     ])
     g1.push(['--all on stage', ['stage', 'a-b', ...IO, '--all'], MSG.allForValidate])
     g1.push(['--all on approve', [...approveBase, '--all'], MSG.allForValidate])
@@ -920,14 +931,15 @@ const MSG15B = {
   unpublishScope: 'usage: --unpublish is for publish only',
   takedownScope: 'usage: --takedown is for publish only',
   verifyIds: 'usage: verify takes no story ids',
-  dryRunScope: 'usage: --dry-run is for stage, approve and publish only',
+  dryRunScope: 'usage: --dry-run is for stage, approve, publish and masters only',
   deepValue: 'usage: --deep takes no value',
   deepScope: 'usage: --deep is for verify only',
   allScope: 'usage: --all is for validate only',
   featureScope: 'usage: --feature is for publish only',
-  timeoutScope: 'usage: --timeout-ms is for stage, approve, publish and verify only',
-  unknownCommand: 'usage: unknown command (validate, stage, approve, publish, verify or help)',
-  noCommand: 'usage: no command (validate, stage, approve, publish, verify or help)',
+  timeoutScope: 'usage: --timeout-ms is for stage, approve, publish, verify and masters only',
+  unknownCommand:
+    'usage: unknown command (validate, stage, approve, publish, verify, masters or help)',
+  noCommand: 'usage: no command (validate, stage, approve, publish, verify, masters or help)',
 } as const
 
 describe('args: Step 15b unpublish, takedown and verify', () => {
@@ -1465,5 +1477,180 @@ describe('args: captureRunContext', () => {
         '(g3) an empty value is copied',
       )
       .toEqual([['VERCEL', '']])
+  })
+})
+
+// ---- Step 17 (P1-9a, design migration-input/p1-step17-design.md §3.7, §3.20, §3.23, D17-7, D17-20,
+// D17-23, TP17-7; test plan 14.12: T17-42, T17-43) ----
+
+const MSG17 = {
+  mastersRequired: 'usage: --masters is required',
+  mastersTwice: 'usage: --masters is given more than once',
+  device: 'usage: --masters may not be a device or network path',
+  segment: 'usage: --masters has a segment Windows cannot store as written',
+  planForm: 'usage: --expect-plan must be 64 lowercase hex characters',
+  commitNeedsPlan: 'usage: masters needs --expect-plan unless --dry-run',
+  noIds: 'usage: masters takes no story ids',
+  mastersScope: 'usage: --masters is for masters only',
+  planScope: 'usage: --expect-plan is for stage and masters only',
+  packagesScope: 'usage: --packages is for validate and stage only',
+  fixturesScope: 'usage: --fixtures is for approve, publish and verify only',
+} as const
+
+describe('args: Step 17 masters and --expect-plan', () => {
+  it('T17-42 masters: --masters required and resolved from cwd; device, network and (win32) unstorable forms are usage; a commit needs --expect-plan; flag scope and messages (A25, CRIT-7, TP17-7)', () => {
+    const dry = parse(['masters', '--masters', 'm', '--dry-run'])
+    expect(dry.ok, 'precondition: masters --masters m --dry-run parses').toBe(true)
+    // (g1) the parsed result, resolved from cwd
+    expect.soft(dry, '(g1) masters --masters m --dry-run').toEqual({
+      ok: true,
+      command: 'masters',
+      masters: resolve(CWD, 'm'),
+      dryRun: true,
+      expectPlan: null,
+      timeoutMs: 180000,
+      reportDir: DEFAULT_REPORTS,
+      reportDirGiven: false,
+    })
+    const commit = [
+      'masters',
+      '--masters',
+      'in/m',
+      '--expect-plan',
+      P64,
+      '--timeout-ms',
+      '5000',
+      '--report-dir',
+      'r',
+    ]
+    expect
+      .soft(parse(commit), '(g1) a commit with --expect-plan, --timeout-ms and --report-dir')
+      .toEqual({
+        ok: true,
+        command: 'masters',
+        masters: resolve(CWD, 'in/m'),
+        dryRun: false,
+        expectPlan: P64,
+        timeoutMs: 5000,
+        reportDir: resolve(CWD, 'r'),
+        reportDirGiven: true,
+      })
+    expect
+      .soft(
+        parse(['masters', '--masters', 'm', '--dry-run', '--expect-plan', P64]),
+        '(g1) --expect-plan with --dry-run is allowed (TP17-8)',
+      )
+      .toMatchObject({ ok: true, dryRun: true, expectPlan: P64 })
+
+    // (g2) usage
+    const m = ['masters', '--masters', 'm']
+    const g2: [string, string[], string][] = [
+      ['no --masters', ['masters', '--dry-run'], MSG17.mastersRequired],
+      ['--masters twice', [...m, '--masters', 'n', '--dry-run'], MSG17.mastersTwice],
+      ['a commit without --expect-plan', m, MSG17.commitNeedsPlan],
+      ['the plan upper case', [...m, '--expect-plan', P64.toUpperCase()], MSG17.planForm],
+      ['63 hex', [...m, '--expect-plan', P64.slice(1)], MSG17.planForm],
+      ['65 hex', [...m, '--expect-plan', `${P64}0`], MSG17.planForm],
+      ['<64> and a newline', [...m, '--expect-plan', `${P64}\n`], MSG17.planForm],
+      ['a space and <64>', [...m, '--expect-plan', ` ${P64}`], MSG17.planForm],
+      ['story ids', ['masters', 'a-b', '--masters', 'm', '--dry-run'], MSG17.noIds],
+    ]
+    for (const [label, argv, text] of g2) {
+      expect.soft(messageOf(parse(argv)), `(g2) ${label}`).toBe(text)
+    }
+
+    // (g3) path forms, pure: the platform injected both ways, the device form on every host
+    const mastersOf = (value: string, ctx: typeof LINUX) =>
+      parse(['masters', '--masters', value, '--dry-run'], ctx)
+    const deviceForms = ['\\\\?\\C:\\m', '\\\\.\\C:\\m', '\\\\host\\share\\m', '//host/share/m']
+    for (const ctx of [LINUX, WIN32]) {
+      for (const value of deviceForms) {
+        expect
+          .soft(messageOf(mastersOf(value, ctx)), `(g3) ${ctx.platform}: ${value}`)
+          .toBe(MSG17.device)
+      }
+    }
+    for (const value of ['m.', 'm ', 'm:x', 'CON', 'x/con.txt/y', 'a|b']) {
+      expect
+        .soft(messageOf(mastersOf(value, WIN32)), `(g3) win32: ${JSON.stringify(value)}`)
+        .toBe(MSG17.segment)
+    }
+    for (const value of ['m.', 'm ', 'm:x']) {
+      expect
+        .soft(mastersOf(value, LINUX).ok, `(g3) linux accepts ${JSON.stringify(value)}`)
+        .toBe(true)
+    }
+    for (const value of ['m.x', 'masters-1', '.m']) {
+      expect.soft(mastersOf(value, WIN32).ok, `(g3) win32 near miss ${value}`).toBe(true)
+    }
+
+    // (g4) scope
+    const dryM = [...m, '--dry-run']
+    const g4: [string, string[], string][] = [
+      ['--masters on stage', ['stage', 'a-b', ...IO, '--masters', 'm'], MSG17.mastersScope],
+      ['--masters on validate', ['validate', 'a-b', ...IO, '--masters', 'm'], MSG17.mastersScope],
+      ['--packages on masters', [...dryM, '--packages', 'p'], MSG17.packagesScope],
+      ['--fixtures on masters', [...dryM, '--fixtures'], MSG17.fixturesScope],
+      [
+        '--expect-plan on validate',
+        ['validate', 'a-b', ...IO, '--expect-plan', P64],
+        MSG17.planScope,
+      ],
+      [
+        '--expect-plan on approve',
+        ['approve', 'a-b', '--package', P12, '--expect-plan', P64],
+        MSG17.planScope,
+      ],
+      ['--expect-plan on publish', ['publish', 'a-b', '--expect-plan', P64], MSG17.planScope],
+      ['--expect-plan on verify', ['verify', '--expect-plan', P64], MSG17.planScope],
+    ]
+    for (const [label, argv, text] of g4) {
+      expect.soft(messageOf(parse(argv)), `(g4) ${label}`).toBe(text)
+    }
+
+    // (g5) no value in any message: each text is pinned and holds no canary
+    const C = 'S17CANARYARG'
+    const canaries: [string[], typeof LINUX][] = [
+      [['masters', '--masters', `\\\\${C}\\share`, '--dry-run'], LINUX],
+      [['masters', '--masters', `${C}.`, '--dry-run'], WIN32],
+      [[...m, '--expect-plan', C], LINUX],
+      [['masters', C.toLowerCase(), '--masters', 'm', '--dry-run'], LINUX],
+    ]
+    const results = canaries.map(([argv, ctx]) => parse(argv, ctx))
+    expect(
+      results.every((r) => !r.ok),
+      'precondition: every canary sample is refused',
+    ).toBe(true)
+    for (const [i, result] of results.entries()) {
+      expect.soft(messageOf(result).toUpperCase().includes(C), `(g5) no canary ${i}`).toBe(false)
+      expect.soft(PINNED_MESSAGES.has(messageOf(result)), `(g5) pinned text ${i}`).toBe(true)
+    }
+  })
+
+  it('T17-43 stage --expect-plan: the value or null; malformed is usage (A27, CRIT-15)', () => {
+    const plain = parse(['stage', 'a-b', ...IO])
+    expect(plain.ok && plain.command === 'stage', 'precondition: stage parses').toBe(true)
+    expect
+      .soft(plain.ok && plain.command === 'stage' && plain.expectPlan, '(g1) no flag: null')
+      .toBeNull()
+    const given = parse(['stage', 'a-b', ...IO, '--expect-plan', P64])
+    expect
+      .soft(given.ok && given.command === 'stage' && given.expectPlan, '(g1) the value')
+      .toBe(P64)
+    const dry = parse(['stage', 'a-b', ...IO, '--dry-run', `--expect-plan=${P64}`])
+    expect
+      .soft(
+        dry.ok && dry.command === 'stage' && [dry.dryRun, dry.expectPlan],
+        '(g1) with --dry-run',
+      )
+      .toEqual([true, P64])
+    for (const value of [P64.toUpperCase(), P64.slice(1), `${P64}0`, `${P64}\n`, P12]) {
+      expect
+        .soft(
+          messageOf(parse(['stage', 'a-b', ...IO, '--expect-plan', value])),
+          `(g2) ${JSON.stringify(value)}`,
+        )
+        .toBe(MSG17.planForm)
+    }
   })
 })

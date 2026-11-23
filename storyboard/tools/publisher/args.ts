@@ -15,19 +15,27 @@
 //   after the id rules. Its default report dir is `<storyboardRoot>/migration-input/reports/fixtures`
 //   (one fixed segment more), so a fixtures report never replaces a real one; a given `--report-dir`
 //   is used as given, and both pass the same form and in-site checks.
+// - Step 17 (migration-input/p1-step17-design.md §3.7, §3.20, §3.23, D17-7, D17-20, D17-23, TP17-7;
+//   P1-9a): `masters --masters <dir> [--dry-run] [--expect-plan <64 hex>]`, its flags and scope
+//   texts, and `--expect-plan` for stage too (StageInput.expectPlan, string or null). `--masters` is
+//   resolved from cwd and refused before any fs call when the given text or the resolved path is a
+//   device or network form, or (platform win32) holds a segment Windows cannot store as written; a
+//   masters commit without `--expect-plan` is usage. Checked after the required flags and the value
+//   forms, before the report dir.
 import { resolve, sep } from 'node:path'
 import { StoryId } from '../../src/core/package/v1'
 
 export const USAGE_TEXT = [
   'usage: corepack pnpm publisher <command>',
   '  validate (<id>... | --all) --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>]',
-  '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--timeout-ms <n>]',
+  '  stage <id>... --packages <dir> --media <dir> [--waivers <dir>] [--report-dir <dir>] [--dry-run] [--expect-plan <64 hex>] [--timeout-ms <n>]',
   '  approve <id> --package <sha256 prefix> [--answers-stdin] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish <id>... [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --feature <id|none> [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --snapshot <seq> [--feature <id|none>] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  publish --unpublish <id> [--takedown] [--report-dir <dir>] [--dry-run] [--fixtures] [--timeout-ms <n>]',
   '  verify [--deep] [--fixtures] [--report-dir <dir>] [--timeout-ms <n>]',
+  '  masters --masters <dir> [--dry-run] [--expect-plan <64 hex>] [--report-dir <dir>] [--timeout-ms <n>]',
   '  help',
 ].join('\n')
 
@@ -53,8 +61,10 @@ const FLAGS: ReadonlyMap<string, FlagKind> = new Map([
   ['takedown', 'boolean'],
   ['deep', 'boolean'],
   ['fixtures', 'boolean'],
+  ['masters', 'value'],
+  ['expect-plan', 'value'],
 ])
-type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
+type Command = 'help' | 'validate' | 'stage' | 'approve' | 'publish' | 'verify' | 'masters'
 const COMMANDS: ReadonlySet<string> = new Set<Command>([
   'help',
   'validate',
@@ -62,6 +72,7 @@ const COMMANDS: ReadonlySet<string> = new Set<Command>([
   'approve',
   'publish',
   'verify',
+  'masters',
 ])
 
 /** Each flag's commands (TP-1); `--report-dir` is for every command but help. */
@@ -69,9 +80,9 @@ const SCOPE: ReadonlyMap<string, readonly Command[]> = new Map<string, readonly 
   ['packages', ['validate', 'stage']],
   ['media', ['validate', 'stage']],
   ['waivers', ['validate', 'stage']],
-  ['report-dir', ['validate', 'stage', 'approve', 'publish', 'verify']],
-  ['timeout-ms', ['stage', 'approve', 'publish', 'verify']],
-  ['dry-run', ['stage', 'approve', 'publish']],
+  ['report-dir', ['validate', 'stage', 'approve', 'publish', 'verify', 'masters']],
+  ['timeout-ms', ['stage', 'approve', 'publish', 'verify', 'masters']],
+  ['dry-run', ['stage', 'approve', 'publish', 'masters']],
   ['all', ['validate']],
   ['answers-stdin', ['approve']],
   ['package', ['approve']],
@@ -81,12 +92,14 @@ const SCOPE: ReadonlyMap<string, readonly Command[]> = new Map<string, readonly 
   ['takedown', ['publish']],
   ['deep', ['verify']],
   ['fixtures', ['approve', 'publish', 'verify']],
+  ['masters', ['masters']],
+  ['expect-plan', ['stage', 'masters']],
 ])
 
 const MESSAGE = {
   empty: 'usage: an argument is empty or holds a NUL character',
-  noCommand: 'usage: no command (validate, stage, approve, publish, verify or help)',
-  command: 'usage: unknown command (validate, stage, approve, publish, verify or help)',
+  noCommand: 'usage: no command (validate, stage, approve, publish, verify, masters or help)',
+  command: 'usage: unknown command (validate, stage, approve, publish, verify, masters or help)',
   helpArgs: 'usage: help takes no arguments',
   bareDashes: 'usage: a bare -- is not allowed',
   singleDash: 'usage: single-dash flags are not supported',
@@ -115,6 +128,11 @@ const MESSAGE = {
   reportDirSegment: 'usage: --report-dir has a segment Windows cannot store as written',
   reportDirSegmentDefault:
     'usage: the default report dir has a segment Windows cannot store as written; pass a local --report-dir',
+  mastersDevice: 'usage: --masters may not be a device or network path',
+  mastersSegment: 'usage: --masters has a segment Windows cannot store as written',
+  planForm: 'usage: --expect-plan must be 64 lowercase hex characters',
+  mastersNeedsPlan: 'usage: masters needs --expect-plan unless --dry-run',
+  mastersIds: 'usage: masters takes no story ids',
 } as const
 // The flag-named messages take a name from FLAGS, never the argument as typed.
 const repeated = (flag: string) => `usage: --${flag} is given more than once`
@@ -126,8 +144,8 @@ const SCOPE_TEXT: Readonly<Record<string, string>> = {
   packages: 'validate and stage',
   media: 'validate and stage',
   waivers: 'validate and stage',
-  'timeout-ms': 'stage, approve, publish and verify',
-  'dry-run': 'stage, approve and publish',
+  'timeout-ms': 'stage, approve, publish, verify and masters',
+  'dry-run': 'stage, approve, publish and masters',
   all: 'validate',
   'answers-stdin': 'approve',
   package: 'approve',
@@ -137,6 +155,8 @@ const SCOPE_TEXT: Readonly<Record<string, string>> = {
   takedown: 'publish',
   deep: 'verify',
   fixtures: 'approve, publish and verify',
+  masters: 'masters',
+  'expect-plan': 'stage and masters',
 }
 const outOfScope = (flag: string) => `usage: --${flag} is for ${SCOPE_TEXT[flag] ?? ''} only`
 
@@ -178,6 +198,8 @@ export type ParsedArgs =
       readonly command: 'stage'
       readonly ids: readonly string[]
       readonly dryRun: boolean
+      /** Step 17 (D17-20): `--expect-plan`, 64 lowercase hex, or null when not given (L20-1). */
+      readonly expectPlan: string | null
       readonly timeoutMs: number
       readonly reportDirGiven: boolean
     } & Paths)
@@ -221,6 +243,16 @@ export type ParsedArgs =
       readonly fixtures: boolean
       readonly timeoutMs: number
     } & ReportDirArg)
+  | ({
+      readonly ok: true
+      readonly command: 'masters'
+      /** The `--masters` root, resolved from cwd (D17-23). */
+      readonly masters: string
+      readonly dryRun: boolean
+      /** `--expect-plan`, 64 lowercase hex; null only on a dry run (a commit needs it). */
+      readonly expectPlan: string | null
+      readonly timeoutMs: number
+    } & ReportDirArg)
   | { readonly ok: false; readonly code: 'usage'; readonly message: string }
 
 const usage = (message: string): ParsedArgs => ({ ok: false, code: 'usage', message })
@@ -239,6 +271,7 @@ function idRule(
 ): string | null {
   const all = flags.has('all')
   if (command === 'verify') return ids.length > 0 ? MESSAGE.verifyIds : null
+  if (command === 'masters') return ids.length > 0 ? MESSAGE.mastersIds : null
   if (command === 'validate') {
     if (all && ids.length > 0) return MESSAGE.allWithIds
     if (!all && ids.length === 0) return MESSAGE.idsOrAll
@@ -346,6 +379,28 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
   if (unpublishText !== undefined && !isStoryId(unpublishText)) {
     return usage(MESSAGE.unpublishForm)
   }
+  // Step 17 (D17-20, D17-23): the masters root and the expected plan.
+  const mastersText = text('masters')
+  if (command === 'masters' && mastersText === undefined) return usage(required('masters'))
+  const expectPlan = text('expect-plan') ?? null
+  if (expectPlan !== null && !/^[0-9a-f]{64}$/.test(expectPlan)) return usage(MESSAGE.planForm)
+  if (command === 'masters' && !flags.has('dry-run') && expectPlan === null) {
+    return usage(MESSAGE.mastersNeedsPlan)
+  }
+  const masters = mastersText === undefined ? '' : resolve(context.cwd, mastersText)
+  if (mastersText !== undefined) {
+    // Both the given text and the resolved path: path.resolve makes `//host/x` a single `/` on
+    // posix, and turns a drive-relative `m:x` into `m:\x` on win32.
+    if (isDeviceOrNetworkPath(mastersText) || isDeviceOrNetworkPath(masters)) {
+      return usage(MESSAGE.mastersDevice)
+    }
+    if (
+      context.platform === 'win32' &&
+      (hasUnstorableSegment(mastersText) || hasUnstorableSegment(masters))
+    ) {
+      return usage(MESSAGE.mastersSegment)
+    }
+  }
 
   const reportDirText = text('report-dir')
   const reportDirGiven = reportDirText !== undefined
@@ -432,12 +487,25 @@ export function parseArgs(argv: readonly string[], context: ArgsContext): Parsed
       reportDirGiven,
     }
   }
+  if (command === 'masters') {
+    return {
+      ok: true,
+      command,
+      masters,
+      dryRun,
+      expectPlan,
+      timeoutMs,
+      reportDir,
+      reportDirGiven,
+    }
+  }
   const waivers = text('waivers')
   return {
     ok: true,
     command: 'stage',
     ids,
     dryRun,
+    expectPlan,
     timeoutMs,
     packages: resolve(context.cwd, text('packages') ?? ''),
     media: resolve(context.cwd, text('media') ?? ''),

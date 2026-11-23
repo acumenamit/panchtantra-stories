@@ -24,7 +24,7 @@ export const DEVICE_TEXT_MAX = 80
 
 /** The rule-set ref form of a snapshot entry's waiver block (catalogue.ts WaiverKeys). */
 const RULE_SET_REF = /^[a-z0-9-]{1,32}@\d{1,4}\.\d{1,4}\.\d{1,4}$/
-const DATE = /^\d{4}-\d{2}-\d{2}$/
+export const DATE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
  * True for a UTF-16 unit a review text may not hold: C0 controls, DEL and C1 controls, the line and
@@ -69,7 +69,7 @@ export function isReviewText(value: unknown, max: number): value is string {
 }
 
 /** A real calendar date in the proleptic Gregorian calendar (2028-02-29 yes, 2026-02-30 no). */
-function isCalendarDate(value: string): boolean {
+export function isCalendarDate(value: string): boolean {
   const [year, month, day] = value.split('-').map(Number)
   if (year === undefined || month === undefined || day === undefined) return false
   const date = new Date(0)

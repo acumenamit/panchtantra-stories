@@ -34,6 +34,7 @@ import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { runCli, type CliDeps } from './cli'
 import { createContentDeleter, type ContentDeleterOptions } from './content-deleter'
 import { Secret, readDeployHookUrl, readSiteUrl } from './env'
+import { pngOf } from '../migrate/media-fixtures'
 import { openFixtureSet } from './fixture-store'
 import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
 import type { FixtureSet } from './port'
@@ -2618,6 +2619,125 @@ describe('runCli: the --fixtures dry runs (Step 16)', () => {
           )
           .toEqual([])
       }
+    },
+  )
+})
+
+// ---- Step 17 (design migration-input/p1-step17-design.md §3.7, §3.23, D17-7, D17-23, TP17-7;
+// test plan 14.12: T17-44): masters through runCli ----
+
+const MASTERS_HERE_ONLY = 'masters: stopped: masters-here-only'
+const mastersArgv = (dir: string, extra: string[] = []) => [
+  'masters',
+  '--masters',
+  dir,
+  '--report-dir',
+  join(root, 'reports'),
+  ...extra,
+]
+/** A masters tree of one image master (pngOf with caBX), named by its own sha256. */
+function writeMastersTree(name = 'masters'): string {
+  const dir = join(root, 'p2', name)
+  const png = pngOf({ width: 16, height: 16, chunks: ['caBX'], seed: 's17-cli' })
+  const sha = createHash('sha256').update(png).digest('hex')
+  mkdirSync(join(dir, 'images', 'story-aa'), { recursive: true })
+  writeFileSync(join(dir, 'images', 'story-aa', `${sha}.png`), png)
+  return dir
+}
+const mastersReportText = () =>
+  ['publisher-masters.json', 'publisher-masters.md']
+    .map((name) => readText(join(root, 'reports', name)))
+    .join('\n')
+
+describe('runCli: masters (Step 17)', () => {
+  it(
+    "T17-44 masters through runCli: masters-here-only before any load; the env file once, credentials and the project check; the client only after runMasters' local checks; the real realpath; no secret in any channel (A25, TP17-7)",
+    TIMEOUT,
+    async () => {
+      const dir = writeMastersTree()
+      const base = harness(await newStub([]))
+      const exit = await runCli(mastersArgv(dir, ['--dry-run', '--timeout-ms', '5000']), base.deps)
+      expect(exit, 'precondition: a valid root dry run exits 0').toBe(0)
+
+      // (g1) masters-here-only from the run context and platform, before the env file
+      const refused: [string, Partial<CliDeps>][] = [
+        ['platform linux', { platform: 'linux' }],
+        ['win32 GITHUB_ACTIONS true', { runContext: { GITHUB_ACTIONS: 'true' } }],
+        ['win32 github_actions', { runContext: { github_actions: 'true' } }],
+        ["win32 VERCEL ''", { runContext: { VERCEL: '' } }],
+        ['win32 VERCEL_ENV', { runContext: { VERCEL_ENV: 'preview' } }],
+      ]
+      const runs: Harness[] = [base]
+      for (const [label, over] of refused) {
+        const h = harness(null, over)
+        runs.push(h)
+        const code = await runCli(mastersArgv(dir, ['--dry-run']), h.deps)
+        expect
+          .soft([code, lastLine(h.out), h.calls], `(g1) ${label}`)
+          .toEqual([2, MASTERS_HERE_ONLY, []])
+      }
+
+      // (g2) the client only after the local checks: an empty root never builds one
+      const empty = join(root, 'p2', 'empty')
+      mkdirSync(empty, { recursive: true })
+      const emptyRun = harness(null)
+      runs.push(emptyRun)
+      // A throw out of runCli (the harness factory throws on a path that builds no client) is
+      // recorded, so a client built too early fails this group's own assertion (R1-TP-3).
+      const emptyExit = await runCli(mastersArgv(empty, ['--dry-run']), emptyRun.deps).catch(
+        () => 'threw out of runCli',
+      )
+      expect
+        .soft(
+          [emptyExit, lastLine(emptyRun.out), emptyRun.calls],
+          '(g2) an empty root: masters-empty, no client',
+        )
+        .toEqual([1, 'masters: stopped: masters-empty', ['loadEnv']])
+      expect
+        .soft(base.calls, '(g2) a valid root: the env file once, then the factory once')
+        .toEqual(['loadEnv', 'factory'])
+      expect.soft(base.options.length, '(g2) a valid root: the factory once').toBe(1)
+      expect.soft(base.options[0]?.timeoutMs, '(g2) with the --timeout-ms value').toBe(5000)
+
+      // (g3) the real realpath: a link as the root is masters-root
+      const link = join(root, 'p2', 'masters-link')
+      let linked = true
+      try {
+        symlinkSync(dir, link, 'junction')
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'EPERM' && code !== 'EACCES') throw error
+        console.log('skipped: this host refuses links (S14 PB3)')
+        linked = false
+      }
+      if (linked) {
+        const h = harness(null)
+        runs.push(h)
+        const code = await runCli(mastersArgv(link, ['--dry-run']), h.deps)
+        expect
+          .soft([code, lastLine(h.out), h.calls.includes('factory')], '(g3) a link as --masters')
+          .toEqual([1, 'masters: stopped: masters-root', false])
+      }
+
+      // (g4) the key in no line, report or error: on success, on each refusal, and when the
+      // client factory throws an error that carries it
+      const leaky = harness(null, {
+        createClient: () => {
+          throw new Error(`factory failed for ${FAKE_KEY}`)
+        },
+      })
+      runs.push(leaky)
+      const leakyExit = await runCli(mastersArgv(dir, ['--dry-run']), leaky.deps)
+      expect
+        .soft(
+          [leakyExit, lastLine(leaky.out)],
+          '(g4) a throwing factory: internal, its class name only',
+        )
+        .toEqual([1, 'masters: stopped: internal Error'])
+      for (const [i, h] of runs.entries()) {
+        expect.soft(everything(h).includes(FAKE_KEY), `(g4) no key in run ${i}'s lines`).toBe(false)
+      }
+      expect.soft(mastersReportText().includes(FAKE_KEY), '(g4) no key in the report').toBe(false)
     },
   )
 })

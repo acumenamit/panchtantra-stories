@@ -1,14 +1,17 @@
 // The 11 phase-1 packages "through the file source" (design p1-step8-design.md §10.3, §3.1 D9;
 // P1-2b). In-process loadContent with a temp root only (§3.4 row 33), never the entry point.
 // Proof A (CI): pt/src/stories re-converted in-process (convertLegacyStory + jcsBytes), with the
-// public waiver keys of the committed tools/migrate/legacy-waiver-keys.json in each snapshot entry:
+// committed text correction applied (tools/migrate/text-corrections.json through
+// applyTextCorrections; P1 Step 17, p1-step17-design.md D17-15, A6) and the public waiver keys of
+// the committed tools/migrate/legacy-waiver-keys.json in each snapshot entry:
 //   1. the fixtures file source; 2. the local Storage stub, staging pointer, spec layout;
 //   3. the stub, production pointer, one story unapproved; 4. negatives (tampered byte, edited
 //   waived node, keys under another rule set); 5. a control run without the keys that must fail.
 //   Fixtures runs pass platform 'win32' (R4), so Proof A also runs on Linux CI; so do the stub's
 //   staging-pointer runs (P1-2c, design p1-step9-design.md §3.3 A, §10.1: outside a Vercel Preview
 //   a staging pointer loads only in GitHub Actions or on Windows). Production runs keep 'linux'.
-// Proof B (local only): the real git-ignored phase-1 files and private waiver files. It compares
+// Proof B (local only): the real git-ignored phase-1 files (compared with the raw re-conversion: a
+// phase-1 file is never corrected) and private waiver files. It compares
 // derived keys, hashes and counts only, never a whole waiver file, so a failure cannot print a
 // private field; it prints counts only. CI skips it: migration-input/ is git-ignored.
 import { createHash } from 'node:crypto'
@@ -35,6 +38,7 @@ import { PANCHATANTRA_RULESET } from '../src/core/rules/panchatantra'
 import { deriveWaiverKeys, validatePackage, WaiverFile } from '../src/core/validator'
 import { convertLegacyStory } from '../tools/migrate/convert'
 import { loadLegacyStories } from '../tools/migrate/load-legacy'
+import { applyTextCorrections, loadTextCorrections } from '../tools/migrate/text-corrections'
 import { buildLegacyWaiverKeys, LegacyWaiverKeysFile } from '../tools/migrate/waiver-keys-cli'
 import { buildCatalogue, writeCatalogue } from './build-fixtures-catalogue'
 import { loadContent, type Env } from './load-content'
@@ -76,6 +80,8 @@ interface Expected {
   readonly info: number
 }
 
+/** The raw re-conversion of pt/ (Proof B's comparison) and the corrected 11 (Proof A's packages). */
+let raw: Phase1[] = []
 let phase1: Phase1[] = []
 let keysByStory = new Map<string, WaiverKeys>()
 const expected = new Map<string, Expected>()
@@ -88,7 +94,13 @@ async function toPhase1(pkg: StoryPackageV1): Promise<Phase1> {
 beforeAll(async () => {
   const converted = loadLegacyStories(PT_STORIES).map((l) => convertLegacyStory(l.story))
   converted.sort((a, b) => (a.storyId < b.storyId ? -1 : a.storyId > b.storyId ? 1 : 0))
-  phase1 = await Promise.all(converted.map(toPhase1))
+  raw = await Promise.all(converted.map(toPhase1))
+  const records = loadTextCorrections()
+  if (!records.ok) throw new Error(`tools/migrate/text-corrections.json: ${records.code}`)
+  const corrected = applyTextCorrections(converted, records.records)
+  if (!corrected.ok)
+    throw new Error(`text-corrections.json: ${corrected.code} ${corrected.storyId}`)
+  phase1 = await Promise.all(corrected.packages.map(toPhase1))
   const file = LegacyWaiverKeysFile.parse(JSON.parse(readFileSync(KEYS_FILE, 'utf8')))
   keysByStory = new Map(file.stories.map((s) => [s.storyId, s.waivers]))
   for (const { storyId, pkg } of phase1) {
@@ -338,13 +350,33 @@ describe('Proof A: the 11 phase-1 packages, re-converted from pt/, with the comm
     expect(keysOf('one-pot-of-seeds')).toEqual([])
   })
 
-  it('finds exactly one T006 warning in all 11 packages: crow-and-serpent seek_advice hi', () => {
-    const hits = phase1.flatMap(({ pkg }) =>
-      validatePackage(pkg, { ruleSet: PANCHATANTRA_RULESET, mode: 'publish' })
-        .findings.filter((f) => f.checkId === 'T006')
-        .map((f) => [pkg.storyId, f.nodeId, f.locale, f.severity, f.waived === true]),
-    )
-    expect(hits).toEqual([['crow-and-serpent', 'seek_advice', 'hi', 'warn', false]])
+  it('the raw crow-and-serpent package has exactly one T006 finding, an error, and fails checkPackage with its committed keys; the corrected 11 have none (A6)', async () => {
+    const t006 = (packages: readonly Phase1[]) =>
+      packages.flatMap(({ pkg }) =>
+        validatePackage(pkg, { ruleSet: PANCHATANTRA_RULESET, mode: 'publish' })
+          .findings.filter((f) => f.checkId === 'T006')
+          .map((f) => [pkg.storyId, f.nodeId, f.locale, f.severity, f.waived === true]),
+      )
+    expect(
+      raw.map((p) => p.storyId),
+      'precondition: the raw 11',
+    ).toEqual(phase1.map((p) => p.storyId))
+    expect
+      .soft(t006(raw), '(g1) the raw 11: one T006 error, crow-and-serpent seek_advice hi')
+      .toEqual([['crow-and-serpent', 'seek_advice', 'hi', 'error', false]])
+    const crow = raw.find((p) => p.storyId === 'crow-and-serpent')
+    if (!crow) throw new Error('crow-and-serpent is missing')
+    const gate = await checkPackage(crow.bytes, entryFor(crow, 'storage'), PANCHATANTRA_RULESET, {
+      requireJcs: true,
+    })
+    const finding =
+      'T006 node=seek_advice locale=hi: Letters outside the rendered scripts: U+7425 U+73C0'
+    expect.soft(gate, '(g2) the raw crow fails checkPackage with its committed keys').toEqual({
+      ok: false,
+      reason: `package crow-and-serpent failed the validator with 1 unwaived error(s); first: ${finding}`,
+      details: [`content: unwaived story=crow-and-serpent check=${finding}`],
+    })
+    expect.soft(t006(phase1), '(g3) the corrected 11 have no T006 finding').toEqual([])
   })
 
   it('1. the file source builds all 11 with 41 waived findings, 0 unused keys, featured dropped', async () => {
@@ -370,7 +402,7 @@ describe('Proof A: the 11 phase-1 packages, re-converted from pt/, with the comm
     expect(r.out.filter(isWaived)).toHaveLength(41)
     expect(r.out.filter((line) => line.startsWith('content: waiver key unused'))).toEqual([])
     expect(r.out.filter((line) => line.startsWith('content: media'))).toEqual([])
-    // The crow package line counts the T006 warning (the oracle's warnings include it).
+    // The crow package line is the corrected package's (P1 Step 17: its T006 finding is gone).
     const crow = phase1.find((p) => p.storyId === 'crow-and-serpent')
     expect(crow && r.out.includes(packageLine(crow))).toBe(true)
 
@@ -627,7 +659,7 @@ function readWaiverFile(storyId: string): { bytes: Buffer; file: WaiverFile | nu
 describe.skipIf(!existsSync(PHASE1_DIR))(
   'Proof B, local only (skipped where storyboard/migration-input/packages is absent: migration-input is git-ignored, so CI never has it)',
   () => {
-    const ids = () => phase1.map((p) => p.storyId)
+    const ids = () => raw.map((p) => p.storyId)
 
     it('holds exactly the 11 phase-1 packages and the 11 waiver files', () => {
       expect(readdirSync(PHASE1_DIR).sort()).toEqual(ids().map((id) => `${id}.phase1.json`))
@@ -637,7 +669,7 @@ describe.skipIf(!existsSync(PHASE1_DIR))(
     it("the real phase-1 bytes equal the re-conversion and each waiver file's measuredOnPackageSha256, 11 of 11", () => {
       const differ: string[] = []
       const measuredDiffers: string[] = []
-      for (const p of phase1) {
+      for (const p of raw) {
         const real = new Uint8Array(readFileSync(join(PHASE1_DIR, `${p.storyId}.phase1.json`)))
         if (sha256Of(real) !== p.sha256) differ.push(p.storyId)
         // Only the comparison's verdict is kept: never the waiver file's own value.

@@ -47,6 +47,12 @@
 //   project check, URL read, client, hook, verify, deleter or public read happens on that branch. The
 //   world's type comes from ./port only; the entry block loads fixture-store.ts through `import()`, so
 //   a run without `--fixtures` never evaluates it or the test kit it builds from.
+// - Step 17 (migration-input/p1-step17-design.md §3.7, §3.23, D17-7, D17-23; P1-9a): `masters
+//   --masters <dir> [--dry-run] [--expect-plan <64 hex>]` runs on this PC only (masters-here-only,
+//   the stage rule, before the env file); then the env file once, the credentials and the project
+//   check as for stage. runMasters gets realPath (realpathSync.native) and a makePort that builds the
+//   client only when runMasters asks, after its local checks, held as `const port: MastersPort =
+//   client`, so a write of another class in masters code is a compile error.
 import { realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,10 +68,12 @@ import {
 import { loadEnvFile, readStorageCredentials } from './env'
 import { readDeployHookUrl, readSiteUrl } from './env'
 import { triggerDeployHook, type HookOptions, type HookResult } from './hook'
+import { runMasters } from './masters'
 import type {
   ApprovePort,
   ContentRemover,
   FixtureSet,
+  MastersPort,
   PublishPort,
   StagePort,
   StorageReader,
@@ -86,7 +94,7 @@ import {
 import { runVerify, type VerifyCommandAnswer } from './verify-command'
 
 type Values = Readonly<Record<string, string | undefined>>
-type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify'
+type Command = 'validate' | 'stage' | 'approve' | 'publish' | 'verify' | 'masters'
 
 /** The fixed stderr line when approve has no answer channel (TP-2). */
 const NO_ANSWER_CHANNEL = 'approve: stdin is not a terminal; pass --answers-stdin'
@@ -234,7 +242,10 @@ async function runFixtures(
   })
 }
 
-/** stage runs on this PC only (D14-10): win32 and none of the three names set, in any case. */
+/**
+ * stage runs on this PC only (D14-10): win32 and none of the three names set, in any case; masters
+ * too (Step 17, D17-7).
+ */
 function stageAllowedHere(runContext: Values, platform: string): boolean {
   if (platform !== 'win32') return false
   return !Object.entries(runContext).some(
@@ -303,6 +314,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       deps.log(stopLine('stage', 'stage-here-only'))
       return 2
     }
+  } else if (command === 'masters') {
+    if (!stageAllowedHere(deps.runContext, deps.platform)) {
+      deps.log(stopLine('masters', 'masters-here-only'))
+      return 2
+    }
   } else {
     const allowed = commandAllowedHere(deps.runContext, deps.platform)
     if (allowed === null) {
@@ -334,7 +350,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
   }
   // Step 16 (D16-14): the fixtures dry run, after every run-context refusal and the answer channel,
   // before the env file, the credentials, the project check, any URL read and any client.
-  if (parsed.command !== 'stage' && parsed.fixtures) {
+  if (parsed.command !== 'stage' && parsed.command !== 'masters' && parsed.fixtures) {
     const input = parsed
     deps.log(FIXTURES_LINE[input.command])
     return guarded(input.command, () => runFixtures(input, deps, { output, runMode, channel }))
@@ -369,6 +385,21 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         makePort: () => {
           const client = deps.createClient(clientOptions)
           const port: StagePort = client
+          return port
+        },
+      }),
+    )
+  }
+
+  if (parsed.command === 'masters') {
+    return guarded('masters', () =>
+      runMasters(parsed, {
+        ...output,
+        sleep: deps.sleep,
+        realPath: realpathSync.native,
+        makePort: () => {
+          const client = deps.createClient(clientOptions)
+          const port: MastersPort = client
           return port
         },
       }),

@@ -6,7 +6,7 @@
 // Step 15a (design p1-step15a-design.md §14.12): APPROVAL is a full valid record (the strict approval
 // gate, D15-6) and T14-80 g4 samples a content media target (a package is content-readable, D15-17).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { jcsBytes } from '../../src/core/hashing'
+import { jcsBytes, sha256Hex } from '../../src/core/hashing'
 import { APPROVAL_CHECKLIST_TEXT, APPROVAL_PRESCREEN_LEGACY } from '../../src/core/package/approval'
 import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { Secret } from './env'
@@ -590,5 +590,83 @@ describe('readContent calls each layout check (Step 14)', () => {
       .soft(await refusalOf(readAs(media)), '(g4) a content media target')
       .toBe('refused: media url url-mismatch')
     expect.soft(calls.length - beforeG4, '(g4) 0 requests').toBe(0)
+  })
+})
+
+// ---- Step 17 (P1-9a): the masters classes on the closed route list (design p1-step17-design.md
+// §3.7; test plan 14.12: T17-41) ----
+
+describe('routeClass for the masters classes (Step 17)', () => {
+  it('T17-41 routeClass: a GET on the masters read route reaches approval, waiver, image-master and media-log; a POST creates both new kinds in masters (A23)', async () => {
+    const png = Uint8Array.of(
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      0,
+      0,
+      0,
+      13,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+    )
+    const pngSha = await sha256Hex(png)
+    const log = new TextEncoder().encode('[]')
+    const logSha12 = (await sha256Hex(log)).slice(0, 12)
+    const master = {
+      kind: 'image-master',
+      storyId: 'two-paths',
+      sha256: pngSha,
+      ext: 'png',
+    } as const
+    const mediaLog = {
+      kind: 'media-log',
+      date: '2026-11-23',
+      sha12: logSha12,
+      file: 'media-log.json',
+    } as const
+    const { storage, calls } = client()
+    expect(
+      await refusalOf(storage.readMaster(APPROVAL_REF)),
+      'precondition: an approval read is sent',
+    ).toBe('resolved')
+    expect(calls.length, 'precondition: one request').toBe(1)
+    const reads: [string, () => Promise<unknown>, string][] = [
+      ['waiver', () => storage.readMaster(WAIVER_REF), `waivers/two-paths/${SHA_A}.json`],
+      ['image-master', () => storage.readMaster(master), `images/two-paths/${pngSha}.png`],
+      [
+        'media-log',
+        () => storage.readMaster(mediaLog),
+        `media-log/2026-11-23-${logSha12}/media-log.json`,
+      ],
+    ]
+    for (const [name, attempt, path] of reads) {
+      const before = calls.length
+      expect.soft(await refusalOf(attempt()), `(g1) GET ${name} is sent`).toBe('resolved')
+      expect
+        .soft(calls.slice(before), `(g1) GET ${name} on the masters read route`)
+        .toEqual([`http://127.0.0.1:9/storage/v1/object/authenticated/masters/${path}`])
+    }
+    const creates: [string, () => Promise<unknown>, string][] = [
+      ['image-master', () => storage.create(master, png), `images/two-paths/${pngSha}.png`],
+      [
+        'media-log',
+        () => storage.create(mediaLog, log),
+        `media-log/2026-11-23-${logSha12}/media-log.json`,
+      ],
+    ]
+    for (const [name, attempt, path] of creates) {
+      const before = calls.length
+      expect.soft(await refusalOf(attempt()), `(g2) POST ${name} is sent`).toBe('resolved')
+      expect
+        .soft(calls.slice(before), `(g2) POST ${name} to the masters bucket`)
+        .toEqual([`http://127.0.0.1:9/storage/v1/object/masters/${path}`])
+    }
   })
 })

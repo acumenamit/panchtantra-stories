@@ -194,15 +194,18 @@ describe('checkPackage', () => {
     expect(r).not.toHaveProperty('details')
   })
 
-  it('counts T006 (letters outside the rendered scripts) as a warning, never an error', async () => {
+  // P1 Step 17 (p1-step17-design.md D17-16): T006 is an error in publish mode, the gate's mode.
+  it('a T006 finding fails checkPackage: ok false, reason and details name T006 (A2)', async () => {
     const pkg = base()
     pkg.text.hi.nodes.start.text = `${pkg.text.hi.nodes.start.text} 漢字`
-    const value = passed(await check(bytesOf(pkg)))
-    const t006 = value.report.findings.filter((f) => f.checkId === 'T006')
-    expect(t006).toEqual([
-      expect.objectContaining({ severity: 'warn', nodeId: 'start', locale: 'hi' }),
-    ])
-    expect(value.counts.errors).toBe(0)
+    expect(await check(bytesOf(pkg))).toEqual({
+      ok: false,
+      reason:
+        'package two-paths failed the validator with 1 unwaived error(s); first: T006 node=start locale=hi: Letters outside the rendered scripts: U+6F22 U+5B57',
+      details: [
+        'content: unwaived story=two-paths check=T006 node=start locale=hi: Letters outside the rendered scripts: U+6F22 U+5B57',
+      ],
+    })
   })
 })
 

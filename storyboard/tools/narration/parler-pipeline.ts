@@ -8,6 +8,12 @@
 // A newly accepted remake stays on the listening list until the owner runs `pnpm narration:listened`.
 // All JSON state is written via a temporary file and a rename, so an interrupted command never leaves half a file.
 //
+// P1 Step 17 (design migration-input/p1-step17-design.md §3.17, D17-17, D17-29): the packages are read with the
+// recorded text corrections applied (tools/migrate/text-corrections.json, passed in by parler-cli.ts as
+// `corrections`), so a corrected line is planned, made and checked from its corrected text; a refusing record
+// throws by code, never with text. buildEntriesFor and parseSeedOverrides are the pure readers the media binder
+// shares. After a run that copied at least one file, ingest rewrites audio/SHA256SUMS.txt from the media log.
+//
 // Reads and writes only under <root>/migration-input/ (gitignored) and the Colab folder given to ingest. No network.
 import { createHash } from 'node:crypto'
 import {
@@ -24,6 +30,8 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { StoryPackageV1 } from '../../src/core/package/v1'
+import { applyTextCorrections } from '../migrate/text-corrections'
+import type { TextCorrection } from '../migrate/text-corrections'
 import { mp3Info } from './mp3'
 import { RECIPE_V2, buildParlerEntry, isParlerLocale, qaFlags } from './parler'
 import type { MadeWith, ParlerPlanEntry, QaInput } from './parler'
@@ -184,47 +192,91 @@ function parseExportArgs(args: readonly string[]): {
   }
 }
 
-export function readSeedOverrides(path: string): Record<string, number> {
-  if (!existsSync(path)) return {}
-  const raw = readJsonFile<unknown>(path, OVERRIDES_HINT)
+/** The text corrections the packages are read with (tools/migrate/text-corrections.json's records). */
+export interface CorrectionsOption {
+  readonly corrections: readonly TextCorrection[]
+}
+
+/**
+ * seed-overrides.json's rules over its bytes (D17-29): strict UTF-8 JSON, an object of "story/node.locale": an
+ * integer seed from 0 to MAX_SEED; anything else throws, naming `name` (the file's path when read from disk).
+ */
+export function parseSeedOverrides(
+  bytes: Uint8Array,
+  name = 'seed-overrides.json',
+): Record<string, number> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes))
+  } catch (err) {
+    throw new Error(
+      `${name} is not valid JSON (${err instanceof Error ? err.message : String(err)}): ${OVERRIDES_HINT}`,
+    )
+  }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
-    throw new Error(`${path}: expected an object of "story/node.locale": seed`)
+    throw new Error(`${name}: expected an object of "story/node.locale": seed`)
   const out: Record<string, number> = {}
   for (const [k, v] of Object.entries(raw)) {
+    if (k === '__proto__') throw new Error(`${name}: "__proto__" is not a story/node.locale key`)
     if (!isSeed(v))
-      throw new Error(`${path}: seed for ${k} must be an integer from 0 to ${MAX_SEED}`)
+      throw new Error(`${name}: seed for ${k} must be an integer from 0 to ${MAX_SEED}`)
     out[k] = v
   }
   return out
+}
+
+/** seed-overrides.json from disk; a missing file is {}. */
+export function readSeedOverrides(path: string): Record<string, number> {
+  if (!existsSync(path)) return {}
+  return parseSeedOverrides(new Uint8Array(readFileSync(path)), path)
 }
 
 function sortedObject(o: Record<string, number>): Record<string, number> {
   return Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
-function readPackages(pkgDir: string): StoryPackageV1[] {
-  return readdirSync(pkgDir)
+/** The phase-1 packages with the text corrections applied; a refusing record throws by code, with no text. */
+function readPackages(pkgDir: string, corrections: readonly TextCorrection[]): StoryPackageV1[] {
+  const packages = readdirSync(pkgDir)
     .filter((x) => x.endsWith('.phase1.json'))
     .sort()
     .map((f) => StoryPackageV1.parse(JSON.parse(readFileSync(join(pkgDir, f), 'utf8'))))
+  const corrected = applyTextCorrections(packages, corrections)
+  if (!corrected.ok)
+    throw new Error(
+      `text-corrections.json: ${corrected.code} ${corrected.storyId}/${corrected.nodeId}.${corrected.locale} ${corrected.field}`,
+    )
+  return corrected.packages
 }
 
 /** Every file the packages need now (story/node.locale), without building entries. */
-function packageKeys(pkgDir: string): Set<string> {
+function packageKeys(pkgDir: string, corrections: readonly TextCorrection[]): Set<string> {
   const keys = new Set<string>()
-  for (const pkg of readPackages(pkgDir))
+  for (const pkg of readPackages(pkgDir, corrections))
     for (const n of pkg.nodes)
       for (const l of pkg.locales) if (isParlerLocale(l)) keys.add(`${pkg.storyId}/${n.id}.${l}`)
   return keys
 }
 
-/** The plan as it must be now: every package node x supported locale, with saved remake seeds applied. */
+/** The plan as it must be now for the packages folder (corrections applied); see buildEntriesFor. */
 export async function buildAllEntries(
   pkgDir: string,
   overrides: Record<string, number>,
+  opts: CorrectionsOption,
+): Promise<ParlerPlanEntry[]> {
+  return buildEntriesFor(readPackages(pkgDir, opts.corrections), overrides)
+}
+
+/**
+ * The plan as it must be now for these packages (D17-29, pure): every package node x supported locale, with saved
+ * remake seeds applied; an override for a file the packages lack throws.
+ */
+export async function buildEntriesFor(
+  packages: readonly StoryPackageV1[],
+  overrides: Readonly<Record<string, number>>,
 ): Promise<ParlerPlanEntry[]> {
   const entries: ParlerPlanEntry[] = []
-  for (const pkg of readPackages(pkgDir)) {
+  for (const pkg of packages) {
     for (const n of pkg.nodes)
       for (const l of pkg.locales) {
         if (!isParlerLocale(l)) continue
@@ -269,7 +321,7 @@ export function fileStamp(d: Date): string {
 export async function exportPlan(
   root: string,
   args: readonly string[],
-  opts: { now: Date; log: Log },
+  opts: { now: Date; log: Log } & CorrectionsOption,
 ): Promise<number> {
   const p = narrationPaths(root)
   const { only, seed, keepPlanSeeds } = parseExportArgs(args)
@@ -277,7 +329,7 @@ export async function exportPlan(
 
   // seed-overrides.json and the last parler-plan.json must agree for every file the packages still have:
   // a lost, edited or restored-from-backup overrides file must never silently change a remade file's seed.
-  const keysNow = packageKeys(p.pkgDir)
+  const keysNow = packageKeys(p.pkgDir, opts.corrections)
   const lastPlan = existsSync(p.planPath) ? readPlan(p.planPath).entries : []
   const lastSeed = new Map(
     lastPlan.filter((e) => keysNow.has(keyOf(e))).map((e) => [keyOf(e), e.seed]),
@@ -318,7 +370,7 @@ export async function exportPlan(
     next = sortedObject({ ...overrides, ...Object.fromEntries(only.map((k) => [k, seed])) })
   }
 
-  const entries = await buildAllEntries(p.pkgDir, next)
+  const entries = await buildAllEntries(p.pkgDir, next, opts)
   const createdAt = opts.now.toISOString()
   const redoPath = only
     ? join(p.narrDir, `parler-plan.redo-${fileStamp(opts.now)}.json`)
@@ -409,6 +461,60 @@ function locateManifest(folder: string): string {
   )
 }
 
+/** Writes text via <path>.part and a rename: readers see the old file or the new one, never half of one. */
+function writeTextAtomically(path: string, text: string): void {
+  const part = `${path}.part`
+  try {
+    writeFileSync(part, text)
+    renameSync(part, path)
+  } catch (err) {
+    rmSync(part, { force: true })
+    throw err
+  }
+}
+
+/**
+ * audio/SHA256SUMS.txt from the media log (§3.17 rule 6): one line per record whose key is in the plan,
+ * `<record.sha256>  <storyId>/<nodeId>.<locale>.mp3` and LF, sorted by that path in UTF-16 code units, the path
+ * taken from the plan entry. Every listed file is re-hashed first; a record whose file differs (or is missing, or
+ * a key logged twice) throws and nothing is written. Written atomically. Returns the line count.
+ */
+function writeHashList(
+  audioDir: string,
+  log: readonly Record<string, unknown>[],
+  plan: readonly ParlerPlanEntry[],
+): number {
+  const byKey = new Map(plan.map((e) => [keyOf(e), e]))
+  const rows: { key: string; path: string; sha: string }[] = []
+  const seen = new Set<string>()
+  for (const r of log) {
+    const key = recKey(r)
+    const entry = byKey.get(key)
+    if (!entry) continue
+    if (seen.has(key))
+      throw new Error(`SHA256SUMS.txt not written: ${key} is in media-log.json twice`)
+    seen.add(key)
+    rows.push({ key, path: entry.file, sha: typeof r.sha256 === 'string' ? r.sha256 : '' })
+  }
+  rows.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  for (const row of rows) {
+    let actual = ''
+    try {
+      actual = sha256(new Uint8Array(readFileSync(join(audioDir, row.path))))
+    } catch {
+      actual = ''
+    }
+    if (!/^[0-9a-f]{64}$/.test(row.sha) || actual !== row.sha)
+      throw new Error(`SHA256SUMS.txt not written: ${row.key} differs from media-log.json`)
+  }
+  mkdirSync(audioDir, { recursive: true })
+  writeTextAtomically(
+    join(audioDir, 'SHA256SUMS.txt'),
+    rows.map((r) => `${r.sha}  ${r.path}\n`).join(''),
+  )
+  return rows.length
+}
+
 /** Copies via a temporary name, so a locked or failing destination is never left half-written. */
 function copyAtomically(src: string, dst: string): void {
   mkdirSync(dirname(dst), { recursive: true })
@@ -425,7 +531,7 @@ function copyAtomically(src: string, dst: string): void {
 export async function ingest(
   root: string,
   folderArg: string | undefined,
-  opts: { now: Date; log: Log },
+  opts: { now: Date; log: Log } & CorrectionsOption,
 ): Promise<number> {
   const p = narrationPaths(root)
   const folder = resolveFolder(folderArg)
@@ -434,7 +540,7 @@ export async function ingest(
 
   // The plan of record must match the packages and the saved remake seeds right now.
   const overrides = readSeedOverrides(p.overridesPath)
-  const plan = await buildAllEntries(p.pkgDir, overrides)
+  const plan = await buildAllEntries(p.pkgDir, overrides, opts)
   const onDisk = new Map(readPlan(p.planPath).entries.map((e) => [keyOf(e), e.narratedTextSha256]))
   const stale = plan.filter((e) => onDisk.get(keyOf(e)) !== e.narratedTextSha256).map(keyOf)
   const extra = [...onDisk.keys()].filter((k) => !plan.some((e) => keyOf(e) === k))
@@ -627,6 +733,12 @@ export async function ingest(
   )
   if (remakesToHear.length)
     opts.log('after hearing the remakes: pnpm narration:listened story/node.locale,... (or --all)')
+  // After a run that copied files (a stopped run threw above): the hash list mirrors the log, which mirrors the
+  // folder, so problems such as a missing file do not block it.
+  if (accepted.length > 0) {
+    const listed = writeHashList(p.audioDir, log, plan)
+    opts.log(`wrote SHA256SUMS.txt (${listed} files)`)
+  }
   return problems.length === 0 ? 0 : 1
 }
 

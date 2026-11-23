@@ -25,6 +25,7 @@
     "migrate:convert": "tsx tools/migrate/cli.ts",
     "migrate:validate": "tsx tools/migrate/validate-cli.ts",
     "migrate:waiver-keys": "tsx tools/migrate/waiver-keys-cli.ts",
+    "migrate:bind": "tsx tools/migrate/bind-cli.ts",
     "narration:plan": "tsx tools/narration/cli.ts plan",
     "narration:run": "tsx tools/narration/cli.ts run",
     "narration:export": "tsx tools/narration/parler-cli.ts export",

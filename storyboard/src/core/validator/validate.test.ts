@@ -405,7 +405,9 @@ describe('validator: A001 asset references', () => {
   })
 })
 
-// P1-2b (design §5.6, §10.1): T006, letters outside the rendered scripts; a warning in every mode.
+// P1-2b (design §5.6, §10.1): T006, letters outside the rendered scripts. P1 Step 17
+// (p1-step17-design.md D17-16): a warning in authoring (and with no mode), an error in stage and
+// publish.
 describe('validator: T006 rendered scripts', () => {
   const t006 = (p: unknown, o: ValidateOptions = opts) =>
     validatePackage(p, o).findings.filter((f) => f.checkId === 'T006')
@@ -418,10 +420,10 @@ describe('validator: T006 rendered scripts', () => {
     expect(t006(base())).toEqual([])
   })
 
-  it('warns once on Han letters in Hindi text, listing the code points; ok stays true', () => {
+  it('warns once on Han letters in Hindi text in authoring, listing the code points; ok stays true', () => {
     const p = base()
     p.text.hi.nodes.start.text = 'उसकी琥珀रंगी आँखें चमकीं। 琥珀'
-    for (const o of [opts, { ...opts, mode: 'publish' as const }, { ...opts, forFeature: true }]) {
+    for (const o of [opts, { ...opts, forFeature: true }]) {
       expect(t006(p, o)).toEqual([
         {
           checkId: 'T006',
@@ -432,9 +434,70 @@ describe('validator: T006 rendered scripts', () => {
           message: 'Letters outside the rendered scripts: U+7425 U+73C0',
         },
       ])
-      // forFeature turns the fixture's missing media into errors; T006 itself never fails.
+      // forFeature turns the fixture's missing media into errors; in authoring T006 never fails.
       if (!o.forFeature) expect(validatePackage(p, o).ok).toBe(true)
     }
+  })
+
+  it('T17-47 T006 by mode: warn in authoring and with no mode, error in stage and publish, one finding per string in every mode; forFeature changes nothing (A1, D17-16, S17-TP-6)', () => {
+    const modes: [string, ValidateOptions][] = [
+      ['no mode', opts],
+      ['authoring', { ...opts, mode: 'authoring' }],
+      ['stage', { ...opts, mode: 'stage' }],
+      ['publish', { ...opts, mode: 'publish' }],
+    ]
+    for (const [name, o] of modes) {
+      expect(t006(base(), o), `precondition: the fixture has no T006 (${name})`).toEqual([])
+      expect(validatePackage(base(), o).ok, `precondition: the fixture is ok (${name})`).toBe(true)
+    }
+
+    // g1 the Han sample, by mode
+    const han = base()
+    han.text.hi.nodes.start.text = 'उसकी琥珀रंगी आँखें चमकीं। 琥珀'
+    const expected: [string, ValidateOptions, 'warn' | 'error', boolean][] = [
+      ['no mode', opts, 'warn', true],
+      ['authoring', { ...opts, mode: 'authoring' }, 'warn', true],
+      ['stage', { ...opts, mode: 'stage' }, 'error', false],
+      ['publish', { ...opts, mode: 'publish' }, 'error', false],
+    ]
+    for (const [name, o, severity, ok] of expected) {
+      expect
+        .soft(
+          t006(han, o).map((f) => [f.severity, f.nodeId, f.locale]),
+          `(g1) the Han sample in ${name}: one T006 ${severity}`,
+        )
+        .toEqual([[severity, 'start', 'hi']])
+      expect.soft(validatePackage(han, o).ok, `(g1) the Han sample in ${name}: ok ${ok}`).toBe(ok)
+    }
+    const featured: [string, ValidateOptions, 'warn' | 'error'][] = [
+      ['authoring with forFeature', { ...opts, mode: 'authoring', forFeature: true }, 'warn'],
+      ['stage with forFeature', { ...opts, mode: 'stage', forFeature: true }, 'error'],
+      ['publish with forFeature', { ...opts, mode: 'publish', forFeature: true }, 'error'],
+    ]
+    for (const [name, o, severity] of featured)
+      expect
+        .soft(
+          t006(han, o).map((f) => f.severity),
+          `(g1) the Han sample in ${name}: forFeature changes nothing`,
+        )
+        .toEqual([severity])
+
+    // g2 one finding per string: question, lesson and choice
+    const strings = base()
+    strings.text.en.nodes.start.question = 'Which way, Ωmega?'
+    strings.text.en.nodes.start.choices.c1 = 'Go Ωmega'
+    strings.text.en.nodes.ending_wise.lesson = 'Patience Ω'
+    for (const [name, o, severity] of expected)
+      expect
+        .soft(
+          t006(strings, o).map((f) => [f.severity, f.nodeId, f.locale]),
+          `(g2) question, lesson and choice: 3 T006 ${severity} findings in ${name}`,
+        )
+        .toEqual([
+          [severity, 'start', 'en'],
+          [severity, 'start', 'en'],
+          [severity, 'ending_wise', 'en'],
+        ])
   })
 
   it('warns on Cyrillic in English, story-level fields included (nodeId null)', () => {

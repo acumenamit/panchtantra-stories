@@ -14,6 +14,11 @@
 // - Output only through deps.log and deps.error, in report.ts's fixed formats: ids, counts, hashes
 //   and codes. A client refusal is recognised only by isStorageRefusal; any other throw prints its
 //   class name.
+// - Step 17 (migration-input/p1-step17-design.md §3.19, §3.20, D17-19, D17-20, TP17-8; P1-9a):
+//   after formatPlan's line, `stage: plan plan=<64> set=<64>` (plan-digest.ts over the planned
+//   objects with their states, the named stories as fixed, and the seqs and states as variable);
+//   `--expect-plan`, when given, is compared there, before any write and in a dry run too
+//   (plan-changed, exit 1). Without it stage behaves as at Step 14 (L20-1).
 import { MEDIA_MAX_BYTES } from '../../src/core/content/media'
 import type { SnapshotEntry } from '../../src/core/content/packages'
 import { sha256Hex } from '../../src/core/hashing'
@@ -30,11 +35,13 @@ import {
   type StagingDocuments,
 } from './catalogue-state'
 import { listLocalFolder, readLocalFile } from './local-files'
+import { planDigests } from './plan-digest'
 import { isStorageRefusal, readOnlyPort, type StagePort, type StorageReader } from './port'
 import {
   REVIEW_LINE,
   exitForPhase,
   formatPlan,
+  formatPlanDigest,
   formatPointerMoved,
   formatSnapshot,
   formatStageCarried,
@@ -82,6 +89,8 @@ export interface StageInput {
   readonly reportDir: string
   readonly reportDirGiven: boolean
   readonly dryRun: boolean
+  /** Step 17 (D17-20): the reviewed plan digest, compared before any write; null when not given. */
+  readonly expectPlan: string | null
 }
 
 export interface ValidateDeps {
@@ -219,6 +228,10 @@ export async function runValidate(input: ValidateInput, deps: ValidateDeps): Pro
 }
 
 // ---- stage (§4.3, §4.4) ----
+
+/** A copy sorted by storyId in UTF-16 code units, so the CLI order of the ids never moves a digest. */
+const byStoryId = <T extends { readonly storyId: string }>(list: readonly T[]): T[] =>
+  [...list].sort((a, b) => (a.storyId < b.storyId ? -1 : a.storyId > b.storyId ? 1 : 0))
 
 interface PlannedObject {
   readonly storyId: string
@@ -472,6 +485,44 @@ export async function runStage(input: StageInput, deps: StageDeps): Promise<Exit
         staging: plan.stagingSeq,
       }),
     )
+    // The plan digests (D17-20): the objects with their states, the named stories as fixed, the
+    // seqs and the composition's states as variable; compared before any write, dry run included.
+    const digests = await planDigests(
+      'stage',
+      planned.map((object) => ({
+        path: object.path,
+        sha256: object.sha256,
+        bytes: object.bytes,
+        contentType: object.mime,
+        state: fresh.has(object.path) ? 'new' : 'existing',
+      })),
+      {
+        fixed: byStoryId(
+          composition.named.map((named) => ({
+            storyId: named.storyId,
+            packageSha256: named.packageSha256,
+            version: named.version,
+          })),
+        ),
+        variable: {
+          seq: plan.seq,
+          productionSeq: plan.productionSeq,
+          stagingSeq: plan.stagingSeq,
+          named: byStoryId(
+            composition.named.map((named) => ({ storyId: named.storyId, state: named.state })),
+          ),
+          carried: byStoryId(
+            composition.carried.map((carried) => ({
+              storyId: carried.storyId,
+              packageSha256: carried.packageSha256,
+              state: carried.state,
+            })),
+          ),
+        },
+      },
+    )
+    deps.log(formatPlanDigest('stage', digests))
+    if (input.expectPlan !== null && input.expectPlan !== digests.plan) stop('plan-changed')
     if (input.dryRun) return finish('dry-run', 'end')
 
     // The commit (§4.4): exit 3 until the pointer write is sent, 4 after it.

@@ -137,11 +137,38 @@ const APPROVAL = (on: string) => jcsBytes(APPROVAL_VALUE(on))
 const MEDIA = () => Uint8Array.of(1, 2, 3)
 const text = (s: string) => new TextEncoder().encode(s)
 
+/** Step 17 (14.12): a PNG head masterBodyRule accepts, and a media-log.json `[]`, each named by its hash. */
+const MASTER_PNG = (() => {
+  const head = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13)
+  const out = new Uint8Array(head.byteLength + 4 + 17)
+  out.set(head)
+  out.set(text('IHDR'), head.byteLength)
+  out.fill(1, head.byteLength + 4)
+  return out
+})()
+const MASTER_PNG_SHA = await sha256Hex(MASTER_PNG)
+const LOG_BYTES = () => text('[]')
+const LOG_SHA12 = (await sha256Hex(LOG_BYTES())).slice(0, 12)
+const IMAGE_MASTER_REF = (): Ref => ({
+  kind: 'image-master',
+  storyId: 'lion-and-hare',
+  sha256: MASTER_PNG_SHA,
+  ext: 'png',
+})
+const MEDIA_LOG_REF = (file = 'media-log.json'): Ref => ({
+  kind: 'media-log',
+  date: '2026-11-23',
+  sha12: LOG_SHA12,
+  file,
+})
+
 const BODY_OF: Record<string, () => Uint8Array<ArrayBuffer>> = {
   package: () => PKG.slice(),
   media: MEDIA,
   snapshot: SNAPSHOT,
   approval: () => APPROVAL('2026-11-21'),
+  'image-master': () => MASTER_PNG.slice(),
+  'media-log': LOG_BYTES,
 }
 const VALID_REF: Record<string, () => Ref> = {
   package: PACKAGE_REF,
@@ -149,6 +176,8 @@ const VALID_REF: Record<string, () => Ref> = {
   snapshot: SNAPSHOT_REF,
   approval: APPROVAL_REF,
   waiver: WAIVER_REF,
+  'image-master': IMAGE_MASTER_REF,
+  'media-log': () => MEDIA_LOG_REF(),
 }
 
 // ---- recorder (13.2.2) ----
@@ -259,7 +288,8 @@ afterEach(() => {
 // ---- form catalogue FORMS13 (13.2.4), the subset the methods need ----
 
 type Form = readonly [id: string, value: unknown]
-type FieldRule = 'story-id' | 'sha256' | 'variant' | 'mime' | 'seq'
+type FieldRule =
+  'story-id' | 'sha256' | 'variant' | 'mime' | 'seq' | 'master-ext' | 'date' | 'sha12' | 'log-file'
 const STRING_FORMS: readonly Form[] = [
   ['F-C1', 'Lion-and-hare'],
   ['F-C2', 'LION-AND-HARE'],
@@ -363,6 +393,40 @@ const VALID_OF: Record<FieldRule, string> = {
   variant: 'w640',
   mime: 'image/webp',
   seq: '7',
+  'master-ext': 'png',
+  date: '2026-11-23',
+  sha12: 'abcdef012345',
+  'log-file': 'media-log.json',
+}
+/** Step 17 (14.12): each new field rule's own forms, so each reaches the client (MU17-217 to -220). */
+const NEW_RULE_FORMS: Partial<Record<FieldRule, readonly Form[]>> = {
+  'master-ext': [
+    ['X-E1', 'PNG'],
+    ['X-E2', 'jpeg'],
+    ['X-E3', 'webp'],
+    ['X-E4', ''],
+  ],
+  date: [
+    ['X-D1', '2026-11-15-'],
+    ['X-D2', ' 2026-11-15'],
+    ['X-D3', '2026-02-30'],
+    ['X-D4', '2026-11-15T00:00'],
+    ['X-D5', '2026-1-15'],
+    ['X-D6', '+2026-11-15'],
+    ['X-D7', '२०२६-११-१५'],
+  ],
+  sha12: [
+    ['X-H1', 'ABCDEF012345'],
+    ['X-H2', 'abcdef01234'],
+    ['X-H3', 'abcdef0123456'],
+    ['X-H4', 'g'.repeat(12)],
+  ],
+  'log-file': [
+    ['X-F1', 'media-log.txt'],
+    ['X-F2', 'Media-log.json'],
+    ['X-F3', 'media-log.json '],
+    ['X-F4', 'media-log.json.'],
+  ],
 }
 function formsFor(rule: FieldRule): readonly Form[] {
   if (rule === 'seq') return SEQ_FORMS
@@ -376,7 +440,7 @@ function formsFor(rule: FieldRule): readonly Form[] {
       : rule === 'variant'
         ? [['F-L6', 'v'.repeat(17)]]
         : []
-  return [...base, ...extra, ...typeForms(VALID_OF[rule])]
+  return [...base, ...extra, ...(NEW_RULE_FORMS[rule] ?? []), ...typeForms(VALID_OF[rule])]
 }
 const CLASS_FIELDS: Record<string, readonly (readonly [string, FieldRule])[]> = {
   package: [
@@ -398,8 +462,19 @@ const CLASS_FIELDS: Record<string, readonly (readonly [string, FieldRule])[]> = 
     ['storyId', 'story-id'],
     ['waiverSha256', 'sha256'],
   ],
+  'image-master': [
+    ['storyId', 'story-id'],
+    ['sha256', 'sha256'],
+    ['ext', 'master-ext'],
+  ],
+  'media-log': [
+    ['date', 'date'],
+    ['sha12', 'sha12'],
+    ['file', 'log-file'],
+  ],
 }
-const KIND_UNKNOWN = ['listing', 'canary', 'media-log', 'image', 'report', 'masters'] // K10-K15
+// K10-K15; Step 17 (B17-implC-3): media-log is a kind now, so K12 is its near miss media_log.
+const KIND_UNKNOWN = ['listing', 'canary', 'media_log', 'image', 'report', 'masters']
 
 /** The L7a shapes (13.3), shared by R8. */
 function refShapes(valid: () => Ref, cls: string): [string, unknown, string][] {
@@ -1032,6 +1107,10 @@ describe('requests on the recorder', () => {
     ['T13-R6d', 'approval', 'create'],
     ['T13-R6e', 'approval', 'read'],
     ['T13-R6f', 'waiver', 'read'],
+    ['T13-R6g', 'image-master', 'create'],
+    ['T13-R6h', 'image-master', 'read'],
+    ['T13-R6i', 'media-log', 'create'],
+    ['T13-R6j', 'media-log', 'read'],
   ]
   for (const [id, cls, method] of R6) {
     it(`${id} ${method === 'create' ? 'create' : 'readMaster'} refuses every ${cls} field form at stage field with 0 requests`, async () => {
@@ -3240,5 +3319,301 @@ describe('over the wire against the storage stub', () => {
         "(g3) found with the stored bytes' sha256",
       )
       .toBe(shaOther)
+  })
+})
+
+// ---- Step 17 (P1-9a): the masters classes in the client (design p1-step17-design.md §3.7, D17-25,
+// D17-30; test plan 14.12: T17-38 to T17-40). On the recorder: nothing is sent anywhere. ----
+
+/** An image-master ref named by the bytes' own sha256 (or the given one). */
+async function masterRef(bytes: Uint8Array<ArrayBuffer>, ext = 'png', sha?: string): Promise<Ref> {
+  return {
+    kind: 'image-master',
+    storyId: 'lion-and-hare',
+    sha256: sha ?? (await sha256Hex(bytes)),
+    ext,
+  }
+}
+/** A media-log ref whose sha12 is the bytes' own (or the given one). */
+async function logRef(bytes: Uint8Array<ArrayBuffer>, file: string, sha12?: string): Promise<Ref> {
+  return {
+    kind: 'media-log',
+    date: '2026-11-23',
+    sha12: sha12 ?? (await sha256Hex(bytes)).slice(0, 12),
+    file,
+  }
+}
+/** `size` bytes that start with the PNG head, so a master of that size passes the body gate. */
+const pngOfSize = (size: number): Uint8Array<ArrayBuffer> => {
+  const out = new Uint8Array(size).fill(0x20)
+  out.set(MASTER_PNG)
+  return out
+}
+/** A media-log.json of exactly `size` bytes: a JSON array of one padded string. */
+const logOfSize = (size: number): Uint8Array<ArrayBuffer> => text(`["${'x'.repeat(size - 4)}"]`)
+
+describe('the masters classes in the client (Step 17)', () => {
+  it('T17-38 bodyGateRule through create: both masters classes refused at body-gate with their rule and 0 requests; media keeps its size bound; the switch is exhaustive (A23)', async () => {
+    const { storage, calls } = client()
+    const count = () => calls.length
+    await asCreate(storage, IMAGE_MASTER_REF(), MASTER_PNG.slice())
+    await asCreate(storage, MEDIA_LOG_REF(), LOG_BYTES())
+    expect(calls.length, 'precondition: a valid image master and media log are each sent').toBe(2)
+
+    // (g1) one sample per masterBodyRule rule, through create
+    const jpegBytes = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 1, 2)
+    const feBytes = Uint8Array.of(0xff, 0xd8, 0xfe, 0xe0, 1, 2)
+    const bom = Uint8Array.of(0xef, 0xbb, 0xbf, 0x5b, 0x5d)
+    const imageLogLoose = text('{"schema": "image-log@1", "images": []}')
+    const samples: [string, Ref, Uint8Array<ArrayBuffer>, string][] = [
+      [
+        'sha256 not the name',
+        await masterRef(MASTER_PNG, 'png', SHA_A),
+        MASTER_PNG.slice(),
+        'image-master body-gate sha256-mismatch',
+      ],
+      [
+        'png ext with JPEG bytes',
+        await masterRef(jpegBytes),
+        jpegBytes,
+        'image-master body-gate not-png',
+      ],
+      [
+        'jpg ext with FF D8 FE',
+        await masterRef(feBytes, 'jpg'),
+        feBytes,
+        'image-master body-gate not-jpeg',
+      ],
+      [
+        'media-log.json with a BOM',
+        await logRef(bom, 'media-log.json'),
+        bom,
+        'media-log body-gate not-utf8',
+      ],
+      [
+        'media-log.json sha12 not its own',
+        await logRef(LOG_BYTES(), 'media-log.json', 'abcdef012345'),
+        LOG_BYTES(),
+        'media-log body-gate sha12-mismatch',
+      ],
+      [
+        'media-log.json an object',
+        await logRef(text('{}'), 'media-log.json'),
+        text('{}'),
+        'media-log body-gate record-json',
+      ],
+      [
+        'media-log.json a __proto__ key',
+        await logRef(text('[{"__proto__":1}]'), 'media-log.json'),
+        text('[{"__proto__":1}]'),
+        'media-log body-gate proto-key',
+      ],
+      [
+        'media-log.json a lone surrogate',
+        await logRef(text('["\\ud800"]'), 'media-log.json'),
+        text('["\\ud800"]'),
+        'media-log body-gate ill-formed-text',
+      ],
+      [
+        'image-log.json not JCS',
+        await logRef(imageLogLoose, 'image-log.json'),
+        imageLogLoose,
+        'media-log body-gate not-jcs',
+      ],
+      [
+        'history without its final LF',
+        await logRef(text('{"a":1}'), 'media-log.history.jsonl'),
+        text('{"a":1}'),
+        'media-log body-gate ndjson',
+      ],
+    ]
+    for (const [label, ref, body, want] of samples) {
+      await expectRefused(`(g1) ${label}`, () => asCreate(storage, ref, body), want, count)
+    }
+
+    // (g2) media keeps the size bound only
+    const before = calls.length
+    await asCreate(storage, MEDIA_REF(), MEDIA())
+    await asCreate(storage, MEDIA_REF('audio/mpeg'), new Uint8Array(1000).fill(0xff))
+    await asCreate(storage, MEDIA_REF('image/jpeg'), text('not a picture'))
+    expect.soft(calls.length - before, '(g2) any media bytes under the cap are sent').toBe(3)
+
+    // (g3) a waiver create: refused at field before any gate (D17-30, MT17-7)
+    await expectRefused(
+      '(g3) create waiver',
+      () => asCreate(storage, WAIVER_REF(), WAIVER.slice()),
+      'waiver field kind-not-creatable',
+      count,
+    )
+  })
+
+  it('T17-39 read caps per target: image masters to 20 MiB, media logs to 8 MiB, every other read to 1 MiB; too-large names the cap used; the found-hash checks of both classes (A23, CRIT-1)', async () => {
+    const small = await asRead(
+      client(() => bytesResponse(MASTER_PNG.slice())).storage,
+      IMAGE_MASTER_REF(),
+    )
+    expect(small.kind, 'precondition: a small image master read is found').toBe('found')
+    const big = pngOfSize(2_076_066)
+    const bigRef = await masterRef(big)
+    const found = await asRead(client(() => bytesResponse(big.slice())).storage, bigRef)
+
+    // (g1) found, with the sha256
+    expect
+      .soft(
+        found.kind === 'found' && [found.size, found.sha256],
+        '(g1) the master: size and sha256',
+      )
+      .toEqual([2_076_066, bigRef.sha256])
+    const log = logOfSize(1_048_577)
+    expect(log.byteLength, 'precondition: the log is 1,048,577 bytes').toBe(1_048_577)
+    const logFound = await asRead(
+      client(() => bytesResponse(log.slice())).storage,
+      await logRef(log, 'media-log.json'),
+    )
+    expect
+      .soft(logFound.kind === 'found' && [logFound.size, logFound.sha256], '(g1) the log')
+      .toEqual([1_048_577, await sha256Hex(log)])
+
+    // (g2) too-large names the cap used
+    const over = (size: number) => () => new Response(new Uint8Array(size).fill(0x20))
+    const masterOver = await asRead(client(over(20_971_521)).storage, IMAGE_MASTER_REF())
+    expect.soft(masterOver, '(g2) a master of 20,971,521 bytes').toEqual({
+      kind: 'too-large',
+      limit: 20_971_520,
+    })
+    const logOver = await asRead(client(over(8_388_609)).storage, MEDIA_LOG_REF())
+    expect.soft(logOver, '(g2) a media log of 8,388,609 bytes').toEqual({
+      kind: 'too-large',
+      limit: 8_388_608,
+    })
+    const approvalOver = await asRead(client(over(1_048_577)).storage, APPROVAL_REF())
+    expect.soft(approvalOver, '(g2) an approval of 1,048,577 bytes').toEqual({
+      kind: 'too-large',
+      limit: 1_048_576,
+    })
+    const waiverOver = await asRead(client(over(1_048_577)).storage, WAIVER_REF())
+    expect.soft(waiverOver, '(g2) a waiver of 1,048,577 bytes').toEqual({
+      kind: 'too-large',
+      limit: 1_048_576,
+    })
+
+    // (g3) the found-hash checks
+    const otherMaster = await asRead(
+      client(() => bytesResponse(MASTER_PNG.slice())).storage,
+      await masterRef(MASTER_PNG, 'png', SHA_B),
+    )
+    expect.soft(otherMaster, '(g3) an image master with other bytes').toEqual({
+      kind: 'hash-mismatch',
+      sha256: MASTER_PNG_SHA,
+    })
+    const logSha = await sha256Hex(LOG_BYTES())
+    for (const file of ['media-log.json', 'image-log.json']) {
+      const mismatched = await asRead(client(() => bytesResponse(LOG_BYTES())).storage, {
+        ...MEDIA_LOG_REF(file),
+        sha12: 'abcdef012345',
+      })
+      expect
+        .soft(mismatched, `(g3) a ${file} whose sha256 does not start with its sha12`)
+        .toEqual({ kind: 'hash-mismatch', sha256: logSha })
+      const matched = await asRead(
+        client(() => bytesResponse(LOG_BYTES())).storage,
+        MEDIA_LOG_REF(file),
+      )
+      expect.soft(matched.kind, `(g3) a ${file} whose sha256 starts with its sha12`).toBe('found')
+    }
+    const history = await asRead(client(() => bytesResponse(text('{"a":1}\n'))).storage, {
+      ...MEDIA_LOG_REF('media-log.history.jsonl'),
+      sha12: 'abcdef012345',
+    })
+    expect.soft(history.kind, '(g3) the history is found as read (L7-2)').toBe('found')
+  })
+
+  it("T17-40 create's duplicate branch reads back approval, image-master and media-log: identical, different, or unchecked when the read fails; content kinds stay unchecked (A23, CRIT-1)", async () => {
+    const duplicate = (read: () => Response | Promise<Response>) =>
+      client((call) => (call.method === 'POST' ? json(409, { error: 'Duplicate' }) : read()))
+    const first = duplicate(() => bytesResponse(APPROVAL('2026-11-21')))
+    expect(
+      await asCreate(first.storage, APPROVAL_REF(), APPROVAL('2026-11-21')),
+      'precondition: an approval duplicate with equal stored bytes is identical',
+    ).toEqual({ kind: 'duplicate', stored: 'identical' })
+
+    // (g1) both kinds: identical, different, unchecked; the large master; a media duplicate
+    const otherLog = text('[1]')
+    const masterIdentical = duplicate(() => bytesResponse(MASTER_PNG.slice()))
+    expect
+      .soft(
+        await asCreate(masterIdentical.storage, IMAGE_MASTER_REF(), MASTER_PNG.slice()),
+        '(g1) image-master identical',
+      )
+      .toEqual({ kind: 'duplicate', stored: 'identical' })
+    const rows: [
+      string,
+      Ref,
+      Uint8Array<ArrayBuffer>,
+      () => Response | Promise<Response>,
+      string,
+    ][] = [
+      [
+        'image-master different',
+        IMAGE_MASTER_REF(),
+        MASTER_PNG.slice(),
+        () => bytesResponse(pngOfSize(40)),
+        'different',
+      ],
+      [
+        'image-master GET 500',
+        IMAGE_MASTER_REF(),
+        MASTER_PNG.slice(),
+        () => json(500, {}),
+        'unchecked',
+      ],
+      [
+        'media-log identical',
+        MEDIA_LOG_REF(),
+        LOG_BYTES(),
+        () => bytesResponse(LOG_BYTES()),
+        'identical',
+      ],
+      [
+        'media-log different',
+        MEDIA_LOG_REF(),
+        LOG_BYTES(),
+        () => bytesResponse(otherLog),
+        'different',
+      ],
+      ['media-log GET 500', MEDIA_LOG_REF(), LOG_BYTES(), () => json(500, {}), 'unchecked'],
+      [
+        'history different',
+        MEDIA_LOG_REF('media-log.history.jsonl'),
+        text('{"a":1}\n'),
+        () => bytesResponse(text('{"a":2}\n')),
+        'different',
+      ],
+    ]
+    const big = pngOfSize(2_076_066)
+    rows.push([
+      'the 2,076,066-byte master identical',
+      await masterRef(big),
+      big,
+      () => bytesResponse(big.slice()),
+      'identical',
+    ])
+    for (const [label, ref, body, read, stored] of rows) {
+      const { storage, calls } = duplicate(read)
+      expect
+        .soft(await asCreate(storage, ref, body), `(g1) ${label}`)
+        .toEqual({ kind: 'duplicate', stored })
+      expect
+        .soft(
+          calls.map((c) => c.method),
+          `(g1) ${label}: one POST, one GET`,
+        )
+        .toEqual(['POST', 'GET'])
+    }
+    const media = duplicate(() => bytesResponse(MEDIA()))
+    expect
+      .soft(await asCreate(media.storage, MEDIA_REF(), MEDIA()), '(g1) a media duplicate')
+      .toEqual({ kind: 'duplicate', stored: 'unchecked' })
+    expect.soft(media.calls.length, '(g1) a media duplicate makes 1 call').toBe(1)
   })
 })

@@ -19,6 +19,14 @@
 //   sends nothing; a construction refusal is a TypeError `refused: client option <rule>`.
 // - The approval body gate (Step 15a, D15-6) keeps the Step 13 checks and their order, then the strict
 //   ApprovalRecord schema (record-schema) and canonical JCS bytes (not-jcs).
+// - Step 17 (p1-step17-design.md §3.7, D17-7, D17-25, D17-30): create and readMaster also take the
+//   two masters classes (image-master, media-log), whose body gate is masterBodyRule; every GET reads
+//   at most its target cap (image masters 20 MiB, media logs 8 MiB, every other class 1 MiB) and
+//   too-large names that cap; upload and list answers keep the 1 MiB cap. A found image master must
+//   hash to its name and a media-log.json or image-log.json must start with its folder sha12
+//   (hash-mismatch); the history is found as read. A duplicate of an approval or a masters object is
+//   read back once (identical or different; unchecked only when the read fails). bodyGateRule is an
+//   exhaustive switch: a class with no case is a compile error.
 // - Results are typed. Nothing is retried and nothing is printed. Errors and results never carry the
 //   key, a header or server message text: failure codes are whole sanitised tokens or "unknown".
 import { z } from 'zod'
@@ -40,6 +48,7 @@ import { describeNetworkError, parseJsonBytes, readCapped } from './http'
 import {
   classOfPath,
   contentReadTarget,
+  masterBodyRule,
   MAX_JSON_BYTES,
   pointerTarget,
   recheckTarget,
@@ -49,6 +58,7 @@ import {
   type CreateRef,
   type LayoutResult,
   type MasterReadRef,
+  type MastersObjectRef,
   type PointerMode,
   type Refusal,
   type Target,
@@ -152,12 +162,12 @@ export type ListResult =
   { readonly kind: 'listed'; readonly objects: readonly StoredObject[] } | StorageFailure
 
 export interface StorageClient {
-  /** Create-only write of a package, media item, snapshot or masters approval record. */
-  create(ref: CreateRef, body: Uint8Array): Promise<CreateResult>
+  /** Create-only write of a package, media item, snapshot, approval record or masters object. */
+  create(ref: CreateRef | MastersObjectRef, body: Uint8Array): Promise<CreateResult>
   /** Overwrites catalogue/production.json or catalogue/staging.json with a gated pointer. */
   writePointer(mode: PointerMode, body: Uint8Array): Promise<PointerResult>
-  /** Reads an approval or waiver from masters by exact name. */
-  readMaster(ref: MasterReadRef): Promise<ReadResult>
+  /** Reads an approval, waiver, image master or media-log file from masters by exact name. */
+  readMaster(ref: MasterReadRef | MastersObjectRef): Promise<ReadResult>
   /** Reads a pointer (with a fresh cache nonce), a snapshot or a package from content, authenticated. */
   readContent(ref: ContentReadRef): Promise<ContentReadResult>
   /** Every content object under a folder ('' or 'a/b/'), recursively, all pages, sorted by path. */
@@ -333,7 +343,10 @@ function nestsBelowProtoCheck(value: unknown, depth = 0): boolean {
 
 /**
  * The class's body gate on the copy (§3.3, §3.7): the build's own checks that can run from the ref
- * and the body alone. Returns the failing rule or null; a src/core reason is never forwarded.
+ * and the body alone. Returns the failing rule or null; a src/core reason is never forwarded. Step
+ * 17 (D17-30): every kind has its case and the default assigns the kind to never, so a class added
+ * without a case is a compile error; the waiver case is unreachable (targetOf refuses a waiver
+ * create first, kind-not-creatable) and answers not-creatable.
  */
 async function bodyGateRule(
   target: Target,
@@ -387,16 +400,26 @@ async function bodyGateRule(
       if (!isCanonicalJcs(parsed.value.raw, bytes)) return 'not-jcs'
       return null
     }
-    default:
-      return null // media: the size bound only
+    case 'media':
+      return null // the size bound only (copyBody)
+    case 'image-master':
+    case 'media-log':
+      return masterBodyRule(target, bytes)
+    case 'waiver':
+      return 'not-creatable'
+    default: {
+      const unhandled: never = target.kind
+      return unhandled
+    }
   }
 }
 
 /**
  * The class a request path belongs to under the closed route list (§4.1), or null: the list route
  * (POST), a pointer, snapshot or package under the authenticated content route (GET; Step 14, Step
- * 15a), an approval or
- * waiver under the authenticated masters route (GET), or a creatable class's object path (POST).
+ * 15a), an approval,
+ * waiver, image master or media-log file under the authenticated masters route (GET; Step 17), or a
+ * listed creatable class's object path (POST).
  * send() refuses any other URL, so a later call site that builds a URL another way (OBJECT_ROUTE +
  * 'move', a relative URL) cannot send it (review fix SEC-6).
  */
@@ -409,14 +432,28 @@ function routeClass(method: 'GET' | 'POST', pathname: string): string | null {
     }
     if (!pathname.startsWith(MASTERS_READ_ROUTE)) return null
     const kind = classOfPath('masters', pathname.slice(MASTERS_READ_ROUTE.length))?.kind
-    return kind === 'approval' || kind === 'waiver' ? kind : null
+    return kind === 'approval' ||
+      kind === 'waiver' ||
+      kind === 'image-master' ||
+      kind === 'media-log'
+      ? kind
+      : null
   }
   if (method !== 'POST' || !pathname.startsWith(OBJECT_ROUTE)) return null
   const rest = pathname.slice(OBJECT_ROUTE.length)
   const slash = rest.indexOf('/')
   const kind =
     slash < 0 ? undefined : classOfPath(rest.slice(0, slash), rest.slice(slash + 1))?.kind
-  return kind === undefined || kind === 'waiver' ? null : kind
+  // Step 17: the creatable classes, listed; a waiver (or any class added later) is never posted.
+  return kind === 'package' ||
+    kind === 'media' ||
+    kind === 'snapshot' ||
+    kind === 'pointer' ||
+    kind === 'approval' ||
+    kind === 'image-master' ||
+    kind === 'media-log'
+    ? kind
+    : null
 }
 
 /**
@@ -468,7 +505,7 @@ type Exchange =
   | {
       readonly kind: 'response'
       readonly status: number
-      /** The body under the 1 MiB cap, or null when it was larger. */
+      /** The body under the cap send() was given, or null when it was larger. */
       readonly bytes: Uint8Array<ArrayBuffer> | null
     }
   | { readonly kind: 'network'; readonly code: string }
@@ -552,6 +589,8 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     method: 'GET' | 'POST',
     url: URL,
     headers: Record<string, string>,
+    /** The read cap of the answer body (D17-25): the target's maxBytes on a GET, else 1 MiB. */
+    cap: number,
     body?: Uint8Array<ArrayBuffer> | string,
   ): Promise<Exchange> {
     // WHATWG reports a bare '?' or '#' as an empty search or hash while fetch still sends it, so the
@@ -578,7 +617,7 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
       return {
         kind: 'response',
         status: response.status,
-        bytes: await readCapped(response, MAX_RESPONSE_BYTES),
+        bytes: await readCapped(response, cap),
       }
     } catch (error) {
       return {
@@ -604,9 +643,18 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     return result.kind === 'failed' ? scrubFailure(result) : result
   }
 
-  /** One authenticated GET of a checked URL, classified; no name hash is checked here. */
+  /**
+   * One authenticated GET of a checked URL, read up to the target's cap (D17-25), classified; no name
+   * hash is checked here.
+   */
   async function getObject(target: Target, url: URL): Promise<ContentReadResult> {
-    const exchange = await send(target.kind, 'GET', url, { 'accept-encoding': 'identity' })
+    const exchange = await send(
+      target.kind,
+      'GET',
+      url,
+      { 'accept-encoding': 'identity' },
+      target.maxBytes,
+    )
     if (exchange.kind === 'network') return networkFailure(exchange)
     const success = exchange.status >= 200 && exchange.status < 300
     // A 2xx body is the object: one that breaks off is like a network error (§3.4). An error body
@@ -615,20 +663,38 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
       return success ? networkFailure(exchange) : classifiedRead(exchange.status, undefined)
     }
     if (success) {
-      if (exchange.bytes === null) return { kind: 'too-large', limit: MAX_JSON_BYTES }
+      if (exchange.bytes === null) return { kind: 'too-large', limit: target.maxBytes }
       const sha256 = await sha256Hex(exchange.bytes)
       return { kind: 'found', bytes: exchange.bytes, size: exchange.bytes.byteLength, sha256 }
     }
     return classifiedRead(exchange.status, bodyOf(exchange))
   }
 
+  /**
+   * The found-hash rule of a masters read: a waiver and an image master hash to their names; a
+   * media-log.json or image-log.json starts with its folder's sha12; an approval and the history
+   * (whose names hold no hash, L7-2) are found as read.
+   */
+  function nameHashHolds(target: Target, sha256: string): boolean {
+    const fields = target.fields
+    switch (target.kind) {
+      case 'waiver':
+        return sha256 === fields.waiverSha256
+      case 'image-master':
+        return sha256 === fields.sha256
+      case 'media-log':
+        return (
+          fields.file === 'media-log.history.jsonl' ||
+          (typeof fields.sha12 === 'string' && sha256.startsWith(fields.sha12))
+        )
+      default:
+        return true
+    }
+  }
+
   async function readTarget(target: Target): Promise<ReadResult> {
     const result = await getObject(target, checkedUrl(target, MASTERS_READ_ROUTE + target.path))
-    if (
-      result.kind === 'found' &&
-      target.kind === 'waiver' &&
-      result.sha256 !== target.fields.waiverSha256
-    ) {
+    if (result.kind === 'found' && !nameHashHolds(target, result.sha256)) {
       return { kind: 'hash-mismatch', sha256: result.sha256 }
     }
     return result
@@ -671,6 +737,7 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
         'x-upsert': upsert,
         'accept-encoding': 'identity',
       },
+      MAX_RESPONSE_BYTES,
       copy,
     )
     if (exchange.kind === 'network') return networkFailure(exchange)
@@ -680,15 +747,23 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
       : outcome
   }
 
-  async function create(ref: CreateRef, body: Uint8Array): Promise<CreateResult> {
+  /** The classes whose duplicate is read back once (Step 15a approvals; Step 17 masters objects). */
+  const READ_BACK: ReadonlySet<string> = new Set(['approval', 'image-master', 'media-log'])
+
+  async function create(
+    ref: CreateRef | MastersObjectRef,
+    body: Uint8Array,
+  ): Promise<CreateResult> {
     const target = expectTarget(targetOf(ref, 'create'))
     const copy = copyBody(target.kind, body, target.maxBytes)
     const rule = await bodyGateRule(target, copy)
     if (rule !== null) refuseRule(target.kind, 'body-gate', rule)
     const outcome = await upload(target, copy, 'false')
     if (outcome.kind !== 'duplicate') return outcome
-    if (target.kind !== 'approval') return { kind: 'duplicate', stored: 'unchecked' }
+    if (!READ_BACK.has(target.kind)) return { kind: 'duplicate', stored: 'unchecked' }
     const stored = await readTarget(target)
+    // A found object or one under its name that hashes elsewhere was read: identical or different.
+    if (stored.kind === 'hash-mismatch') return { kind: 'duplicate', stored: 'different' }
     if (stored.kind !== 'found') return { kind: 'duplicate', stored: 'unchecked' }
     const same = stored.sha256 === (await sha256Hex(copy))
     return { kind: 'duplicate', stored: same ? 'identical' : 'different' }
@@ -705,7 +780,7 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
     return outcome
   }
 
-  async function readMaster(ref: MasterReadRef): Promise<ReadResult> {
+  async function readMaster(ref: MasterReadRef | MastersObjectRef): Promise<ReadResult> {
     return readTarget(expectTarget(targetOf(ref, 'read')))
   }
 
@@ -725,6 +800,7 @@ export function createStorageClient(options: StorageClientOptions): StorageClien
       'POST',
       url,
       { 'content-type': 'application/json', 'accept-encoding': 'identity' },
+      MAX_RESPONSE_BYTES,
       body,
     )
     if (exchange.kind === 'network') return { ok: false, failure: networkFailure(exchange) }

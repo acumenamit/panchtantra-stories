@@ -1,5 +1,7 @@
 // Validator (spec §5.3): pure, synchronous, never throws. Waivers are applied separately (waivers.ts).
-// P1-2b (design p1-step8-design.md §5.5, §5.6): A001 asset references (error), T006 scripts (warn).
+// P1-2b (design p1-step8-design.md §5.5, §5.6): A001 asset references (error), T006 scripts: a
+// warning in authoring and an error in stage and publish since P1 Step 17 (p1-step17-design.md
+// D17-16), so the build, which validates in publish mode, refuses it too.
 import { getLocaleDef, isEnabledLocale } from '../locales'
 import type { LocaleCode } from '../locales'
 import { StoryPackageV1 } from '../package/v1'
@@ -57,7 +59,7 @@ export function validatePackage(input: unknown, opts: ValidateOptions): Validati
       storyId = parsed.data.storyId
       checkGraph(parsed.data, add)
       checkLocales(parsed.data, add, mode)
-      checkText(parsed.data, add)
+      checkText(parsed.data, add, mode)
       checkAssets(parsed.data, add, opts.forFeature === true)
       checkEditorial(parsed.data, add, opts.ruleSet)
       checkWordLists(parsed.data, add, opts, skipped)
@@ -217,7 +219,11 @@ function checkLocales(p: Pkg, add: Add, mode: ValidationMode): void {
   }
 }
 
-function checkText(p: Pkg, add: Add): void {
+function checkText(p: Pkg, add: Add, mode: ValidationMode): void {
+  // T006 (design p1-step8-design.md §5.6; p1-step17-design.md D17-16, with the owner's U+7425
+  // U+73C0 correction): one finding per string; a warning in authoring, an error in stage and
+  // publish.
+  const scriptSeverity: Severity = mode === 'authoring' ? 'warn' : 'error'
   for (const l of p.locales) {
     const t = p.text[l]
     if (!t) continue
@@ -236,10 +242,8 @@ function checkText(p: Pkg, add: Add): void {
     }
     for (const [nodeId, s] of fields) {
       for (const h of textHygiene(s)) add(h.checkId, 'error', h.message, { nodeId, locale: l })
-      // T006 (warn in P1-2b, design §5.6): one finding per string; raised to an error only with
-      // the owner's U+7425 U+73C0 correction (design §3.2).
       const scripts = scriptProblem(s)
-      if (scripts) add('T006', 'warn', scripts, { nodeId, locale: l })
+      if (scripts) add('T006', scriptSeverity, scripts, { nodeId, locale: l })
     }
   }
 }

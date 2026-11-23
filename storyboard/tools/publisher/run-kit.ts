@@ -50,7 +50,8 @@ export const WAIVER_READ_CODE: Readonly<Record<string, string>> = {
 
 /**
  * The codes a command may stop with before any runner starts (cli.ts may not import report.ts);
- * Step 15b adds takedown-here-only, the actions-mode `--takedown` refusal (D15B-8).
+ * Step 15b adds takedown-here-only, the actions-mode `--takedown` refusal (D15B-8); Step 17 adds
+ * masters-here-only (masters runs on this PC only, as stage, D17-7).
  */
 export type ConfigurationCode =
   | 'usage'
@@ -60,6 +61,7 @@ export type ConfigurationCode =
   | 'run-context-refused'
   | 'answers-missing'
   | 'takedown-here-only'
+  | 'masters-here-only'
 
 /** A stop line for the CLI's configuration checks. */
 export function stopLine(command: Command, code: ConfigurationCode): string {

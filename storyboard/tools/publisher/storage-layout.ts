@@ -6,7 +6,11 @@
 // pathname, no search, no hash). Every refusal is a fixed triple {cls, stage, rule} that never
 // carries a caller value (D12-14). Step 14 (p1-step14-design.md §3.4) adds contentReadTarget, the
 // target of a pointer or snapshot read; Step 15a (p1-step15a-design.md §3.17, D15-17) adds the
-// content-addressed package read.
+// content-addressed package read. Step 17 (p1-step17-design.md §3.6, §3.7, §3.14, D17-6, D17-7,
+// D17-14, D17-25) adds the two masters classes the `masters` command writes: image-master
+// (`images/<storyId>/<sha256>.<png|jpg>`, capped at 20 MiB) and media-log
+// (`media-log/<date>-<sha12>/<file>`, capped at 8 MiB), and masterBodyRule, their pure body gate
+// (Web Crypto through src/core/hashing). The media-log file names stay module-local (CRIT-6).
 import {
   expectedPackagePath,
   expectedSnapshotPath,
@@ -14,19 +18,26 @@ import {
   STORAGE_GATE_MODES,
 } from '../../src/core/content/gates'
 import { MEDIA_EXTENSIONS, MEDIA_MAX_BYTES, type MediaMime } from '../../src/core/content/media'
+import { jcsBytes, sha256Hex } from '../../src/core/hashing'
+import { DATE, isCalendarDate } from '../../src/core/package/approval'
 import { Sha256, StoryId } from '../../src/core/package/v1'
 
 /** The largest pointer, snapshot, package or approval body; equals the loader's MAX_BODY_BYTES. */
 export const MAX_JSON_BYTES = 1024 * 1024
 /** Cache seconds for a masters object the client writes (D12-8). */
 export const MASTERS_CACHE_SECONDS = 0
+/** The largest image master a create or read may carry (D17-25): 20 MiB. */
+export const MASTER_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+/** The largest media-log snapshot file a create or read may carry (D17-25): 8 MiB. */
+export const MEDIA_LOG_MAX_BYTES = 8 * 1024 * 1024
 /** Packages, media and snapshots (SPEC:280). */
 const CONTENT_CACHE_SECONDS = 3600
 /** The two pointers (SPEC:280). */
 const POINTER_CACHE_SECONDS = 0
 
 export type StorageBucket = 'content' | 'masters'
-export type RefKind = 'package' | 'media' | 'snapshot' | 'approval' | 'waiver'
+export type RefKind =
+  'package' | 'media' | 'snapshot' | 'approval' | 'waiver' | 'image-master' | 'media-log'
 export type TargetKind = RefKind | 'pointer'
 export type PointerMode = (typeof STORAGE_GATE_MODES)[number]
 
@@ -56,6 +67,22 @@ export interface WaiverRef {
   readonly storyId: string
   readonly waiverSha256: string
 }
+/** Step 17 (D17-6): an image master, named by the sha256 of its own bytes; png or jpg by the bytes. */
+export interface ImageMasterRef {
+  readonly kind: 'image-master'
+  readonly storyId: string
+  readonly sha256: string
+  readonly ext: 'png' | 'jpg'
+}
+/** Step 17 (D17-14): one file of a media-log snapshot folder `<date>-<sha12>`. */
+export interface MediaLogRef {
+  readonly kind: 'media-log'
+  readonly date: string
+  readonly sha12: string
+  readonly file: 'media-log.json' | 'media-log.history.jsonl' | 'image-log.json'
+}
+/** What the `masters` command may create and read (D17-7). */
+export type MastersObjectRef = ImageMasterRef | MediaLogRef
 /** A pointer read names the mode only; the client adds a fresh cache nonce on every read. */
 export interface PointerReadRef {
   readonly kind: 'pointer'
@@ -100,7 +127,8 @@ export type LayoutResult<T> =
   { readonly ok: true; readonly value: T } | { readonly ok: false; readonly refusal: Refusal }
 export type RefUse = 'create' | 'read'
 
-type FieldRule = 'story-id' | 'sha256' | 'variant' | 'mime' | 'seq'
+type FieldRule =
+  'story-id' | 'sha256' | 'variant' | 'mime' | 'seq' | 'master-ext' | 'date' | 'sha12' | 'log-file'
 
 interface ClassSpec {
   readonly fields: readonly (readonly [name: string, rule: FieldRule])[]
@@ -144,10 +172,41 @@ const CLASSES: Readonly<Record<RefKind, ClassSpec>> = {
     create: false,
     read: true,
   },
+  'image-master': {
+    fields: [
+      ['storyId', 'story-id'],
+      ['sha256', 'sha256'],
+      ['ext', 'master-ext'],
+    ],
+    create: true,
+    read: true,
+  },
+  'media-log': {
+    fields: [
+      ['date', 'date'],
+      ['sha12', 'sha12'],
+      ['file', 'log-file'],
+    ],
+    create: true,
+    read: true,
+  },
 }
 
 /** The variant part of a media name (media.ts:21). */
 const VARIANT = /^[a-z0-9]{1,16}$/
+/** The first 12 hex of a media-log.json sha256 (REQ:455). */
+const SHA12 = /^[a-f0-9]{12}$/
+/** An image master's extension and its content type (masters allows both, config.toml:140). */
+const MASTER_TYPES: ReadonlyMap<string, string> = new Map([
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+])
+/** The media-log snapshot files and their content types; module-local (CRIT-6). */
+const MEDIA_LOG_FILES: ReadonlyMap<string, string> = new Map([
+  ['media-log.json', 'application/json'],
+  ['media-log.history.jsonl', 'application/x-ndjson'],
+  ['image-log.json', 'application/json'],
+])
 
 const refused = (cls: string, stage: Stage, rule: string): LayoutResult<never> => ({
   ok: false,
@@ -171,6 +230,15 @@ function fieldOk(rule: FieldRule, value: unknown): boolean {
         value >= 1 &&
         !Object.is(value, -0)
       )
+    case 'master-ext':
+      return typeof value === 'string' && MASTER_TYPES.has(value)
+    case 'date':
+      // CRIT-9: isCalendarDate alone accepts '2026-11-15-' and ' 2026-11-15'; DATE pins the form.
+      return typeof value === 'string' && DATE.test(value) && isCalendarDate(value)
+    case 'sha12':
+      return typeof value === 'string' && SHA12.test(value)
+    case 'log-file':
+      return typeof value === 'string' && MEDIA_LOG_FILES.has(value)
   }
 }
 
@@ -278,6 +346,36 @@ function buildTarget(kind: RefKind, values: ReadonlyMap<string, unknown>): Targe
         storyId,
         waiverSha256,
       })
+    }
+    case 'image-master': {
+      const storyId = text('storyId')
+      const sha256 = text('sha256')
+      const ext = text('ext')
+      const path = `images/${storyId}/${sha256}.${ext}`
+      return makeTarget(
+        'image-master',
+        'masters',
+        path,
+        MASTER_TYPES.get(ext) ?? null,
+        MASTERS_CACHE_SECONDS,
+        MASTER_IMAGE_MAX_BYTES,
+        { storyId, sha256, ext },
+      )
+    }
+    case 'media-log': {
+      const date = text('date')
+      const sha12 = text('sha12')
+      const file = text('file')
+      const path = `media-log/${date}-${sha12}/${file}`
+      return makeTarget(
+        'media-log',
+        'masters',
+        path,
+        MEDIA_LOG_FILES.get(file) ?? null,
+        MASTERS_CACHE_SECONDS,
+        MEDIA_LOG_MAX_BYTES,
+        { date, sha12, file },
+      )
     }
   }
 }
@@ -399,9 +497,10 @@ const MIME_OF_EXTENSION: ReadonlyMap<string, MediaMime> = new Map(
 )
 
 /**
- * The six anchored class patterns, each its own literal, never built from the field rules, so one
+ * The eight anchored class patterns, each its own literal, never built from the field rules, so one
  * edit cannot loosen a field rule and its pattern together (CRIT-1 b). The storyId segment carries
- * the 3-64 length lookahead; the snapshot seq decodes to a safe integer (INT-5).
+ * the 3-64 length lookahead; the snapshot seq decodes to a safe integer (INT-5); a media-log date
+ * decodes only when it is a calendar date (Step 17, CRIT-9).
  */
 const PATTERNS: Readonly<Record<TargetKind, ClassPattern>> = {
   package: {
@@ -440,6 +539,17 @@ const PATTERNS: Readonly<Record<TargetKind, ClassPattern>> = {
     bucket: 'masters',
     pattern: /^waivers\/(?=[a-z0-9-]{3,64}\/)([a-z0-9]+(?:-[a-z0-9]+)*)\/([a-f0-9]{64})\.json$/,
     decode: (m) => ({ storyId: m[1]!, waiverSha256: m[2]! }),
+  },
+  'image-master': {
+    bucket: 'masters',
+    pattern: /^images\/(?=[a-z0-9-]{3,64}\/)([a-z0-9]+(?:-[a-z0-9]+)*)\/([a-f0-9]{64})\.(png|jpg)$/,
+    decode: (m) => ({ storyId: m[1]!, sha256: m[2]!, ext: m[3]! }),
+  },
+  'media-log': {
+    bucket: 'masters',
+    pattern:
+      /^media-log\/([0-9]{4}-[0-9]{2}-[0-9]{2})-([a-f0-9]{12})\/(media-log\.json|media-log\.history\.jsonl|image-log\.json)$/,
+    decode: (m) => (isCalendarDate(m[1]!) ? { date: m[1]!, sha12: m[2]!, file: m[3]! } : null),
   },
 }
 
@@ -504,4 +614,129 @@ export function classOfPath(
     if (fields !== null) return { kind, fields: Object.freeze(fields) }
   }
   return null
+}
+
+// ---- Step 17: the masters body gate (D17-7, TP17-6, S17-TP-1) ----
+
+/** The deepest JSON nesting the gate clears of `__proto__` keys (hasOwnProtoKey's, v1.ts). */
+const JSON_CHECK_DEPTH = 64
+const PNG_SIGNATURE: readonly number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+const PNG_IHDR: readonly number[] = [0x49, 0x48, 0x44, 0x52]
+const JPEG_START: readonly number[] = [0xff, 0xd8, 0xff]
+const UTF8_BOM: readonly number[] = [0xef, 0xbb, 0xbf]
+const IMAGE_LOG_SCHEMA = 'image-log@1'
+
+const bytesAt = (bytes: Uint8Array, at: number, expected: readonly number[]): boolean =>
+  expected.every((byte, i) => bytes[at + i] === byte)
+
+/** Strict UTF-8 text, or null for a BOM or any ill-formed sequence. */
+function utf8Text(bytes: Uint8Array): string | null {
+  if (bytesAt(bytes, 0, UTF8_BOM)) return null
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * One walk of a parsed JSON value: `proto-key` for an own `__proto__` key at any depth or nesting
+ * deeper than JSON_CHECK_DEPTH (it could not be cleared), `ill-formed-text` for a key or string
+ * with an unpaired surrogate (lesson 15a), else null.
+ */
+function jsonTextRule(value: unknown, depth = 0): 'proto-key' | 'ill-formed-text' | null {
+  if (typeof value === 'string') return value.isWellFormed() ? null : 'ill-formed-text'
+  if (value === null || typeof value !== 'object') return null
+  if (depth > JSON_CHECK_DEPTH || Object.hasOwn(value, '__proto__')) return 'proto-key'
+  for (const [key, child] of Object.entries(value)) {
+    if (!key.isWellFormed()) return 'ill-formed-text'
+    const found = jsonTextRule(child, depth + 1)
+    if (found !== null) return found
+  }
+  return null
+}
+
+/** True when `bytes` are exactly the JCS form of `value`. */
+function isJcsOf(value: unknown, bytes: Uint8Array): boolean {
+  let canonical: Uint8Array
+  try {
+    canonical = jcsBytes(value)
+  } catch {
+    return false
+  }
+  return canonical.byteLength === bytes.byteLength && bytesAt(bytes, 0, [...canonical])
+}
+
+/** NDJSON (TP17-6): not empty, LF-terminated, no CR, no empty line, every line a clean object. */
+function historyRule(text: string): 'ndjson' | null {
+  if (text === '' || !text.endsWith('\n') || text.includes('\r')) return 'ndjson'
+  const lines = text.split('\n')
+  lines.pop() // the empty string after the final LF
+  for (const line of lines) {
+    if (line === '') return 'ndjson'
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      return 'ndjson'
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return 'ndjson'
+    if (jsonTextRule(value) !== null) return 'ndjson'
+  }
+  return null
+}
+
+/**
+ * The masters body gate (§3.7, TP17-6), on a target this module built: the failing rule or null.
+ * Pure (Web Crypto only); storage.ts's bodyGateRule calls it for the two masters kinds and
+ * runMasters on every local file before planning.
+ * - image-master: the bytes' sha256 is the name's (sha256-mismatch); png: the signature and IHDR at
+ *   offset 12 (not-png); jpg: FF D8 FF (not-jpeg).
+ * - media-log, every file: no BOM, strict UTF-8 (not-utf8). media-log.json: its sha256 starts with
+ *   the folder's sha12 (sha12-mismatch), a JSON array (record-json); image-log.json: the same sha12
+ *   rule, an object with schema image-log@1 and an images array (record-json), canonical JCS
+ *   (not-jcs); both: no own `__proto__` at any depth (proto-key), well-formed keys and strings
+ *   (ill-formed-text). media-log.history.jsonl: NDJSON of clean objects (ndjson).
+ * Checks form, not meaning (L7-3). Any other kind answers kind-not-masters.
+ */
+export async function masterBodyRule(
+  target: Target,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<string | null> {
+  const fields = target.fields
+  if (target.kind === 'image-master') {
+    if ((await sha256Hex(bytes)) !== fields.sha256) return 'sha256-mismatch'
+    if (fields.ext === 'png') {
+      return bytesAt(bytes, 0, PNG_SIGNATURE) && bytesAt(bytes, 12, PNG_IHDR) ? null : 'not-png'
+    }
+    return bytesAt(bytes, 0, JPEG_START) ? null : 'not-jpeg'
+  }
+  if (target.kind !== 'media-log') return 'kind-not-masters'
+  const text = utf8Text(bytes)
+  if (text === null) return 'not-utf8'
+  if (fields.file === 'media-log.history.jsonl') return historyRule(text)
+  const sha12 = fields.sha12
+  if (typeof sha12 !== 'string' || !(await sha256Hex(bytes)).startsWith(sha12)) {
+    return 'sha12-mismatch'
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return 'record-json'
+  }
+  if (fields.file === 'media-log.json') {
+    return Array.isArray(value) ? jsonTextRule(value) : 'record-json'
+  }
+  const isImageLog =
+    fields.file === 'image-log.json' &&
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, 'schema') &&
+    (value as Record<string, unknown>).schema === IMAGE_LOG_SCHEMA &&
+    Object.hasOwn(value, 'images') &&
+    Array.isArray((value as Record<string, unknown>).images)
+  if (!isImageLog) return 'record-json'
+  return jsonTextRule(value) ?? (isJcsOf(value, bytes) ? null : 'not-jcs')
 }

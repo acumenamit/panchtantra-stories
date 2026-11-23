@@ -14,14 +14,23 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fixture from '../../fixtures/packages/two-paths.json'
-import type { ParlerPlanEntry } from './parler'
+import { StoryPackageV1 } from '../../src/core/package/v1'
+import { convertLegacyStory } from '../migrate/convert'
+import { loadLegacyStories } from '../migrate/load-legacy'
+import { applyTextCorrections, type TextCorrection } from '../migrate/text-corrections'
+import { parseHashList } from '../publisher/takedown'
+import { buildParlerEntry, type ParlerPlanEntry } from './parler'
 import {
+  buildAllEntries,
+  buildEntriesFor,
   exportPlan,
   fileStamp,
   ingest,
   keyOf,
   markListened,
   narrationPaths,
+  parseSeedOverrides,
+  readSeedOverrides,
 } from './parler-pipeline'
 import type { ManifestLine } from './parler-pipeline'
 
@@ -30,7 +39,8 @@ const K = 'two-paths/start.hi'
 let root: string
 let lines: string[]
 const log = (l: string) => void lines.push(l)
-const opts = (now = NOW) => ({ now, log })
+// P1 Step 17 (p1-step17-design.md D17-17): every export and ingest names its text corrections.
+const opts = (now = NOW) => ({ now, log, corrections: [] })
 
 /**
  * One MPEG Layer III frame header: version 2 = MPEG-2 (24 kHz family), 25 = MPEG-2.5; kbpsIndex 6 = 48 kbps.
@@ -540,6 +550,294 @@ describe('narration:ingest', () => {
   })
 })
 
+// ---- P1 Step 17 (p1-step17-design.md §3.17, D17-17, D17-29; §14.12): T17-48 to T17-50 ----
+
+const shaText = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
+const HI_START = fixture.text.hi.nodes.start.text
+/** "नन्ही", from code points: the synthetic correction's new word. */
+const NEW_WORD = String.fromCodePoint(0x0928, 0x0928, 0x094d, 0x0939, 0x0940)
+const REPLACED = HI_START.split(' ')[1] ?? ''
+const HI_AFTER = HI_START.split(' ')
+  .map((word, i) => (i === 1 ? NEW_WORD : word))
+  .join(' ')
+/** The synthetic record: two-paths hi start text with its second word replaced. */
+const correction = (over: Partial<TextCorrection> = {}): TextCorrection => ({
+  storyId: 'two-paths',
+  locale: 'hi',
+  nodeId: 'start',
+  field: 'text',
+  beforeSha256: shaText(HI_START),
+  after: HI_AFTER,
+  approvedOn: '2026-11-15',
+  approvedBy: 'owner',
+  ...over,
+})
+const withCorrections = (corrections: readonly TextCorrection[], now = NOW) => ({
+  now,
+  log,
+  corrections,
+})
+const fixturePackage = () => StoryPackageV1.parse(structuredClone(fixture))
+const errorOf = async (run: () => Promise<unknown>): Promise<string> =>
+  run().then(
+    () => 'no error',
+    (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  )
+const sumsPath = () => join(P().audioDir, 'SHA256SUMS.txt')
+/** Runs `body` on a fresh temporary root holding the two-paths package, then restores the root. */
+async function onFreshRoot(body: () => Promise<void>): Promise<void> {
+  const previous = root
+  root = mkdtempSync(join(tmpdir(), 'narration-'))
+  mkdirSync(join(root, 'migration-input/packages'), { recursive: true })
+  writeFileSync(pkgPath(), JSON.stringify(fixture))
+  try {
+    await body()
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    root = previous
+  }
+}
+
+describe('P1 Step 17: corrections, the hash list and the pure readers', () => {
+  it('T17-48 the narration reader applies corrections: one entry changes, export --only writes the corrected redo entry, ingest’s stale check uses it, a refusing record throws by code with no text and writes nothing (A7, D17-17)', async () => {
+    const R = correction()
+    expect(
+      HI_START.split(REPLACED).length === 2 && !HI_AFTER.includes(REPLACED),
+      'precondition: the record replaces the one occurrence of a word',
+    ).toBe(true)
+    expect(HI_AFTER.includes(NEW_WORD), 'precondition: the after holds the new word').toBe(true)
+
+    // g1
+    await exportPlan(root, [], withCorrections([]))
+    const plain = plan()
+    await exportPlan(root, [], withCorrections([R]))
+    const corrected = plan()
+    expect(corrected.map(keyOf), 'precondition: the same 10 keys').toEqual(plain.map(keyOf))
+    expect
+      .soft(
+        corrected.filter((e, i) => JSON.stringify(e) !== JSON.stringify(plain[i])).map(keyOf),
+        '(g1) exactly one entry differs: two-paths/start.hi',
+      )
+      .toEqual([K])
+    const applied = applyTextCorrections([fixturePackage()], [R])
+    const want = applied.ok ? await buildParlerEntry(applied.packages[0]!, 'start', 'hi', 0) : null
+    expect
+      .soft(
+        corrected.find((e) => keyOf(e) === K)?.narratedTextSha256,
+        '(g1) its narratedTextSha256 is buildParlerEntry over the corrected package',
+      )
+      .toBe(want?.narratedTextSha256)
+
+    // g2
+    await exportPlan(root, ['--only', K, '--seed', '1'], withCorrections([R]))
+    const redo: ParlerPlanEntry[] = readJson(
+      join(P().narrDir, `parler-plan.redo-${fileStamp(NOW)}.json`),
+    ).entries
+    expect.soft(redo.map(keyOf), '(g2) the redo file holds 1 entry').toEqual([K])
+    const spoken = redo[0]?.sentences.join(' ') ?? ''
+    expect
+      .soft(
+        spoken.includes(NEW_WORD) && !spoken.includes(REPLACED),
+        '(g2) its sentences hold the new word and not the replaced one',
+      )
+      .toBe(true)
+
+    // g3
+    await exportPlan(root, [], withCorrections([]))
+    const dir = colabFolder(plan())
+    expect
+      .soft(
+        await errorOf(() => ingest(root, dir, withCorrections([R]))),
+        '(g3) ingest with the record refuses the plan exported without it',
+      )
+      .toMatch(/^parler-plan\.json is out of date \(1 file differs, e\.g\. two-paths\/start\.hi\)/)
+
+    // g4
+    await onFreshRoot(async () => {
+      const bad = correction({ beforeSha256: shaText('another string') })
+      const message = await errorOf(() =>
+        exportPlan(root, ['--only', K, '--seed', '1'], withCorrections([bad])),
+      )
+      expect
+        .soft(message, '(g4) a before-mismatch record throws by code')
+        .toBe('text-corrections.json: correction-before-mismatch two-paths/start.hi text')
+      // The record's field and its after are Hindi (the English text shares "two" and "path" with
+      // the story id two-paths, so it is not a useful sample).
+      const words = [...HI_START.split(/\s+/u), ...HI_AFTER.split(/\s+/u)]
+        .map((w) => w.replace(/[।]+$/u, ''))
+        .filter((w) => w.length > 0)
+      expect
+        .soft(
+          words.filter((w) => message.includes(w)),
+          '(g4) no word of the record’s text or its after in the message',
+        )
+        .toEqual([])
+      expect.soft(/[ऀ-ॿ]/u.test(message), '(g4) no Devanagari in the message').toBe(false)
+      expect
+        .soft(
+          [existsSync(P().overridesPath), existsSync(P().planPath)],
+          '(g4) seed-overrides.json and the plan not written',
+        )
+        .toEqual([false, false])
+    })
+  })
+
+  it('T17-49 ingest writes SHA256SUMS.txt from the log after a run that copied files: sorted hash-list lines that parseHashList accepts; a differing file throws and writes nothing; no write after a stopped run or with no copy (A8, D17-17)', async () => {
+    await exportPlan(root, [], opts())
+    const dir = colabFolder(plan())
+    expect(await ingest(root, dir, opts()), 'precondition: a full ingest').toBe(0)
+    const media: Record<string, unknown>[] = readJson(join(P().narrDir, 'media-log.json'))
+    expect(media.length, 'precondition: 10 files copied and logged').toBe(10)
+    const pathOf = (r: Record<string, unknown>) =>
+      `${String(r.storyId)}/${String(r.nodeId)}.${String(r.locale)}.mp3`
+    const shaOf = (path: string) => String(media.find((r) => pathOf(r) === path)?.sha256)
+    const logOrder = media.map(pathOf)
+    const sorted = [...logOrder].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    expect(logOrder, 'precondition: the plan order differs from the sorted path order').not.toEqual(
+      sorted,
+    )
+
+    // g1
+    const text = readFileSync(sumsPath(), 'utf8')
+    const want = sorted.map((path) => `${shaOf(path)}  ${path}\n`).join('')
+    expect.soft(text, '(g1) 10 lines <sha>  two-paths/<node>.<locale>.mp3, sorted, LF').toBe(want)
+    expect.soft(text.includes('\r'), '(g1) no CR').toBe(false)
+    expect
+      .soft(
+        sorted.map((path) => sha(new Uint8Array(readFileSync(join(P().audioDir, path))))),
+        "(g1) each line's sha256 is its file's",
+      )
+      .toEqual(sorted.map(shaOf))
+    const parsed = parseHashList(new Uint8Array(readFileSync(sumsPath())))
+    expect.soft(parsed.ok && parsed.lines.length, '(g1) parseHashList accepts 10 lines').toBe(10)
+    expect.soft(lines.at(-1), '(g1) the last log line').toBe('wrote SHA256SUMS.txt (10 files)')
+
+    // g2
+    const first = readFileSync(sumsPath())
+    expect(await ingest(root, dir, opts(new Date('2026-11-05T09:00:00.000Z')))).toBe(0)
+    expect
+      .soft(readFileSync(sumsPath()).equals(first), '(g2) a second ingest writes the same bytes')
+      .toBe(true)
+
+    // g5 (before g3, which leaves a changed file behind)
+    const [gone1, gone2] = plan().slice(-2)
+    if (!gone1 || !gone2) throw new Error('the plan has fewer than 2 entries')
+    rmSync(join(dir, gone1.file))
+    rmSync(join(dir, gone2.file))
+    lines = []
+    expect(await ingest(root, dir, opts()), 'precondition: two files missing').toBe(1)
+    expect
+      .soft(lines[0], '(g5) accepted 8 of 10, 2 problems')
+      .toBe('accepted 8/10; problems 2; flagged 0')
+    expect
+      .soft(
+        readFileSync(sumsPath(), 'utf8').split('\n').filter(Boolean).length,
+        '(g5) the list still holds 10 lines',
+      )
+      .toBe(10)
+    expect.soft(lines.at(-1), '(g5) and says so').toBe('wrote SHA256SUMS.txt (10 files)')
+
+    // g3: a file that no longer matches its record (not re-copied: absent from the folder)
+    const before = readFileSync(sumsPath())
+    writeFileSync(join(P().audioDir, gone1.file), mp3(3, { fill: 7 }))
+    expect
+      .soft(
+        await errorOf(() => ingest(root, dir, opts())),
+        '(g3) a file that differs from its record throws',
+      )
+      .toBe(`SHA256SUMS.txt not written: ${keyOf(gone1)} differs from media-log.json`)
+    expect
+      .soft(readFileSync(sumsPath()).equals(before), '(g3) the old list is byte-identical')
+      .toBe(true)
+
+    // g4: a run stopped mid-copy, and a run whose every file is a problem
+    await onFreshRoot(async () => {
+      await exportPlan(root, [], opts())
+      const folder = colabFolder(plan())
+      const fourth = plan()[3]
+      if (!fourth) throw new Error('the plan has fewer than 4 entries')
+      mkdirSync(join(P().audioDir, fourth.file), { recursive: true })
+      expect(
+        await errorOf(() => ingest(root, folder, opts())),
+        'precondition: the run stops at the 4th file',
+      ).toContain(`ingesting ${keyOf(fourth)} failed`)
+      expect.soft(existsSync(sumsPath()), '(g4) no list after a stopped run').toBe(false)
+    })
+    await onFreshRoot(async () => {
+      await exportPlan(root, [], opts())
+      const folder = colabFolder(plan(), (_e, line) => {
+        line.narratedTextSha256 = '0'.repeat(64)
+      })
+      lines = []
+      expect(await ingest(root, folder, opts()), 'precondition: every file is a problem').toBe(1)
+      expect(lines[0], 'precondition: nothing accepted').toBe(
+        'accepted 0/10; problems 10; flagged 0',
+      )
+      expect.soft(existsSync(sumsPath()), '(g4) no list when nothing was copied').toBe(false)
+    })
+  })
+
+  it('T17-50 buildEntriesFor over packages equals buildAllEntries over the same folder; parseSeedOverrides equals readSeedOverrides on the same bytes; absent is {} (CRIT-5)', async () => {
+    const R = correction()
+    const corrected = applyTextCorrections([fixturePackage()], [R])
+    expect(corrected.ok, 'precondition: the record applies to the fixture').toBe(true)
+    const correctedPackages = corrected.ok ? corrected.packages : []
+
+    // g1
+    const plainFolder = await buildAllEntries(P().pkgDir, {}, { corrections: [] })
+    const plainPure = await buildEntriesFor([fixturePackage()], {})
+    expect.soft(plainPure, '(g1) no correction, no override: equal').toEqual(plainFolder)
+    const overrides = { [K]: 3 }
+    const folder = await buildAllEntries(P().pkgDir, overrides, { corrections: [R] })
+    const pure = await buildEntriesFor(correctedPackages, overrides)
+    expect.soft(pure, '(g1) a correction and an override: equal').toEqual(folder)
+    const want = await buildParlerEntry(correctedPackages[0]!, 'start', 'hi', 3)
+    expect
+      .soft(
+        pure.find((e) => keyOf(e) === K),
+        '(g1) the override and the correction both reach the entry',
+      )
+      .toEqual(want)
+
+    // g2
+    const unknown = { 'two-paths/nowhere.hi': 2 }
+    const fromPure = await errorOf(() => buildEntriesFor([fixturePackage()], unknown))
+    const fromFolder = await errorOf(() =>
+      buildAllEntries(P().pkgDir, unknown, { corrections: [] }),
+    )
+    expect
+      .soft(fromPure, '(g2) an unknown key: buildEntriesFor throws')
+      .toContain('no longer in the packages: two-paths/nowhere.hi')
+    expect.soft(fromPure, '(g2) the same message as buildAllEntries').toBe(fromFolder)
+
+    // g3
+    mkdirSync(P().narrDir, { recursive: true })
+    const bytesOf = (value: string) => new TextEncoder().encode(value)
+    const valid = `{"${K}": 1}`
+    writeFileSync(P().overridesPath, valid)
+    expect
+      .soft(parseSeedOverrides(bytesOf(valid)), '(g3) a valid file parses to that object')
+      .toEqual({ [K]: 1 })
+    expect
+      .soft(readSeedOverrides(P().overridesPath), '(g3) and readSeedOverrides reads the same')
+      .toEqual({ [K]: 1 })
+    for (const sample of ['[]', '{"k": -1}', '{"k": 4294967296}', '{"k": 1.5}']) {
+      writeFileSync(P().overridesPath, sample)
+      expect
+        .soft(
+          [
+            await errorOf(async () => parseSeedOverrides(bytesOf(sample))),
+            await errorOf(async () => readSeedOverrides(P().overridesPath)),
+          ].map((message) => message !== 'no error'),
+          `(g3) both throw on ${sample}`,
+        )
+        .toEqual([true, true])
+    }
+    rmSync(P().overridesPath)
+    expect.soft(readSeedOverrides(P().overridesPath), '(g3) a missing file is {}').toEqual({})
+  })
+})
+
 describe('parler-cli (real process, exit codes)', () => {
   const storyboard = join(dirname(fileURLToPath(import.meta.url)), '../..')
   const cli = (...args: string[]) =>
@@ -554,9 +852,29 @@ describe('parler-cli (real process, exit codes)', () => {
     )
 
   it('exits 0 on success, 1 on problems, 2 on usage errors; accepts a leading "--"', () => {
+    // P1 Step 17 (B17-implA-1): the CLI applies the committed tools/migrate/text-corrections.json,
+    // whose record names crow-and-serpent, so the scratch root holds that package too (re-converted
+    // from pt/), and the plan's corrected entry proves the CLI passed the committed record.
+    const crow = loadLegacyStories(join(storyboard, '..', 'pt', 'src', 'stories'))
+      .map((l) => convertLegacyStory(l.story))
+      .find((p) => p.storyId === 'crow-and-serpent')
+    if (!crow) throw new Error('crow-and-serpent is missing from pt/')
+    writeFileSync(
+      join(root, 'migration-input/packages/crow-and-serpent.phase1.json'),
+      JSON.stringify(crow),
+    )
+    const files = 10 + crow.nodes.length * crow.locales.length
     const exp = cli('export')
     expect(exp.status).toBe(0)
-    expect(exp.stdout).toContain('plan: 10 files')
+    expect(exp.stdout).toContain(`plan: ${files} files`)
+    const seek = plan().find((e) => keyOf(e) === 'crow-and-serpent/seek_advice.hi')
+    expect(seek?.sentences.length, 'precondition: the corrected entry is planned').toBeGreaterThan(
+      0,
+    )
+    expect(
+      seek?.sentences.some((s) => /[琥珀]/u.test(s)),
+      'the committed correction reached the plan',
+    ).toBe(false)
     expect(cli('export', '--only', K).status).toBe(2)
     const dir = colabFolder(plan(), (e, line) => {
       if (keyOf(e) === K) line.mp3Sha256 = '0'.repeat(64)

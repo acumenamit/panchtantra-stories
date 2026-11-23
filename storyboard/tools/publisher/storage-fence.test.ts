@@ -2497,6 +2497,7 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
       './catalogue-state',
       './local-files',
       './media-check',
+      './plan-digest',
       './port',
       './report',
       './run-kit',
@@ -2570,6 +2571,21 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
     'tools/publisher/fixture-store.ts',
     importRow(['./catalogue-state', './port', './stage-testkit', './storage-layout']),
   ],
+  // Step 17's modules (p1-step17-design.md §2.2, D17-7, D17-20): the masters writer and the plan
+  // digests; plan-digest.ts takes src/core only.
+  [
+    'tools/publisher/masters.ts',
+    importRow([
+      './local-files',
+      './plan-digest',
+      './port',
+      './report',
+      './run-kit',
+      './storage-layout',
+      'node:path',
+    ]),
+  ],
+  ['tools/publisher/plan-digest.ts', importRow([])],
   [
     PUBLISHER_CLI,
     importRow(
@@ -2580,6 +2596,7 @@ const FS4D_ROWS: ReadonlyMap<string, ImportRow> = new Map([
         './env',
         './fixture-store',
         './hook',
+        './masters',
         './port',
         './publish',
         './run-kit',
@@ -2809,9 +2826,12 @@ describe('export lists (FX)', () => {
       .soft(Object.keys(layout).sort(), '(g1) the pinned list')
       .toEqual([
         'MASTERS_CACHE_SECONDS',
+        'MASTER_IMAGE_MAX_BYTES',
         'MAX_JSON_BYTES',
+        'MEDIA_LOG_MAX_BYTES',
         'classOfPath',
         'contentReadTarget',
+        'masterBodyRule',
         'pointerTarget',
         'recheckTarget',
         'recheckUrl',

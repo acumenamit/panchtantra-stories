@@ -445,11 +445,12 @@ describe('story-checks: package, waiver and validator', () => {
 
     const cyrillic = edited(story.pkg, (pkg) => setEnText(pkg, node, `${enText(pkg, node)} Ж`))
     const t006 = await runWith(cyrillic)
-    expect.soft(t006.blocking, '(g6) a T006 warning does not block').toBeNull()
+    // P1 Step 17 (p1-step17-design.md D17-16): T006 is an error in publish mode.
+    expect.soft(t006.blocking, '(g6) a T006 error blocks').toBe('validator-unwaived')
     expect
       .soft(
-        t006.verdict?.findings.some((f) => f.checkId === 'T006' && f.severity === 'warn'),
-        '(g6) T006 raised',
+        t006.verdict?.findings.some((f) => f.checkId === 'T006' && f.severity === 'error'),
+        "(g6) the finding's severity is error",
       )
       .toBe(true)
 

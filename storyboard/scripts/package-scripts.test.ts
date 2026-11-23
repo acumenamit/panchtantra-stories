@@ -60,6 +60,12 @@ describe('package.json scripts', () => {
     expect(readScripts()['preview:staging']).toBe('tsx scripts/preview-staging.ts')
   })
 
+  // P1-9a (design migration-input/p1-step17-design.md D17-3, §2.2, A30): the media binder's entry.
+  it('T17-51 migrate:bind runs tsx tools/migrate/bind-cli.ts (A30)', () => {
+    expect(readScripts()['migrate:bind']).toBe('tsx tools/migrate/bind-cli.ts')
+    expect(existsSync(join(storyboard, 'tools', 'migrate', 'bind-cli.ts'))).toBe(true)
+  })
+
   it("preview:staging's BUILD_STEPS are build's steps, in order (P1-2c drift guard)", () => {
     const build = readScripts().build ?? ''
     expect(build.split(' && ')).toEqual([...BUILD_STEPS])

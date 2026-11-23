@@ -38,6 +38,7 @@ import { parseArgs } from './args'
 import * as catalogueState from './catalogue-state'
 import { runCli, type CliDeps } from './cli'
 import { Secret } from './env'
+import { planDigests } from './plan-digest'
 import { isStorageRefusal, readOnlyPort, type StagePort, type StageWriter } from './port'
 import { runStage, runValidate, selectStoryFiles, type StageDeps } from './stage'
 import {
@@ -815,15 +816,15 @@ describe('stage', () => {
         const bytes = s.packageBytes.length + s.media.reduce((n, m) => n + m.bytes.length, 0)
         return `stage: ${id} package=${sha12(s.packageSha256)} version=1 state=new media-new=3 media-skipped=0 bytes=${bytes} waiver-keys=0`
       }
-      expect
-        .soft(ran.out, '(g4) stdout is the §4.8 lines, the review command last')
-        .toEqual([
-          ...IDS.map(storyLine),
-          'stage: plan seq=1 stories=3 objects-new=12 objects-skipped=0 orphans=0 production=none staging=none',
-          `stage: snapshot seq=1 sha256=${sha12(wantSha)} created`,
-          'stage: staging pointer seq=1 moved (read back, post-check clean)',
-          REVIEW,
-        ])
+      expect.soft(ran.out, '(g4) stdout is the §4.8 lines, the review command last').toEqual([
+        ...IDS.map(storyLine),
+        'stage: plan seq=1 stories=3 objects-new=12 objects-skipped=0 orphans=0 production=none staging=none',
+        // Step 17 (D17-20, B17-implC-4): the digest line follows the plan line.
+        expect.stringMatching(/^stage: plan plan=[0-9a-f]{64} set=[0-9a-f]{64}$/),
+        `stage: snapshot seq=1 sha256=${sha12(wantSha)} created`,
+        'stage: staging pointer seq=1 moved (read back, post-check clean)',
+        REVIEW,
+      ])
       expect.soft(ran.exit, '(g4) exit 0').toBe(0)
       allStageSafe()
     },
@@ -2237,6 +2238,190 @@ describe('Step 15a: reports go to the checked real dir', () => {
         .soft(g3.err, '(g3) the refused line, then report-unwritten')
         .toEqual([reportDirRefused('stage'), 'stage: report-unwritten'])
       expect.soft(publisherUnder(publicDir), '(g3) nothing under public').toEqual([])
+      allStageSafe()
+    },
+  )
+})
+
+// ---- Step 17 (design migration-input/p1-step17-design.md §3.19, §3.20, D17-19, D17-20, TP17-8;
+// test plan 14.12: T17-45) ----
+
+const DIGEST_LINE = /^stage: plan plan=([0-9a-f]{64}) set=([0-9a-f]{64})$/
+/** The plan and set a run printed, or null when it printed none. */
+function digestsOf(out: readonly string[]): { plan: string; set: string } | null {
+  const line = out.find((l) => DIGEST_LINE.test(l))
+  const match = line === undefined ? null : DIGEST_LINE.exec(line)
+  return match === null ? null : { plan: match[1]!, set: match[2]! }
+}
+const isCreatePost = (r: { method: string; pathname: string }) =>
+  r.method === 'POST' &&
+  (r.pathname.startsWith(contentWrite('media/')) ||
+    r.pathname.startsWith(contentWrite('packages/')))
+const byStoryId = <T extends { storyId: string }>(list: readonly T[]): T[] =>
+  [...list].sort((a, b) => (a.storyId < b.storyId ? -1 : a.storyId > b.storyId ? 1 : 0))
+const TWO = ['two-paths', 'river-stones']
+const OTHER_PLAN = 'f'.repeat(64)
+
+describe('Step 17: the stage digest line and --expect-plan', () => {
+  it(
+    "T17-45 stage's digest line and --expect-plan: the line after the plan, plan-changed before any write, set stable across a cut-off commit, plan not (A27, D17-19, D17-20, TP17-8)",
+    { timeout: 60_000 },
+    async () => {
+      const { stories, dirs } = await inputs()
+      const named = TWO.map((id) => byId(stories, id))
+      const dryStub = await newStub()
+      seedMasters(dryStub, stories)
+      const dry = await stage(dryStub, stageArgs(dirs, TWO, ['--dry-run']))
+      const planAt = dry.out.findIndex((l) => l.startsWith('stage: plan seq='))
+      expect(dry.exit, 'precondition: the dry run exits 0').toBe(0)
+      expect(
+        planAt >= 0 && DIGEST_LINE.test(dry.out[planAt + 1] ?? ''),
+        "precondition: the digest line follows formatPlan's line",
+      ).toBe(true)
+      const first = digestsOf(dry.out)!
+
+      // (g1) the reviewed plan commits; another hex stops before any write
+      const changedStub = await newStub()
+      seedMasters(changedStub, stories)
+      const changed = await stage(changedStub, stageArgs(dirs, TWO, ['--expect-plan', OTHER_PLAN]))
+      expect.soft(changed.exit, '(g1) another hex: exit 1').toBe(1)
+      expect.soft(lastLine(changed.out), '(g1) plan-changed').toBe('stage: stopped: plan-changed')
+      expect.soft(objectPosts(changedStub).length, '(g1) 0 object-route POST').toBe(0)
+      expect.soft(readReport()?.outcome, '(g1) report outcome').toBe('plan-changed')
+      const okStub = await newStub()
+      seedMasters(okStub, stories)
+      const committed = await stage(okStub, stageArgs(dirs, TWO, ['--expect-plan', first.plan]))
+      expect.soft(committed.exit, '(g1) the dry run plan: staged, exit 0').toBe(0)
+      expect.soft(readReport()?.outcome, '(g1) report outcome staged').toBe('staged')
+
+      // (g2) a cut-off commit keeps the set; the plan moves with the states and the seq
+      const cut = await newStub()
+      seedMasters(cut, stories)
+      let creates = 0
+      const failThird = wrapFetch((url, init) => {
+        if (!isCreatePost({ method: init.method ?? 'GET', pathname: url.pathname })) return
+        creates += 1
+        if (creates === 3 || creates === 4)
+          return jsonResponse(500, { statusCode: '500', error: 'x' })
+      })
+      const cutRun = await stage(cut, stageArgs(dirs, TWO, ['--expect-plan', first.plan]), {
+        fetchImpl: failThird,
+      })
+      expect.soft(cutRun.exit, '(g2) the cut-off commit: exit 3').toBe(3)
+      const afterCut = await stage(cut, stageArgs(dirs, TWO, ['--dry-run']))
+      const second = digestsOf(afterCut.out)
+      expect.soft(second?.set, '(g2) the next dry run keeps the set').toBe(first.set)
+      expect.soft(second?.plan !== first.plan, '(g2) and its plan differs').toBe(true)
+      const createsBefore = cut.requests.filter(isCreatePost).length
+      const rest = await stage(cut, stageArgs(dirs, TWO, ['--expect-plan', second?.plan ?? '']))
+      expect.soft(rest.exit, '(g2) the commit with the new plan: staged').toBe(0)
+      const planned = named.reduce((n, s) => n + s.media.length + 1, 0)
+      expect
+        .soft(
+          cut.requests.filter(isCreatePost).length - createsBefore,
+          '(g2) only the rest is created',
+        )
+        .toBe(planned - 2)
+      const pointerCut = await newStub()
+      seedMasters(pointerCut, stories)
+      const fail = {
+        kind: 'answer' as const,
+        status: 500,
+        body: JSON.stringify({ statusCode: '500', error: 'x' }),
+      }
+      pointerCut.override('POST', pointerWrite('staging'), fail)
+      const pointerRun = await stage(
+        pointerCut,
+        stageArgs(dirs, TWO, ['--expect-plan', first.plan]),
+      )
+      expect.soft(pointerRun.exit, '(g2) a failed pointer write: exit 4').toBe(4)
+      const afterPointer = await stage(pointerCut, stageArgs(dirs, TWO, ['--dry-run']))
+      const planLine = afterPointer.out.find((l) => l.startsWith('stage: plan seq='))
+      expect
+        .soft(
+          planLine?.startsWith('stage: plan seq=2 '),
+          '(g2) the next dry run allocates a higher seq',
+        )
+        .toBe(true)
+      expect
+        .soft(digestsOf(afterPointer.out)?.set, '(g2) its set still equals the first')
+        .toBe(first.set)
+      expect
+        .soft(digestsOf(afterPointer.out)?.plan !== first.plan, '(g2) its plan differs')
+        .toBe(true)
+
+      // (g3) --dry-run with --expect-plan: compared there too
+      const dryEqualStub = await newStub()
+      seedMasters(dryEqualStub, stories)
+      const dryEqual = await stage(
+        dryEqualStub,
+        stageArgs(dirs, TWO, ['--dry-run', '--expect-plan', first.plan]),
+      )
+      expect
+        .soft([dryEqual.exit, lastLine(dryEqual.out)], '(g3) equal: dry-run, exit 0')
+        .toEqual([0, `stage: plan plan=${first.plan} set=${first.set}`])
+      expect.soft(readReport()?.outcome, '(g3) equal: report outcome dry-run').toBe('dry-run')
+      const dryOther = await stage(
+        dryEqualStub,
+        stageArgs(dirs, TWO, ['--dry-run', '--expect-plan', OTHER_PLAN]),
+      )
+      expect
+        .soft([dryOther.exit, lastLine(dryOther.out)], '(g3) differing: plan-changed, exit 1')
+        .toEqual([1, 'stage: stopped: plan-changed'])
+
+      // (g4) no --expect-plan: staged as at Step 14 (L20-1). The args are parsed here, not through
+      // stageArgs, so a parse refusal fails this group's own assertion (R1-TP-3).
+      const freeStub = await newStub()
+      seedMasters(freeStub, stories)
+      const freeArgs = parseArgs(
+        ['stage', ...TWO, ...dirFlags(dirs), '--report-dir', reportDir()],
+        context(),
+      )
+      expect
+        .soft(freeArgs.ok ? freeArgs.command : 'refused', '(g4) no --expect-plan: stage args parse')
+        .toBe('stage')
+      const free =
+        freeArgs.ok && freeArgs.command === 'stage'
+          ? await stage(freeStub, freeArgs)
+          : { exit: 'not run' }
+      expect.soft(free.exit, '(g4) no --expect-plan: staged, exit 0').toBe(0)
+
+      // (g5) the digests recomputed here from the documented composition
+      const objects = named.flatMap((s) => [
+        ...s.media.map((m) => ({
+          path: m.path,
+          sha256: m.sha256,
+          bytes: m.bytes.byteLength,
+          contentType: m.mime,
+          state: 'new',
+        })),
+        {
+          path: expectedPackagePath(s, 'staging', ''),
+          sha256: s.packageSha256,
+          bytes: s.packageBytes.byteLength,
+          contentType: 'application/json',
+          state: 'new',
+        },
+      ])
+      const want = await planDigests('stage', objects, {
+        fixed: byStoryId(
+          named.map((s) => ({
+            storyId: s.storyId,
+            packageSha256: s.packageSha256,
+            version: s.pkg.version,
+          })),
+        ),
+        variable: {
+          seq: 1,
+          productionSeq: null,
+          stagingSeq: null,
+          named: byStoryId(named.map((s) => ({ storyId: s.storyId, state: 'new' }))),
+          carried: [],
+        },
+      })
+      expect
+        .soft(first, '(g5) the digests equal planDigests over the documented composition')
+        .toEqual(want)
       allStageSafe()
     },
   )

@@ -13,8 +13,13 @@
 //   pnpm narration:listened story/node.locale,... | --all
 //       -> marks remade files as heard, so they leave the listening list
 // Reads and writes only under storyboard/migration-input/ (gitignored). No network.
+// P1 Step 17 (design migration-input/p1-step17-design.md §3.17, D17-17): the recorded text corrections
+// (tools/migrate/text-corrections.json, read from this repository even with NARRATION_ROOT) are loaded once and
+// applied to the packages export and ingest read; a file that cannot be loaded stops every command with exit 2
+// and `text-corrections.json: <code>`.
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadTextCorrections } from '../migrate/text-corrections'
 import { exportPlan, ingest, markListened } from './parler-pipeline'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -26,7 +31,13 @@ const root = process.env.NARRATION_ROOT
 async function main(): Promise<number> {
   const [mode, ...rest] = process.argv.slice(2)
   const args = rest[0] === '--' ? rest.slice(1) : rest // pnpm passes a leading "--" through
-  const opts = { now: new Date(), log: (line: string) => console.log(line) }
+  const loaded = loadTextCorrections()
+  if (!loaded.ok) throw new Error(`text-corrections.json: ${loaded.code}`)
+  const opts = {
+    now: new Date(),
+    log: (line: string) => console.log(line),
+    corrections: loaded.records,
+  }
   if (mode === 'export') return exportPlan(root, args, opts)
   if (mode === 'ingest') {
     if (args.length > 1)

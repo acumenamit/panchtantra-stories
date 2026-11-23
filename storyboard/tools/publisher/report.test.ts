@@ -90,6 +90,14 @@ import {
   formatVerifyExpected,
   formatVerifyTimeoutHint,
 } from './report'
+import {
+  formatMastersClasses,
+  formatMastersDone,
+  formatMastersObject,
+  formatMastersPlan,
+  formatPlanDigest,
+} from './report'
+import { isStorageRefusal } from './port'
 
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
@@ -268,6 +276,26 @@ const PINNED_EXITS: Record<string, number[]> = {
       'takedown-mp3-kept',
     ].map((code) => [code, [4]]),
   ),
+  // Step 17 §5 (T17-46 g1): the masters codes and plan-changed, exactly as its table.
+  ...MASTERS_EXITS(),
+}
+
+/** Step 17 §5: the codes `masters` adds, with their exits (also stage's plan-changed). */
+function MASTERS_EXITS(): Record<string, number[]> {
+  return {
+    'masters-here-only': [2],
+    'masters-root': [1],
+    'masters-empty': [1],
+    'masters-unknown-file': [1],
+    'media-log-folder-invalid': [1],
+    'masters-local-invalid': [1],
+    'master-exists-differs': [1, 3],
+    'master-unverifiable': [1, 3],
+    'master-readback-differs': [3],
+    'plan-changed': [1],
+    'masters-unchanged': [0],
+    'masters-written': [0],
+  }
 }
 
 const finding = (
@@ -2379,5 +2407,339 @@ describe('report: Step 15b codes, formatters and sections', () => {
         '(g4) a publish input without the three sections writes none of their keys',
       )
       .toEqual([])
+  })
+})
+
+// ---- Step 17 (P1-9a, design migration-input/p1-step17-design.md §3.7, §3.20, §5, D17-7, D17-20;
+// test plan 14.12: T17-46) ----
+
+const SHA4 = '00112233445566778899aabbccddeeff'.repeat(2)
+const MASTERS_SECTION = {
+  plan: SHA,
+  set: SHA2,
+  objects: [
+    { path: `images/two-paths/${SHA3}.png`, bytes: 2_076_066, sha256: SHA3, state: 'created' },
+    {
+      path: `media-log/2026-11-23-${SHA4.slice(0, 12)}/media-log.json`,
+      bytes: 40,
+      sha256: SHA4,
+      state: 'existing',
+    },
+  ],
+} as const
+const MASTERS_INPUT = {
+  command: 'masters',
+  mode: 'masters',
+  startedAt: '2026-11-23T12:00:00.000Z',
+  finishedAt: '2026-11-23T12:00:30.000Z',
+  outcome: 'masters-written',
+  exitCode: 0,
+  writes: 1,
+  uploaded: [],
+  skipped: [],
+  orphans: [],
+  superseded: [],
+  ruleSetRef: PANCHATANTRA_RULESET.ref,
+  privateWordLists: 'not loaded',
+  stories: [],
+  masters: MASTERS_SECTION,
+} as const satisfies ReportInput
+
+/** The TypeError message of `run`, or 'no throw' / 'other'. */
+const typeErrorOf = (run: () => unknown): string => {
+  try {
+    run()
+    return 'no throw'
+  } catch (error) {
+    return error instanceof TypeError ? error.message : 'other'
+  }
+}
+
+describe('report: Step 17 masters and the plan digests', () => {
+  it('T17-46 masters in the report module: Command and MODES, the §5 exits exactly, the masters and digest formatters with every field validated, the masters report section with storage paths only (A28)', () => {
+    expect(formatStopped('masters', 'usage'), 'precondition: masters is a report command').toBe(
+      'masters: stopped: usage',
+    )
+
+    // (g1) the §5 exits of the masters codes and plan-changed; the existing rows unchanged
+    const added = MASTERS_EXITS()
+    for (const [code, exits] of Object.entries(added)) {
+      expect.soft([...(EXIT_BY_CODE.get(code) ?? [])], `(g1) ${code}`).toEqual(exits)
+    }
+    expect
+      .soft(
+        Object.fromEntries(
+          [...EXIT_BY_CODE]
+            .filter(([code]) => !Object.hasOwn(added, code))
+            .map(([code, exits]) => [code, [...exits]]),
+        ),
+        '(g1) the existing rows unchanged',
+      )
+      .toEqual(
+        Object.fromEntries(
+          Object.entries(PINNED_EXITS).filter(([code]) => !Object.hasOwn(added, code)),
+        ),
+      )
+    expect
+      .soft(formatStopped('masters', 'masters-here-only'), '(g1) a masters stop line')
+      .toBe('masters: stopped: masters-here-only')
+    expect.soft(exitForPhase('master-exists-differs', 'commit'), '(g1) exit 3 at commit').toBe(3)
+
+    // (g2) the formatters: the exact lines, then every field refused by name
+    const object = {
+      path: `images/two-paths/${SHA3}.png`,
+      bytes: 2_076_066,
+      sha256: SHA3,
+      state: 'new',
+    } as const
+    const plan = { objects: 5, new: 3, existing: 2, bytes: 4_000_000, plan: SHA, set: SHA2 }
+    const lines: [string, () => string, string][] = [
+      [
+        'object',
+        () => formatMastersObject(object),
+        `masters: object images/two-paths/${SHA3}.png bytes=2076066 sha256=${SHA3.slice(0, 12)} state=new`,
+      ],
+      [
+        'object existing',
+        () =>
+          formatMastersObject({
+            path: MASTERS_SECTION.objects[1].path,
+            bytes: 40,
+            sha256: SHA4,
+            state: 'existing',
+          }),
+        `masters: object ${MASTERS_SECTION.objects[1].path} bytes=40 sha256=${SHA4.slice(0, 12)} state=existing`,
+      ],
+      [
+        'classes',
+        () => formatMastersClasses({ imageMaster: 54, mediaLog: 3 }),
+        'masters: classes image-master=54 media-log=3',
+      ],
+      [
+        'plan',
+        () => formatMastersPlan(plan),
+        `masters: plan objects=5 new=3 existing=2 bytes=4000000 plan=${SHA} set=${SHA2}`,
+      ],
+      [
+        'done',
+        () => formatMastersDone({ created: 3, existing: 2 }),
+        'masters: done created=3 existing=2',
+      ],
+      [
+        'stage digest',
+        () => formatPlanDigest('stage', { plan: SHA, set: SHA2 }),
+        `stage: plan plan=${SHA} set=${SHA2}`,
+      ],
+      [
+        'masters digest',
+        () => formatPlanDigest('masters', { plan: SHA2, set: SHA }),
+        `masters: plan plan=${SHA2} set=${SHA}`,
+      ],
+    ]
+    for (const [label, run, want] of lines) {
+      expect
+        .soft(typeErrorOf(run) === 'no throw' ? run() : typeErrorOf(run), `(g2) ${label}`)
+        .toBe(want)
+    }
+    const refused: [string, () => unknown, string][] = [
+      [
+        'a content path',
+        () => formatMastersObject({ ...object, path: `media/two-paths/${SHA3}-w768.webp` }),
+        'path',
+      ],
+      [
+        'an approval path',
+        () => formatMastersObject({ ...object, path: `approvals/two-paths/${SHA3}.json` }),
+        'path',
+      ],
+      [
+        'an upper-case sha',
+        () => formatMastersObject({ ...object, sha256: SHA3.toUpperCase() }),
+        'sha256',
+      ],
+      [
+        'a 13-hex prefix',
+        () => formatMastersObject({ ...object, sha256: SHA3.slice(0, 13) }),
+        'sha256',
+      ],
+      ['a negative byte count', () => formatMastersObject({ ...object, bytes: -1 }), 'bytes'],
+      ['state NEW', () => formatMastersObject({ ...object, state: 'NEW' as 'new' }), 'state'],
+      [
+        'state created on a plan line',
+        () => formatMastersObject({ ...object, state: 'created' as 'new' }),
+        'state',
+      ],
+      [
+        'a fractional count',
+        () => formatMastersClasses({ imageMaster: 1.5, mediaLog: 3 }),
+        'imageMaster',
+      ],
+      [
+        'a negative count',
+        () => formatMastersClasses({ imageMaster: 1, mediaLog: -3 }),
+        'mediaLog',
+      ],
+      ['a 63-hex plan', () => formatMastersPlan({ ...plan, plan: SHA.slice(1) }), 'plan'],
+      ['an upper-case set', () => formatMastersPlan({ ...plan, set: SHA2.toUpperCase() }), 'set'],
+      ['new above objects', () => formatMastersPlan({ ...plan, new: 6 }), 'counts'],
+      ['a fractional bytes', () => formatMastersPlan({ ...plan, bytes: 0.5 }), 'bytes'],
+      ['a negative created', () => formatMastersDone({ created: -1, existing: 0 }), 'created'],
+      [
+        'a 63-hex digest',
+        () => formatPlanDigest('stage', { plan: SHA.slice(1), set: SHA2 }),
+        'plan',
+      ],
+      [
+        'a digest for validate',
+        () => formatPlanDigest('validate' as 'stage', { plan: SHA, set: SHA2 }),
+        'command',
+      ],
+    ]
+    for (const [label, run, name] of refused) {
+      const message = typeErrorOf(run)
+      expect.soft(message.startsWith('report: invalid'), `(g2) TypeError: ${label}`).toBe(true)
+      expect.soft(message.includes(name), `(g2) the message names ${name}: ${label}`).toBe(true)
+    }
+
+    // (g3) modes and the command
+    const built = (input: ReportInput) => {
+      try {
+        return buildReport(input)
+      } catch {
+        return null
+      }
+    }
+    for (const mode of ['masters', 'dry-run']) {
+      expect
+        .soft(
+          built({
+            ...MASTERS_INPUT,
+            mode,
+            outcome: mode === 'dry-run' ? 'dry-run' : 'masters-written',
+          }) !== null,
+          `(g3) mode ${mode}`,
+        )
+        .toBe(true)
+    }
+    for (const mode of ['stage', 'validate', 'verify']) {
+      expect.soft(built({ ...MASTERS_INPUT, mode }), `(g3) mode ${mode} refused`).toBeNull()
+    }
+    expect
+      .soft(built({ ...MASTERS_INPUT, masters: undefined }), '(g3) the section is required')
+      .toBeNull()
+    expect
+      .soft(built({ ...STAGE_INPUT, masters: MASTERS_SECTION }), '(g3) no masters section on stage')
+      .toBeNull()
+    expect
+      .soft(
+        built({ ...MASTERS_INPUT, uploaded: [`images/two-paths/${SHA3}.png`] }),
+        '(g3) no object lists on masters',
+      )
+      .toBeNull()
+
+    // (g4) the section: exactly plan, set and the objects; storage paths only; nothing private
+    const report = JSON.parse(buildReport(MASTERS_INPUT).json) as Record<string, unknown>
+    const section = report.masters as Record<string, unknown>
+    expect
+      .soft(Object.keys(section).sort(), '(g4) section keys')
+      .toEqual(['objects', 'plan', 'set'])
+    expect
+      .soft(
+        (section.objects as Record<string, unknown>[]).map((o) => Object.keys(o).sort()),
+        '(g4) object keys',
+      )
+      .toEqual([
+        ['bytes', 'path', 'sha256', 'state'],
+        ['bytes', 'path', 'sha256', 'state'],
+      ])
+    expect.soft(section, '(g4) the section as given').toEqual(MASTERS_SECTION)
+    const nullPlan = built({
+      ...MASTERS_INPUT,
+      outcome: 'masters-root',
+      exitCode: 1,
+      masters: null,
+    })
+    expect
+      .soft(nullPlan !== null, '(g4) a run stopped before the plan writes masters: null')
+      .toBe(true)
+    const extra = [
+      ['root', { ...MASTERS_SECTION, root: 'C:\\x' }],
+      [
+        'an object field',
+        { ...MASTERS_SECTION, objects: [{ ...MASTERS_SECTION.objects[0], local: 'x' }] },
+      ],
+      [
+        'a content path',
+        {
+          ...MASTERS_SECTION,
+          objects: [{ ...MASTERS_SECTION.objects[0], path: `media/two-paths/${SHA3}-w768.webp` }],
+        },
+      ],
+      ['a 63-hex plan', { ...MASTERS_SECTION, plan: SHA.slice(1) }],
+    ] as const
+    for (const [label, masters] of extra) {
+      expect
+        .soft(
+          built({ ...MASTERS_INPUT, masters: masters as unknown as typeof MASTERS_SECTION }),
+          `(g4) refused: ${label}`,
+        )
+        .toBeNull()
+    }
+    const never = [
+      'basis',
+      'notes',
+      'ruleId',
+      'measured',
+      'limit',
+      'measuredOnPackageSha256',
+      'recordedOn',
+      'recordedBy',
+      'message',
+      'root',
+      'reportDir',
+    ]
+    const keysOf = (value: unknown): string[] =>
+      value === null || typeof value !== 'object'
+        ? []
+        : Object.entries(value).flatMap(([key, inner]) => [key, ...keysOf(inner)])
+    expect
+      .soft(
+        keysOf(report).filter((key) => never.includes(key)),
+        '(g4) no never-list key',
+      )
+      .toEqual([])
+    expect
+      .soft(buildReport(MASTERS_INPUT).md.includes('## Masters'), '(g4) the md section')
+      .toBe(true)
+
+    // (g5) S17-R1-FID-3: a client refusal of either masters class is client-refused (§5, "as
+    // today"), in the report module and in port.ts's isStorageRefusal; the class token stays
+    // closed: one lower-case word or exactly one of the two masters class names.
+    const refusalOf = (message: string) =>
+      Object.assign(new Error(message), { name: 'StorageRefusedError' })
+    const stopLine = (text: string): string => {
+      const run = () => formatStopped('masters', 'client-refused', { refusal: text })
+      return typeErrorOf(run) === 'no throw' ? run() : typeErrorOf(run)
+    }
+    for (const cls of ['image-master', 'media-log']) {
+      const text = `refused: ${cls} body-gate sha256-mismatch`
+      expect
+        .soft(stopLine(text), `(g5) ${cls}: the report module's client-refused line`)
+        .toBe(`masters: stopped: client-refused ${text}`)
+      expect.soft(isStorageRefusal(refusalOf(text)), `(g5) ${cls}: isStorageRefusal`).toBe(true)
+    }
+    for (const cls of [
+      'lion-and-hare',
+      'image-masters',
+      'Image-master',
+      'image--master',
+      'media-',
+    ]) {
+      const text = `refused: ${cls} body-gate sha256-mismatch`
+      expect
+        .soft(stopLine(text), `(g5) ${cls}: still refused by the report module`)
+        .toBe('report: invalid refusal')
+      expect.soft(isStorageRefusal(refusalOf(text)), `(g5) ${cls}: still not a refusal`).toBe(false)
+    }
   })
 })

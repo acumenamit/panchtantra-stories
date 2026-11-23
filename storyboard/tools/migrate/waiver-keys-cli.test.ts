@@ -14,6 +14,7 @@ import { PANCHATANTRA_RULESET } from '../../src/core/rules/panchatantra'
 import { applyWaiverKeys, validatePackage } from '../../src/core/validator'
 import { convertLegacyStory } from './convert'
 import { loadLegacyStories } from './load-legacy'
+import { applyTextCorrections, loadTextCorrections } from './text-corrections'
 import {
   buildLegacyWaiverKeys,
   LEGACY_WAIVER_KEYS_NOTE,
@@ -237,11 +238,31 @@ describe('the committed tools/migrate/legacy-waiver-keys.json', () => {
 
   it('waives every error of the re-converted legacy stories through the build matcher', async () => {
     const byId = new Map(file.stories.map((s) => [s.storyId, s.waivers.keys]))
+    // P1 Step 17 (p1-step17-design.md D17-15, D17-16, L17-1): T006 is an error in publish mode, so the
+    // stories are checked after the committed text correction, as Proof A builds them; the raw
+    // crow-and-serpent keeps exactly one unwaived error, the T006 the correction removes.
+    const converted = legacy.map(({ story }) => convertLegacyStory(story))
+    const records = loadTextCorrections()
+    if (!records.ok) throw new Error(`tools/migrate/text-corrections.json: ${records.code}`)
+    const corrected = applyTextCorrections(converted, records.records)
+    if (!corrected.ok)
+      throw new Error(`text-corrections.json: ${corrected.code} ${corrected.storyId}`)
+    const rawCrow = converted.find((pkg) => pkg.storyId === 'crow-and-serpent')
+    if (!rawCrow) throw new Error('crow-and-serpent is missing')
+    const rawReport = validatePackage(rawCrow, { ruleSet: PANCHATANTRA_RULESET, mode: 'publish' })
+    const rawApplied = await applyWaiverKeys(rawReport, rawCrow, byId.get(rawCrow.storyId) ?? [])
+    expect
+      .soft(
+        rawApplied.report.findings
+          .filter((f) => f.severity === 'error' && f.waived !== true)
+          .map((f) => [f.checkId, f.nodeId, f.locale]),
+        'the raw crow-and-serpent: its only unwaived error is T006 at seek_advice hi',
+      )
+      .toEqual([['T006', 'seek_advice', 'hi']])
     let waived = 0
     let unused = 0
     let lapsed = 0
-    for (const { story } of legacy) {
-      const pkg = convertLegacyStory(story)
+    for (const pkg of corrected.packages) {
       const report = validatePackage(pkg, { ruleSet: PANCHATANTRA_RULESET, mode: 'publish' })
       const applied = await applyWaiverKeys(report, pkg, byId.get(pkg.storyId) ?? [])
       expect(applied.report.ok, pkg.storyId).toBe(true)
