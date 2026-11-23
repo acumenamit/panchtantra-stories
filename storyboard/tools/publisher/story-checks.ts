@@ -128,8 +128,13 @@ export interface StoryCheckInputs {
 }
 
 /** The private word file, re-declared strictly (validate-cli.ts is never imported; D14-26). */
+// The owner's file also carries two metadata keys from P0 (`status`, `sources`; the P0 reader in
+// tools/migrate/validate-cli.ts accepts them): typed and optional here, never read (Step 17 L17-3).
+// Any other key is still private-lists-invalid.
 const PrivateFile = z.strictObject({
   ref: z.string(),
+  status: z.string().optional(),
+  sources: z.record(z.string(), z.string()).optional(),
   idioms: z.array(z.string()),
   anachronismKeywords: z.array(z.string()),
   sanskritNeverCall: z.record(z.string(), z.array(z.string())),

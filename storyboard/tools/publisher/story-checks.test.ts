@@ -528,8 +528,23 @@ describe('story-checks: package, waiver and validator', () => {
       .toBe(1)
     expect.soft(withLists.blocking, '(g2) E016 does not block').toBeNull()
 
+    // The owner's real file carries P0's two metadata keys (Step 17 L17-3).
+    writeFileSync(
+      path,
+      JSON.stringify({ ...valid, status: 'draft', sources: { idioms: 'owner list' } }),
+    )
+    const withMeta = loadPrivateLists(root)
+    expect
+      .soft(withMeta.ok && withMeta.state, '(g2b) status and sources (P0 metadata): loaded')
+      .toBe('loaded')
+
     const invalid: [string, () => void][] = [
       ['an extra key', () => writeFileSync(path, JSON.stringify({ ...valid, extra: [] }))],
+      ['status not a string', () => writeFileSync(path, JSON.stringify({ ...valid, status: 1 }))],
+      [
+        'sources holding a non-string',
+        () => writeFileSync(path, JSON.stringify({ ...valid, sources: { idioms: [] } })),
+      ],
       [
         'another ref',
         () => writeFileSync(path, JSON.stringify({ ...valid, ref: 'panchatantra@2.0.0' })),
